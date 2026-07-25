@@ -291,8 +291,8 @@ class R4Det(MVXFasterRCNN):
         self.igdr_fusion = IGDRModule(
             bev_channels=self.img_channels,
             instance_channels=self.img_channels
-        )
-        self.head_downsampler = nn.AvgPool2d(kernel_size=4, stride=4)
+        ) if (self.with_rpn and self.with_roi_head) else None
+        self.head_downsampler = nn.AvgPool2d(kernel_size=4, stride=4) if (self.with_rpn and self.with_roi_head) else None
         self.debug_internal_tensors = debug_internal_tensors
         fpn_file_path = inspect.getfile(self.img_neck.__class__)
         self.debug_vis_gt_vs_pred = True
@@ -979,7 +979,7 @@ class R4Det(MVXFasterRCNN):
             for result_dict, pts_bbox in zip(bbox_list, bbox_pts):
                 result_dict['pts_bbox'] = pts_bbox
 
-        if img_feats:  # and self.with_img_bbox:  # img means 2D detection
+        if img_feats and self.with_rpn and self.with_roi_head:  # img means 2D detection
             results = self.simple_test_img(img_feats, img_metas, rescale=rescale)
             bbox_img, mask_img = zip(*results)
             for result_dict, img_bbox, img_mask in zip(bbox_list, bbox_img, mask_img):
@@ -1109,7 +1109,7 @@ class R4Det(MVXFasterRCNN):
         else:
             proposal_list = proposals
 
-        if self.img_roi_head.with_bbox or self.img_roi_head.with_mask:
+        if self.with_roi_head and (self.img_roi_head.with_bbox or self.img_roi_head.with_mask):
             num_imgs = len(img_metas)
             if gt_bboxes_ignore is None:
                 gt_bboxes_ignore = [None for _ in range(num_imgs)]
@@ -1127,14 +1127,14 @@ class R4Det(MVXFasterRCNN):
                 sampling_results.append(sampling_result)
 
         # bbox head forward and loss
-        if self.img_roi_head.with_bbox:
+        if self.with_roi_head and self.img_roi_head.with_bbox:
             bbox_results = self.img_roi_head._bbox_forward_train(img_feats, sampling_results,
                                                                  gt_bboxes, gt_labels,
                                                                  img_metas)
             losses.update(bbox_results['loss_bbox'])
 
         # mask head forward and loss
-        if self.img_roi_head.with_mask:
+        if self.with_roi_head and self.img_roi_head.with_mask:
             pos_rois = bbox2roi([res.pos_bboxes for res in sampling_results])
             mask_results = self.img_roi_head._mask_forward_train(img_feats, sampling_results,
                                                                  bbox_results['bbox_feats'],

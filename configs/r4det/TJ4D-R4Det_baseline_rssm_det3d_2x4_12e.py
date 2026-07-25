@@ -11,7 +11,7 @@ file_client_args = dict(backend='disk')
 # dataset BEV grid and pc range configs
 point_cloud_range = [0, -39.68, -4, 69.12, 39.68, 2]
 post_center_range = [x + y for x, y in zip(point_cloud_range, [-10, -10, -5, 10, 10, 5])]
-voxel_size = [0.32, 0.32, 6.00] # [0.32, 0.32, 6.00] # [0.432, 0.496, 6.000]
+voxel_size = [0.32, 0.32, 6.00]
 grid_config = {
     'xbound': [point_cloud_range[0], point_cloud_range[3], voxel_size[0]],
     'ybound': [point_cloud_range[1], point_cloud_range[4], voxel_size[1]],
@@ -20,32 +20,32 @@ grid_config = {
 code_weights = [2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 code_size = len(code_weights)
 
-# ablation settings
-backward_ablation = dict(pv_logits=False, depth_prob=True, cross=3, self=2)
+# ablation settings (disabled for baseline)
+use_backward_projection = False              # PDF disabled
+use_sa_radarnet = False                      # SRP disabled
+use_radar_depth = False                      # GDC disabled
+backward_ablation = dict(pv_logits=True, depth_prob=True, cross=3, self=2)
 focusradardepth_ablation = dict(foreground_loss_alpha=5.0)
 painting_ablation = dict(pv_logits=False, depth_prob=True)
 
-# supervision settings
-use_box3d_supervision = True                # 3D object detection task
-use_depth_supervision = True                # leverage depth estimation from lidar supervision for better view transformation
-use_props_supervision = False
-use_msk2d_supervision = False
-# network structures
-use_backward_projection = False              # LACA: localization-aware attention backward projection
-use_sa_radarnet = False                      # SRP: whether use radar associate with image features
-use_radar_depth = True                      # GDC: whether to project radar to image for better monodepth estimation
+# supervision settings — only 3D detection kept
+use_box3d_supervision = True                 # 3D object detection task
+use_depth_supervision = False                # depth supervision disabled
+use_props_supervision = False                # BEV proposal supervision disabled
+use_msk2d_supervision = False                # 2D supervision disabled for baseline
+use_inst_supervision = False                 # instance supervision disabled
+
 # default settings
-assert use_box3d_supervision == True        # det3d pretraining, not training
-freeze_depths = False                       # training depth net
-freeze_radars = False                       # training radar encoder
-use_grid_mask = False                       # before pre-extract feats of raw-img
-freeze_images = False                        # training image backbone and neck
-camera_stream = 'LSS'                       # camera stream lift method, exactly view transformation
-loss_depth_prob = 0.1                       # default 0.10 for both pretrain and train
-loss_bev_seg    = 0.1                       # default 0.10 for both pretrain and train
-loss_range_seg  = 0.1                       # default 0.10 for both pretrain and train
-use_inst_supervision = False
-# image augumentation
+freeze_images = True                         # freeze image backbone
+freeze_depths = False
+freeze_radars = False
+use_grid_mask = False
+camera_stream = 'LSS'
+loss_depth_prob = 0.0
+loss_bev_seg = 0.0
+loss_range_seg = 0.0
+
+# image augmentation
 img_norm_cfg = dict(
     mean=[103.530, 116.280, 123.675],
     std=[1.0, 1.0, 1.0], to_rgb=False,
@@ -53,7 +53,7 @@ img_norm_cfg = dict(
 ida_aug_conf = {
     'resize_lim': (0.40, 0.50),
     'final_dim': (480, 640),
-    'final_dim_test': (480, 640), # 960 1280
+    'final_dim_test': (480, 640),
     'bot_pct_lim': (0.0, 0.0),
     'top_pct_lim': (0.0, 0.1),
     'rot_lim': (-2.7, 2.7),
@@ -63,8 +63,8 @@ ida_aug_conf = {
 bda_aug_conf = dict(
     rot_range=(-0.3925, 0.3925),
     scale_ratio_range=(0.95, 1.05),
-    translation_std=(1.0, 1.0, 0.0),
-    flip_dx_ratio=0.0, # no need for KITTI, which x > 0
+    translation_std=(1.0, 0.0, 0.0),
+    flip_dx_ratio=0.0,
     flip_dy_ratio=0.5,
 )
 inst_feat_dim = 256
@@ -90,20 +90,12 @@ _num_points_self_ = 8
 
 bev_h_ = int((point_cloud_range[3] - point_cloud_range[0]) / voxel_size[0])
 bev_w_ = int((point_cloud_range[4] - point_cloud_range[1]) / voxel_size[1])
-bev_grid_size = [bev_h_, bev_w_, 1] #  [216, 248, 1]
-
-#code_weights = [2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-#code_size = 7
-#out_size_factor = 1
-# Calculate grid size for CenterPoint head
-#grid_size = [int((point_cloud_range[3] - point_cloud_range[0]) / voxel_size[0]),
-#             int((point_cloud_range[4] - point_cloud_range[1]) / voxel_size[1]),
-#             1]
+bev_grid_size = [bev_h_, bev_w_, 1]
 
 # model settings
 model = dict(
     type='R4Det',
-    mask_save_dir='./work_dirs/my_mask_outputs/',
+    mask_save_dir='./work_dirs/temp_mask_outputs/',
     bev_h_=bev_h_,
     bev_w_=bev_w_,
     img_channels=img_channels,
@@ -127,13 +119,15 @@ model = dict(
     focusradardepth_ablation=focusradardepth_ablation,
     painting_ablation=painting_ablation,
 
+    # NOTE: No img_rpn_head, no img_roi_head — 2D detection heads disabled
+    # NOTE: No instance_feature_fusion_layer — IGDR disabled
+
     img_backbone=dict(
         type='ResNet',
         depth=50,
         num_stages=4,
         out_indices=(0, 1, 2, 3),
         frozen_stages=1,
-        # TODO: figure if requires_grad
         norm_cfg=dict(type='BN', requires_grad=False),
         norm_eval=True,
         style='caffe'),
@@ -141,7 +135,6 @@ model = dict(
         type='FPN',
         in_channels=[256, 512, 1024, 2048],
         out_channels=img_channels,
-        # make the image features more stable numerically to avoid loss nan
         norm_cfg=dict(type='BN', requires_grad=False),
         num_outs=5),
     img_view_transformer=dict(
@@ -166,11 +159,13 @@ model = dict(
         loss_sam2_weight=0.02,
         foreground_loss_alpha=focusradardepth_ablation['foreground_loss_alpha'],
         relative_loss_weight=0.04),
+    rangeview_foreground=None,                  # disabled for baseline
+
     pts_voxel_layer=dict(
-        max_num_points=10, # max_points_per_voxel
+        max_num_points=10,
         point_cloud_range=point_cloud_range,
         voxel_size=[voxel_size[0]/2, voxel_size[1]/2, voxel_size[2]],
-        max_voxels=(16000, 40000)),  # (training, testing) max_voxels
+        max_voxels=(16000, 40000)),
     pts_voxel_encoder=dict(
         type='RadarPillarFeatureNet',
         in_channels=5,
@@ -193,23 +188,38 @@ model = dict(
         in_channels=[64, 128, 256],
         upsample_strides=[1, 2, 4],
         out_channels=[128, 128, 128]),
+
+    # Simple concat+conv fusion instead of Cross_Modal_Fusion
     RCFusion=dict(
         type='ConcatConvFusion',
         img_channels=_dim_,
         rad_channels=rad_channels,
         out_channels=_dim_,
         kernel_size=3),
-    proposal_layer=None,
+    proposal_layer=None,                         # disabled for baseline
+
+    # temporal fusion with RSSM
     temporal_fusion=dict(
-        type='TemporalDeformableFusion',
+        type='BEVRSSMTemporalFusion',
         in_channels=_dim_,
         out_channels=_dim_,
         kernel_size=3,
         deform_groups=1,
-        gate_kernel_size=1,
-        norm_cfg=dict(type='BN', requires_grad=True),
-        act_cfg=dict(type='ReLU', inplace=True)
+        latent_dim=_dim_,
+        hidden_dim=64,
+        action_dim=2,
+        kl_scale=1.0,
+        norm_cfg=dict(
+            type='BN',
+            requires_grad=True
+        ),
+        act_cfg=dict(
+            type='ReLU',
+            inplace=True
+        )
     ),
+    # NOTE: backward_projection (PDF) removed — disabled
+
     pts_bbox_head=dict(
         type='Anchor3DHead',
         num_classes=len(class_names),
@@ -242,42 +252,43 @@ model = dict(
         loss_bbox=dict(type='SmoothL1Loss', beta=1.0 / 9.0, loss_weight=2.0),
         loss_dir=dict(
             type='CrossEntropyLoss', use_sigmoid=False, loss_weight=0.2)),
-    # model training and testing settings
-    train_cfg = dict(
-       pts=dict(
-           assigner=[
-               dict(  # for Pedestrian
-                   type='MaxIoUAssigner',
-                   iou_calculator=dict(type='BboxOverlapsNearest3D'),
-                   pos_iou_thr=0.35,
-                   neg_iou_thr=0.2,
-                   min_pos_iou=0.2,
-                   ignore_iof_thr=-1),
-               dict(  # for Cyclist
-                   type='MaxIoUAssigner',
-                   iou_calculator=dict(type='BboxOverlapsNearest3D'),
-                   pos_iou_thr=0.35,
-                   neg_iou_thr=0.2,
-                   min_pos_iou=0.2,
-                   ignore_iof_thr=-1),
-               dict(  # for Car
-                   type='MaxIoUAssigner',
-                   iou_calculator=dict(type='BboxOverlapsNearest3D'),
-                   pos_iou_thr=0.5,
-                   neg_iou_thr=0.35,
-                   min_pos_iou=0.35,
-                   ignore_iof_thr=-1),
-               dict(  # for Truck
-                   type='MaxIoUAssigner',
-                   iou_calculator=dict(type='BboxOverlapsNearest3D'),
-                   pos_iou_thr=0.5,
-                   neg_iou_thr=0.35,
-                   min_pos_iou=0.35,
-                   ignore_iof_thr=-1),
-           ],
-           allowed_border=0,
-           pos_weight=-1,
-           debug=False)),
+
+    # model training and testing settings — removed all 2D training/test configs
+    train_cfg=dict(
+        pts=dict(
+            assigner=[
+                dict(  # for Pedestrian
+                    type='MaxIoUAssigner',
+                    iou_calculator=dict(type='BboxOverlapsNearest3D'),
+                    pos_iou_thr=0.35,
+                    neg_iou_thr=0.2,
+                    min_pos_iou=0.2,
+                    ignore_iof_thr=-1),
+                dict(  # for Cyclist
+                    type='MaxIoUAssigner',
+                    iou_calculator=dict(type='BboxOverlapsNearest3D'),
+                    pos_iou_thr=0.35,
+                    neg_iou_thr=0.2,
+                    min_pos_iou=0.2,
+                    ignore_iof_thr=-1),
+                dict(  # for Car
+                    type='MaxIoUAssigner',
+                    iou_calculator=dict(type='BboxOverlapsNearest3D'),
+                    pos_iou_thr=0.5,
+                    neg_iou_thr=0.35,
+                    min_pos_iou=0.35,
+                    ignore_iof_thr=-1),
+                dict(  # for Truck
+                    type='MaxIoUAssigner',
+                    iou_calculator=dict(type='BboxOverlapsNearest3D'),
+                    pos_iou_thr=0.5,
+                    neg_iou_thr=0.35,
+                    min_pos_iou=0.35,
+                    ignore_iof_thr=-1),
+            ],
+            allowed_border=0,
+            pos_weight=-1,
+            debug=False)),
     test_cfg=dict(
         pts=dict(
             use_rotate_nms=True,
@@ -289,15 +300,14 @@ model = dict(
             nms_thr=0.5,
             min_bbox_size=0
         )
-        )
+    )
 )
 
-# pipline settings
+# pipeline settings — simplified: removed 2D-related transforms
 train_pipeline = [
     dict(type='LoadPointsFromFile', coord_type='LIDAR', load_dim=8, use_dim=[0,1,2,3,5]),
     dict(type='LoadImageFromFile', to_float32=True),
-    dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_bbox=False, with_label=False),
-    dict(type='LoadMyDepthFromFile',  depth_base_path='/data/tangyousen/TJ4DRadSet_4DRadar/training/depth_npy_predict'),
+    dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True),
     dict(type='ImageAug3D2', data_aug_conf=ida_aug_conf, is_train=True),
     dict(type='DownsampleDepthMap', target_shape=(60, 80)),
     dict(type='GlobalRotScaleTransFlipAll', bda_aug_conf=bda_aug_conf, is_train=True),
@@ -307,9 +317,8 @@ train_pipeline = [
     dict(type='Normalize', **img_norm_cfg),
     dict(type='Pad', size_divisor=32),
     dict(type='CreateDepthFromLiDAR', data_root=data_root, dataset='TJ4D'),
-    dict(type='CreateDepthFromRaDAR', filter_min=0.0, filter_max=80.0),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
-    dict(type='CustomCollect3D2', keys=['points', 'img', 'gt_bboxes_3d', 'gt_labels_3d', 'my_gt_depth'],
+    dict(type='CustomCollect3D2', keys=['points', 'img', 'gt_bboxes_3d', 'gt_labels_3d'],
          meta_keys=('filename', 'ori_shape', 'img_shape', 'lidar2img',
                     'depth2img', 'cam2img', 'pad_shape',
                     'scale_factor', 'flip', 'pcd_horizontal_flip',
@@ -317,18 +326,17 @@ train_pipeline = [
                     'img_norm_cfg', 'pcd_trans', 'sample_idx',
                     'pcd_scale_factor', 'pcd_rotation', 'pts_filename',
                     'transformation_3d_flow', 'img_aug_matrix', 'lidar_aug_matrix',
-                    'lidar2cam', 'gt_depths', 'cam_aware', 'bda_rot',
-                    'radar_depth')),
+                    'lidar2cam', 'gt_depths', 'cam_aware', 'bda_rot')),
 ]
 test_pipeline = [
     dict(type='LoadPointsFromFile', coord_type='LIDAR', load_dim=8, use_dim=[0,1,2,3,5]),
     dict(type='LoadImageFromFile', to_float32=True),
+    dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True),
     dict(type='ImageAug3D2', data_aug_conf=ida_aug_conf, is_train=False),
     dict(type='GlobalRotScaleTransFlipAll', bda_aug_conf=bda_aug_conf, is_train=False),
     dict(type='PointsRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='Normalize', **img_norm_cfg),
     dict(type='Pad', size_divisor=32),
-    dict(type='CreateDepthFromRaDAR', filter_min=0.0, filter_max=80.0),
     dict(type='DefaultFormatBundle3D', class_names=class_names, with_label=False),
     dict(type='CustomCollect3D2', keys=['points', 'img', 'gt_bboxes_3d', 'gt_labels_3d'],
          meta_keys=('filename', 'ori_shape', 'img_shape', 'lidar2img',
@@ -338,8 +346,7 @@ test_pipeline = [
                     'img_norm_cfg', 'pcd_trans', 'sample_idx',
                     'pcd_scale_factor', 'pcd_rotation', 'pts_filename',
                     'transformation_3d_flow', 'img_aug_matrix', 'lidar_aug_matrix',
-                    'lidar2cam', 'gt_depths', 'cam_aware', 'bda_rot',
-                    'radar_depth')),
+                    'lidar2cam', 'gt_depths', 'cam_aware', 'bda_rot')),
 ]
 eval_pipeline = test_pipeline
 
@@ -409,9 +416,7 @@ log_config = dict(
     ])
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
-
-# You may need to download the model first is the network is unstable
-load_from ='work_dirs/TJ4D-R4Det_det3d_2x4_12e-final/epoch_2.pth'
+load_from = None
 resume_from = None
 workflow = [('train', 1)]
 device = 'cuda'
