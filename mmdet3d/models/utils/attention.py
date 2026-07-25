@@ -14,9 +14,13 @@ from mmcv.runner import auto_fp16
 from mmcv.runner.base_module import BaseModule
 
 if str(torch.__version__) != '1.12.1+cu113':
-    from flash_attn.flash_attn_interface import flash_attn_varlen_kvpacked_func as flash_attn_unpadded_kvpacked_func
-    # flash_attn_unpadded_kvpacked_func for flash_attn 1.x, flash_attn_varlen_kvpacked_func for flash_attn 2.x
-    from flash_attn.bert_padding import unpad_input, pad_input, index_first_axis
+    try:
+        from flash_attn.flash_attn_interface import flash_attn_varlen_kvpacked_func as flash_attn_unpadded_kvpacked_func
+        # flash_attn_unpadded_kvpacked_func for flash_attn 1.x, flash_attn_varlen_kvpacked_func for flash_attn 2.x
+        from flash_attn.bert_padding import unpad_input, pad_input, index_first_axis
+        HAS_FLASH_ATTN = True
+    except ImportError:
+        HAS_FLASH_ATTN = False
 
 
 def _in_projection_packed(q, k, v, w, b = None):
@@ -40,6 +44,11 @@ class FlashAttention(nn.Module):
     """
     def __init__(self, softmax_scale=None, attention_dropout=0.0, device=None, dtype=None):
         super().__init__()
+        if not HAS_FLASH_ATTN:
+            raise ImportError(
+                "flash_attn is not installed. Please install flash-attn first. "
+                "If flash-attn is not available, try a different attention backend."
+            )
         self.softmax_scale = softmax_scale
         self.dropout_p = attention_dropout
         self.fp16_enabled = True

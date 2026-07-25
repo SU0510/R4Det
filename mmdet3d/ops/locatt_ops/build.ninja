@@ -1,13 +1,13 @@
 ninja_required_version = 1.3
-cxx = c++
-nvcc = /home/xiazhongyu/miniconda3/envs/t/bin/nvcc
+cxx = /usr/bin/g++-11
+nvcc = /usr/local/cuda-11.8/bin/nvcc
 
-cflags = -DTORCH_EXTENSION_NAME=localattention -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1011\" -isystem /home/xiazhongyu/miniconda3/envs/t/lib/python3.8/site-packages/torch/include -isystem /home/xiazhongyu/miniconda3/envs/t/lib/python3.8/site-packages/torch/include/torch/csrc/api/include -isystem /home/xiazhongyu/miniconda3/envs/t/lib/python3.8/site-packages/torch/include/TH -isystem /home/xiazhongyu/miniconda3/envs/t/lib/python3.8/site-packages/torch/include/THC -isystem /home/xiazhongyu/miniconda3/envs/t/include -isystem /home/xiazhongyu/miniconda3/envs/t/include/python3.8 -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC -std=c++17
+cflags = -DTORCH_EXTENSION_NAME=localattention -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1011\" -isystem /home/lurui/envs/miniforge3/envs/r4det/lib/python3.8/site-packages/torch/include -isystem /home/lurui/envs/miniforge3/envs/r4det/lib/python3.8/site-packages/torch/include/torch/csrc/api/include -isystem /home/lurui/envs/miniforge3/envs/r4det/lib/python3.8/site-packages/torch/include/TH -isystem /home/lurui/envs/miniforge3/envs/r4det/lib/python3.8/site-packages/torch/include/THC -isystem /usr/local/cuda-11.8/include -isystem /home/lurui/envs/miniforge3/envs/r4det/include/python3.8 -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC -std=c++17
 post_cflags = 
-cuda_cflags = -DTORCH_EXTENSION_NAME=localattention -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1011\" -isystem /home/xiazhongyu/miniconda3/envs/t/lib/python3.8/site-packages/torch/include -isystem /home/xiazhongyu/miniconda3/envs/t/lib/python3.8/site-packages/torch/include/torch/csrc/api/include -isystem /home/xiazhongyu/miniconda3/envs/t/lib/python3.8/site-packages/torch/include/TH -isystem /home/xiazhongyu/miniconda3/envs/t/lib/python3.8/site-packages/torch/include/THC -isystem /home/xiazhongyu/miniconda3/envs/t/include -isystem /home/xiazhongyu/miniconda3/envs/t/include/python3.8 -D_GLIBCXX_USE_CXX11_ABI=0 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_80,code=compute_80 -gencode=arch=compute_80,code=sm_80 --compiler-options '-fPIC' -DCUDA_HAS_FP16=1 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ -std=c++17
+cuda_cflags = -ccbin /usr/bin/gcc-11 -DTORCH_EXTENSION_NAME=localattention -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1011\" -isystem /home/lurui/envs/miniforge3/envs/r4det/lib/python3.8/site-packages/torch/include -isystem /home/lurui/envs/miniforge3/envs/r4det/lib/python3.8/site-packages/torch/include/torch/csrc/api/include -isystem /home/lurui/envs/miniforge3/envs/r4det/lib/python3.8/site-packages/torch/include/TH -isystem /home/lurui/envs/miniforge3/envs/r4det/lib/python3.8/site-packages/torch/include/THC -isystem /usr/local/cuda-11.8/include -isystem /home/lurui/envs/miniforge3/envs/r4det/include/python3.8 -D_GLIBCXX_USE_CXX11_ABI=0 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_89,code=compute_89 -gencode=arch=compute_89,code=sm_89 --compiler-options '-fPIC' -DCUDA_HAS_FP16=1 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ -std=c++17
 cuda_post_cflags = 
 cuda_dlink_post_cflags = 
-ldflags = -shared -L/home/xiazhongyu/miniconda3/envs/t/lib/python3.8/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda -ltorch -ltorch_python -L/home/xiazhongyu/miniconda3/envs/t/lib64 -lcudart
+ldflags = -shared -L/home/lurui/envs/miniforge3/envs/r4det/lib/python3.8/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda -ltorch -ltorch_python -L/usr/local/cuda-11.8/lib64 -lcudart
 
 rule compile
   command = $cxx -MMD -MF $out.d $cflags -c $in -o $out $post_cflags
@@ -24,9 +24,9 @@ rule cuda_compile
 rule link
   command = $cxx $in $ldflags -o $out
 
-build similar.cuda.o: cuda_compile /data1/tangyousen/bev_opensource/mmdet3d/ops/locatt_ops/similar.cu
-build weighting.cuda.o: cuda_compile /data1/tangyousen/bev_opensource/mmdet3d/ops/locatt_ops/weighting.cu
-build localAttention.o: compile /data1/tangyousen/bev_opensource/mmdet3d/ops/locatt_ops/localAttention.cpp
+build similar.cuda.o: cuda_compile /home/lurui/workspace/R4Det/mmdet3d/ops/locatt_ops/similar.cu
+build weighting.cuda.o: cuda_compile /home/lurui/workspace/R4Det/mmdet3d/ops/locatt_ops/weighting.cu
+build localAttention.o: compile /home/lurui/workspace/R4Det/mmdet3d/ops/locatt_ops/localAttention.cpp
 
 
 
