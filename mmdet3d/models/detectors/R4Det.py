@@ -201,9 +201,11 @@ class R4Det(MVXFasterRCNN):
             img_roi_head.update(train_cfg=rcnn_train_cfg)
             img_roi_head.update(test_cfg=test_cfg.img_rcnn)
             self.img_roi_head = build_head(img_roi_head)
+        else:
+            self.img_roi_head = None
 
         self.roi_head = self.img_roi_head
-        self.rpn_head = self.img_rpn_head
+        self.rpn_head = self.img_rpn_head if hasattr(self, 'img_rpn_head') else None
         if self.pts_voxel_encoder:
             # self.pts_dim = self.pts_voxel_encoder.in_channels
             self.pts_dim = kwargs['pts_voxel_encoder']['in_channels']
@@ -291,8 +293,8 @@ class R4Det(MVXFasterRCNN):
         self.igdr_fusion = IGDRModule(
             bev_channels=self.img_channels,
             instance_channels=self.img_channels
-        )
-        self.head_downsampler = nn.AvgPool2d(kernel_size=4, stride=4)
+        ) if (self.with_rpn and self.with_roi_head) else None
+        self.head_downsampler = nn.AvgPool2d(kernel_size=4, stride=4) if (self.with_rpn and self.with_roi_head) else None
         self.debug_internal_tensors = debug_internal_tensors
         fpn_file_path = inspect.getfile(self.img_neck.__class__)
         self.debug_vis_gt_vs_pred = True
@@ -580,7 +582,7 @@ class R4Det(MVXFasterRCNN):
 
     # NOTE: core model here, processing multi-modality feats
 
-    def extract_feat(self, points, img, img_metas, prev_bev_feats=None,is_valid_mask=None,feat_or_dict=0):
+    def extract_feat(self, points, img, img_metas, is_valid_mask=None, feat_or_dict=0):
         """Extract features from images and points."""
         # preparation of camera-geo-aware input
         if img.dim() == 3 and img.size(0) == 3: img = img.unsqueeze(0)
@@ -688,18 +690,26 @@ class R4Det(MVXFasterRCNN):
             bev_mask_logit_former = self.proposal_layer_former(bev_feats)
         else:
             bev_mask_logit_former = None
+        rssm_kl = None
+        rssm_recon_loss = None
         if self.temporal_fusion is not None:
-            if prev_bev_feats is not None or feat_or_dict == 1:
-                if prev_bev_feats is not None:
-                    prev_bev_feats_device = prev_bev_feats.to(bev_feats.device)
-                    bev_feats_cache = bev_feats
-                    bev_feats = self.temporal_fusion(bev_feats, prev_bev_feats_device)
-                    if is_valid_mask is not None:
-                        is_valid_mask_dev = is_valid_mask.to(bev_feats.device)
-                        mask_expanded = is_valid_mask_dev[:, None, None, None]
-                        bev_feats = torch.where(mask_expanded, bev_feats, bev_feats_cache)
+            if feat_or_dict == 0:
+                # Prev frame: run RSSM to update internal h/z state
+                # Caller wraps with torch.no_grad(), so no gradients flow
+                bev_feats, _, _, _, _ = self.temporal_fusion(bev_feats)
             else:
-                return bev_feats
+                # Curr frame: full RSSM forward with gradients + losses
+                bev_feats_cache = bev_feats
+                bev_feats, rssm_recon, rssm_kl, _, _ = \
+                    self.temporal_fusion(bev_feats)
+                rssm_recon_loss = F.mse_loss(rssm_recon, bev_feats_cache)
+                if is_valid_mask is not None:
+                    is_valid_mask_dev = is_valid_mask.to(bev_feats.device)
+                    mask_expanded = is_valid_mask_dev[:, None, None, None]
+                    bev_feats = torch.where(mask_expanded, bev_feats, bev_feats_cache)
+
+        if feat_or_dict == 0:
+            return bev_feats
         if self.backward_projection is not None and self.lift_method == 'LSS':
             bev_mask = torch.ones((B, 1, self.bev_h_, self.bev_w_), dtype=torch.bool).to(img.device)
             search_img_feats = img_feats[index]
@@ -745,7 +755,9 @@ class R4Det(MVXFasterRCNN):
                     segmentation=segmentation,
                     rangeview_logit=rangeview_logit,
                     depth_comple=depth_comple,
-                    precise_depth=precise_depth)
+                    precise_depth=precise_depth,
+                    rssm_kl=rssm_kl,
+                    rssm_recon_loss=rssm_recon_loss)
 
     def voxelpainting_depth_aware(self, context, pv_logits, depth_logits, points, lidar2img, temperature=1.0):
         B, _, H, W = pv_logits.shape
@@ -870,7 +882,6 @@ class R4Det(MVXFasterRCNN):
                     gt_labels=None,
                     gt_bboxes=None, **kwargs):
         """Test function without augmentaiton."""
-        self.prev_bev_feats = None
         outs_pts = None
         if len(img_metas) != 1: img_metas = [img_metas]
         prev_points = points[0]
@@ -879,34 +890,44 @@ class R4Det(MVXFasterRCNN):
         img = img[1, ...]
         prev_img_metas = [meta[0] for meta in img_metas]
         img_metas = [meta[1] for meta in img_metas]
-        prev_gt_bboxes_3d = [gt[0] for gt in gt_bboxes_3d]
-        gt_bboxes_3d = [gt[1] for gt in gt_bboxes_3d]
-        prev_gt_labels_3d = [gt[0] for gt in gt_labels_3d]
-        gt_labels_3d = [gt[1] for gt in gt_labels_3d]
+        prev_gt_bboxes_3d = [gt[0] for gt in gt_bboxes_3d] if gt_bboxes_3d is not None else None
+        gt_bboxes_3d = [gt[1] for gt in gt_bboxes_3d] if gt_bboxes_3d is not None else None
+        prev_gt_labels_3d = [gt[0] for gt in gt_labels_3d] if gt_labels_3d is not None else None
+        gt_labels_3d = [gt[1] for gt in gt_labels_3d] if gt_labels_3d is not None else None
         prev_gt_labels = [gt[0] for gt in gt_labels] if gt_labels is not None else None
         prev_gt_bboxes = [gt[0] for gt in gt_bboxes] if gt_bboxes is not None else None
         gt_labels = [gt[1] for gt in gt_labels] if gt_labels is not None else None
         gt_bboxes = [gt[1] for gt in gt_bboxes] if gt_bboxes is not None else None
         #gt_masks = [gt[1] for gt in gt_masks] if gt_masks is not None else None
         is_valid_mask = torch.tensor([meta['is_prev_frame_valid'] for meta in prev_img_metas], device=img.device)
-        prev_bev_feats = None
         for i in range(len(prev_img_metas)):
-            prev_img_metas[i]['gt_labels'] = prev_gt_labels[i]
-            prev_img_metas[i]['gt_bboxes'] = HorizontalBoxes(prev_gt_bboxes[i], in_mode='xyxy')
-            prev_img_metas[i]['gt_bboxes_3d'] = prev_gt_bboxes_3d[i].to(gt_labels_3d[i].device)
-            prev_img_metas[i]['gt_labels_3d'] = prev_gt_labels_3d[i]
+            if prev_gt_labels is not None:
+                prev_img_metas[i]['gt_labels'] = prev_gt_labels[i]
+            if prev_gt_bboxes is not None:
+                prev_img_metas[i]['gt_bboxes'] = HorizontalBoxes(prev_gt_bboxes[i], in_mode='xyxy')
+            if prev_gt_bboxes_3d is not None and prev_gt_labels_3d is not None:
+                prev_img_metas[i]['gt_bboxes_3d'] = prev_gt_bboxes_3d[i].to(gt_labels_3d[i].device)
+                prev_img_metas[i]['gt_labels_3d'] = prev_gt_labels_3d[i]
         if is_valid_mask.any():
+            if self.temporal_fusion is not None:
+                self.temporal_fusion.reset_state()
             with torch.no_grad():
-                raw_prev_bev_feats = self.extract_feat(prev_points, prev_img, prev_img_metas, prev_bev_feats=None,is_valid_mask=is_valid_mask,feat_or_dict=0)
+                raw_prev_bev_feats = self.extract_feat(prev_points, prev_img, prev_img_metas,
+                                                       is_valid_mask=is_valid_mask, feat_or_dict=0)
                 prev_bev_feats = raw_prev_bev_feats * is_valid_mask[:, None, None, None]
+            if self.temporal_fusion is not None and (~is_valid_mask).any():
+                self.temporal_fusion.reset_for_samples(~is_valid_mask)
         if gt_bboxes_3d is not None:
             for i in range(len(img_metas)):
-                img_metas[i]['gt_labels'] = gt_labels[i]
-                img_metas[i]['gt_bboxes'] = HorizontalBoxes(gt_bboxes[i], in_mode='xyxy')
+                if gt_labels is not None:
+                    img_metas[i]['gt_labels'] = gt_labels[i]
+                if gt_bboxes is not None:
+                    img_metas[i]['gt_bboxes'] = HorizontalBoxes(gt_bboxes[i], in_mode='xyxy')
                 img_metas[i]['gt_bboxes_3d'] = gt_bboxes_3d[i].to(gt_labels_3d[i].device)
                 img_metas[i]['gt_labels_3d'] = gt_labels_3d[i]
 
-        feature_dict = self.extract_feat(points, img=img, img_metas=img_metas,prev_bev_feats=prev_bev_feats,is_valid_mask=is_valid_mask,feat_or_dict=1)
+        feature_dict = self.extract_feat(points, img=img, img_metas=img_metas,
+                                           is_valid_mask=is_valid_mask, feat_or_dict=1)
         img_feats = feature_dict['img_feats']
         pts_feats = feature_dict['pts_feats']
         precise_depth = feature_dict.get('precise_depth')
@@ -979,7 +1000,7 @@ class R4Det(MVXFasterRCNN):
             for result_dict, pts_bbox in zip(bbox_list, bbox_pts):
                 result_dict['pts_bbox'] = pts_bbox
 
-        if img_feats:  # and self.with_img_bbox:  # img means 2D detection
+        if img_feats and self.with_rpn and self.with_roi_head:  # img means 2D detection
             results = self.simple_test_img(img_feats, img_metas, rescale=rescale)
             bbox_img, mask_img = zip(*results)
             for result_dict, img_bbox, img_mask in zip(bbox_list, bbox_img, mask_img):
@@ -1008,6 +1029,19 @@ class R4Det(MVXFasterRCNN):
                 if len(pred_bboxes_3d) == 0: pred_bboxes_3d = None
                 filename = str(self.vis_time_box3d) + '_' + img_name + '_det3d'
 
+        # Move all result tensors to CPU to avoid CUDA memory issues
+        # during downstream evaluation (format_results / kitti_eval)
+        for result_dict in bbox_list:
+            for key in result_dict:
+                if isinstance(result_dict[key], dict):
+                    for sub_key in result_dict[key]:
+                        val = result_dict[key][sub_key]
+                        if isinstance(val, torch.Tensor) and val.is_cuda:
+                            result_dict[key][sub_key] = val.cpu()
+                elif isinstance(result_dict[key], torch.Tensor) and result_dict[key].is_cuda:
+                    result_dict[key] = result_dict[key].cpu()
+
+        torch.cuda.empty_cache()
         return bbox_list
 
 
@@ -1043,8 +1077,8 @@ class R4Det(MVXFasterRCNN):
         gt_bboxes = [gt[1] for gt in gt_bboxes] if gt_bboxes is not None else None
         gt_masks = [gt[1] for gt in gt_masks] if gt_masks is not None else None
         gt_bboxes_ignore = [gt[1] for gt in gt_bboxes_ignore] if gt_bboxes_ignore is not None else None
-        prev_my_gt_depth = my_gt_depth[0]
-        my_gt_depth = my_gt_depth[1]
+        prev_my_gt_depth = my_gt_depth[0] if my_gt_depth is not None else None
+        my_gt_depth = my_gt_depth[1] if my_gt_depth is not None else None
         if bev_semantic_mask is not None and isinstance(bev_semantic_mask, list):
             prev_bev_semantic_mask = bev_semantic_mask[0]
             bev_semantic_mask = bev_semantic_mask[1]
@@ -1057,25 +1091,33 @@ class R4Det(MVXFasterRCNN):
             prev_proposals = proposals[0]
             proposals = proposals[1]
         is_valid_mask = torch.tensor([meta['is_prev_frame_valid'] for meta in prev_img_metas], device=img.device)
-        prev_bev_feats = None
         for i in range(len(prev_img_metas)):
-            prev_img_metas[i]['gt_labels'] = prev_gt_labels[i]
-            prev_img_metas[i]['gt_bboxes'] = HorizontalBoxes(prev_gt_bboxes[i], in_mode='xyxy')
+            if prev_gt_labels is not None:
+                prev_img_metas[i]['gt_labels'] = prev_gt_labels[i]
+            if prev_gt_bboxes is not None:
+                prev_img_metas[i]['gt_bboxes'] = HorizontalBoxes(prev_gt_bboxes[i], in_mode='xyxy')
             prev_img_metas[i]['gt_bboxes_3d'] = prev_gt_bboxes_3d[i].to(gt_labels_3d[i].device)
             prev_img_metas[i]['gt_labels_3d'] = prev_gt_labels_3d[i]
         if self.temporal_fusion is not None and is_valid_mask.any():
+            self.temporal_fusion.reset_state()
             with torch.no_grad():
-                raw_prev_bev_feats = self.extract_feat(prev_points, prev_img, prev_img_metas, prev_bev_feats=None,
+                raw_prev_bev_feats = self.extract_feat(prev_points, prev_img, prev_img_metas,
                                                        is_valid_mask=is_valid_mask, feat_or_dict=0)
                 prev_bev_feats = raw_prev_bev_feats * is_valid_mask[:, None, None, None]
+            # Reset RSSM state for samples where prev frame was invalid
+            if (~is_valid_mask).any():
+                self.temporal_fusion.reset_for_samples(~is_valid_mask)
 
         # preparation for loss caculation
         for i in range(len(img_metas)):
-            img_metas[i]['gt_labels'] = gt_labels[i]
-            img_metas[i]['gt_bboxes'] = HorizontalBoxes(gt_bboxes[i], in_mode='xyxy')
+            if gt_labels is not None:
+                img_metas[i]['gt_labels'] = gt_labels[i]
+            if gt_bboxes is not None:
+                img_metas[i]['gt_bboxes'] = HorizontalBoxes(gt_bboxes[i], in_mode='xyxy')
             img_metas[i]['gt_bboxes_3d'] = gt_bboxes_3d[i].to(gt_labels_3d[i].device)
             img_metas[i]['gt_labels_3d'] = gt_labels_3d[i]
-        feature_dict = self.extract_feat(points, img=img, img_metas=img_metas,prev_bev_feats=prev_bev_feats,is_valid_mask=is_valid_mask,feat_or_dict=1)
+        feature_dict = self.extract_feat(points, img=img, img_metas=img_metas,
+                                               is_valid_mask=is_valid_mask, feat_or_dict=1)
         # feature_dict = torch.load(load_path)
 
         img_feats = feature_dict['img_feats']
@@ -1088,8 +1130,15 @@ class R4Det(MVXFasterRCNN):
         segmentation = feature_dict['segmentation']
         rangeview_logit = feature_dict['rangeview_logit']
         precise_depth = feature_dict['precise_depth']
+        rssm_kl = feature_dict.get('rssm_kl')
+        rssm_recon_loss = feature_dict.get('rssm_recon_loss')
         # compute for all losses
         losses = dict()
+
+        # RSSM losses
+        if self.temporal_fusion is not None and rssm_kl is not None:
+            losses['loss_rssm_kl'] = rssm_kl
+            losses['loss_rssm_recon'] = rssm_recon_loss
 
         # img_feats = feature_dict.get('img_feats')
         instance_features = None
@@ -1109,7 +1158,7 @@ class R4Det(MVXFasterRCNN):
         else:
             proposal_list = proposals
 
-        if self.img_roi_head.with_bbox or self.img_roi_head.with_mask:
+        if self.with_roi_head and (self.img_roi_head.with_bbox or self.img_roi_head.with_mask):
             num_imgs = len(img_metas)
             if gt_bboxes_ignore is None:
                 gt_bboxes_ignore = [None for _ in range(num_imgs)]
@@ -1127,14 +1176,14 @@ class R4Det(MVXFasterRCNN):
                 sampling_results.append(sampling_result)
 
         # bbox head forward and loss
-        if self.img_roi_head.with_bbox:
+        if self.with_roi_head and self.img_roi_head.with_bbox:
             bbox_results = self.img_roi_head._bbox_forward_train(img_feats, sampling_results,
                                                                  gt_bboxes, gt_labels,
                                                                  img_metas)
             losses.update(bbox_results['loss_bbox'])
 
         # mask head forward and loss
-        if self.img_roi_head.with_mask:
+        if self.with_roi_head and self.img_roi_head.with_mask:
             pos_rois = bbox2roi([res.pos_bboxes for res in sampling_results])
             mask_results = self.img_roi_head._mask_forward_train(img_feats, sampling_results,
                                                                  bbox_results['bbox_feats'],
@@ -1293,8 +1342,8 @@ class R4Det(MVXFasterRCNN):
             # gt lidar instances_3d, list of InstancesData
             gt_bboxes_3d = [img_meta['gt_bboxes_3d'] for img_meta in batch_img_metas]
             gt_labels_3d = [img_meta['gt_labels_3d'] for img_meta in batch_img_metas]
-            gt_bboxes_2d = [img_meta['gt_bboxes'] for img_meta in batch_img_metas]
-            gt_labels_2d = [img_meta['gt_labels'] for img_meta in batch_img_metas]
+            gt_bboxes_2d = [img_meta.get('gt_bboxes', []) for img_meta in batch_img_metas]
+            gt_labels_2d = [img_meta.get('gt_labels', []) for img_meta in batch_img_metas]
 
             # cam_aware: rot, tran, intrin, post_rot, post_tran, _, cam2lidar, focal_length, baseline
             # print(f"DEBUG: batch_img_metas keys: {batch_img_metas.keys()}")
@@ -1326,7 +1375,11 @@ class R4Det(MVXFasterRCNN):
             bda_rot = bda_rot.to(device)
             # create gt_depths from LiDAR data, already processing with IMG_AUG, no need with BEV_AUG
             gt_depths = [img_meta['gt_depths'] for img_meta in batch_img_metas if 'gt_depths' in img_meta]
-            gt_depths = torch.stack(gt_depths).unsqueeze(1)  # B, 1, H, W
+            if gt_depths:
+                gt_depths = torch.stack(gt_depths).unsqueeze(1)  # B, 1, H, W
+            else:
+                h, w = batch_img_metas[0]['img_shape']
+                gt_depths = torch.zeros((batch_size, 1, h, w))
             gt_depths = gt_depths.to(device)
 
             # generate_bev_mask
@@ -1350,8 +1403,12 @@ class R4Det(MVXFasterRCNN):
                 depth_comple = torch.tensor(np.stack(depth_comple, axis=0)).to(device).unsqueeze(1)
             else:
                 depth_comple = torch.zeros_like(gt_depths).to(device)
-            radar_depth = [img_meta['radar_depth'] for img_meta in batch_img_metas]
-            radar_depth = torch.tensor(np.stack(radar_depth, axis=0)).to(device).unsqueeze(1)
+            radar_depth = [img_meta['radar_depth'] for img_meta in batch_img_metas if 'radar_depth' in img_meta]
+            if radar_depth:
+                radar_depth = torch.tensor(np.stack(radar_depth, axis=0)).to(device).unsqueeze(1)
+            else:
+                h, w = batch_img_metas[0]['img_shape']
+                radar_depth = torch.zeros((batch_size, 1, h, w)).to(device)
             radar_depth = radar_depth.to(torch.float32)
             # preprocessed bbox_Mask and segmentation for msk2D supervison, NOTE: downsampled
             h, w = batch_img_metas[0]['img_shape']
@@ -1362,8 +1419,11 @@ class R4Det(MVXFasterRCNN):
                 segmentation = F.interpolate(segmentation, (h_down, w_down), mode='bilinear', align_corners=True)
             else:
                 segmentation = torch.zeros((len(batch_img_metas), 1, h_down, w_down), dtype=torch.float32).to(device)
-            bbox_Mask = [img_meta['bbox_Mask'] for img_meta in batch_img_metas]
-            bbox_Mask = torch.tensor(np.stack(bbox_Mask, axis=0)).to(device).unsqueeze(1)
+            bbox_Mask = [img_meta['bbox_Mask'] for img_meta in batch_img_metas if 'bbox_Mask' in img_meta]
+            if bbox_Mask:
+                bbox_Mask = torch.tensor(np.stack(bbox_Mask, axis=0)).to(device).unsqueeze(1)
+            else:
+                bbox_Mask = torch.zeros((len(batch_img_metas), 1, h_down, w_down), dtype=torch.float32).to(device)
             bbox_Mask = F.interpolate(bbox_Mask, (h_down, w_down), mode='bilinear', align_corners=True)
         else:
             batch_img_metas = batch_img_metas[0]
@@ -1427,12 +1487,13 @@ class R4Det(MVXFasterRCNN):
                 depth_comple = [batch_img_metas[0]['depth_comple']] if isinstance(batch_img_metas, list) else [
                     batch_img_metas['depth_comple']]
                 depth_comple = torch.tensor(np.stack(depth_comple, axis=0)).to(device).unsqueeze(1)
-
             else:
                 depth_comple = torch.zeros((1, 1, H, W)).to(device)
-            radar_depth = [batch_img_metas[0]['radar_depth']] if isinstance(batch_img_metas, list) else [
-                batch_img_metas['depth_comple']]
-            radar_depth = torch.tensor(np.stack(radar_depth, axis=0)).to(device).unsqueeze(1)
+            if 'radar_depth' in batch_img_metas[0]:
+                radar_depth = [batch_img_metas[0]['radar_depth']]
+                radar_depth = torch.tensor(np.stack(radar_depth, axis=0)).to(device).unsqueeze(1)
+            else:
+                radar_depth = torch.zeros((1, 1, H, W)).to(device)
             radar_depth = radar_depth.to(torch.float32)
             h, w = batch_img_metas[0]['img_shape']
             h_down, w_down = h // self.downsample, w // self.downsample
@@ -1444,9 +1505,11 @@ class R4Det(MVXFasterRCNN):
                 segmentation = F.interpolate(segmentation, (h_down, w_down), mode='bilinear', align_corners=True)
             else:
                 segmentation = torch.zeros((1, 1, h_down, w_down)).to(device)
-            bbox_Mask = [batch_img_metas[0]['bbox_Mask']] if isinstance(batch_img_metas, list) else [
-                batch_img_metas['bbox_Mask']]
-            bbox_Mask = torch.tensor(np.stack(bbox_Mask, axis=0)).to(device).unsqueeze(1)
+            if 'bbox_Mask' in batch_img_metas[0]:
+                bbox_Mask = [batch_img_metas[0]['bbox_Mask']]
+                bbox_Mask = torch.tensor(np.stack(bbox_Mask, axis=0)).to(device).unsqueeze(1)
+            else:
+                bbox_Mask = torch.zeros((1, 1, h_down, w_down)).to(device)
             bbox_Mask = F.interpolate(bbox_Mask, (h_down, w_down), mode='bilinear', align_corners=True)
 
         return batch_img_metas, gt_bboxes_3d, gt_labels_3d, gt_bboxes_2d, gt_labels_2d, depth_comple, bbox_Mask, segmentation, radar_depth, \

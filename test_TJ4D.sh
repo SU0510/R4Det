@@ -1,13 +1,12 @@
-CONFIG_PATH=./configs/r4det/TJ4D-R4Det_det3d_2x4_12e.py
-CHECKPOINT_PATH=./work_dirs/yourpath
-GPUS="8"
-PORT=$((RANDOM % 101 + 29600))
-PYTHONPATH="$(dirname $0)/..":$PYTHONPATH \
-python -m torch.distributed.launch \
-    --nproc_per_node=$GPUS \
-    --master_port=$PORT \
-    $(dirname "$0")/tools/test_vod.py \
+#!/bin/bash
+# Single-GPU test script for TJ4D baseline temporal model
+# Usage: bash test_TJ4D.sh [checkpoint_path]
+# Example: bash test_TJ4D.sh work_dirs/r4det_baseline_temporal/epoch_18.pth
+
+CONFIG_PATH=./configs/r4det/TJ4D-R4Det_baseline_temporal_det3d_2x4_12e.py
+CHECKPOINT_PATH=${1:-./work_dirs/r4det_baseline_temporal/latest.pth}
+
+python tools/test_vod.py \
     --config $CONFIG_PATH \
     --checkpoint $CHECKPOINT_PATH \
-    --eval mAP \
-    --launcher pytorch ${@:4}
+    --eval bbox

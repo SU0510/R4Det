@@ -5,7 +5,124 @@ import numba
 import numpy as np
 
 
-@numba.jit
+@numba.jit(nopython=True)
+def _rotated_rect_corners(box):
+    """Convert rotated rect [x, y, w, l, r] to 4 corner points."""
+    x, y, w, l, r = box[0], box[1], box[2], box[3], box[4]
+    cos_r, sin_r = np.cos(r), np.sin(r)
+    hw, hl = w / 2.0, l / 2.0
+    corners = np.zeros((4, 2), dtype=np.float64)
+    corners[0, 0] = x + hl * cos_r - hw * sin_r
+    corners[0, 1] = y + hl * sin_r + hw * cos_r
+    corners[1, 0] = x + hl * cos_r + hw * sin_r
+    corners[1, 1] = y + hl * sin_r - hw * cos_r
+    corners[2, 0] = x - hl * cos_r + hw * sin_r
+    corners[2, 1] = y - hl * sin_r - hw * cos_r
+    corners[3, 0] = x - hl * cos_r - hw * sin_r
+    corners[3, 1] = y - hl * sin_r + hw * cos_r
+    return corners
+
+
+@numba.jit(nopython=True)
+def _cross2d(a, b):
+    return a[0] * b[1] - a[1] * b[0]
+
+
+@numba.jit(nopython=True)
+def _polygon_intersection_area(poly1, poly2):
+    """Compute intersection area of two convex polygons using Sutherland-Hodgman."""
+    # Allocate output buffer large enough for intersection of two quads (max 8 verts)
+    output = np.zeros((16, 2), dtype=np.float64)
+    output[:4] = poly1
+    n_out = 4
+    n2 = len(poly2)
+    temp = np.zeros((16, 2), dtype=np.float64)
+    for i in range(n2):
+        if n_out == 0:
+            return 0.0
+        edge_start = poly2[i]
+        edge_end = poly2[(i + 1) % n2]
+        edge_vec_x = edge_end[0] - edge_start[0]
+        edge_vec_y = edge_end[1] - edge_start[1]
+        temp_out = 0
+        for j in range(n_out):
+            current = output[j]
+            previous = output[(j + n_out - 1) % n_out]
+            # Cross product to determine side
+            d_curr = edge_vec_x * (current[1] - edge_start[1]) - edge_vec_y * (current[0] - edge_start[0])
+            d_prev = edge_vec_x * (previous[1] - edge_start[1]) - edge_vec_y * (previous[0] - edge_start[0])
+            if d_curr >= 0:
+                if d_prev < 0:
+                    t = d_prev / (d_prev - d_curr)
+                    temp[temp_out, 0] = previous[0] + t * (current[0] - previous[0])
+                    temp[temp_out, 1] = previous[1] + t * (current[1] - previous[1])
+                    temp_out += 1
+                temp[temp_out, 0] = current[0]
+                temp[temp_out, 1] = current[1]
+                temp_out += 1
+            elif d_prev >= 0:
+                t = d_prev / (d_prev - d_curr)
+                temp[temp_out, 0] = previous[0] + t * (current[0] - previous[0])
+                temp[temp_out, 1] = previous[1] + t * (current[1] - previous[1])
+                temp_out += 1
+        output[:temp_out] = temp[:temp_out]
+        n_out = temp_out
+    if n_out < 3:
+        return 0.0
+    # Shoelace formula
+    area = 0.0
+    for i in range(n_out):
+        j = (i + 1) % n_out
+        area += output[i, 0] * output[j, 1] - output[j, 0] * output[i, 1]
+    return abs(area) * 0.5
+
+
+@numba.jit(nopython=True)
+def _rotate_iou_kernel(boxes, query_boxes, result, N, K, criterion):
+    """Numba-accelerated kernel for rotated IoU."""
+    for n in range(N):
+        corners_n = _rotated_rect_corners(boxes[n])
+        area_n = boxes[n, 2] * boxes[n, 3]
+        for k in range(K):
+            corners_k = _rotated_rect_corners(query_boxes[k])
+            area_k = query_boxes[k, 2] * query_boxes[k, 3]
+            inter = _polygon_intersection_area(corners_n, corners_k)
+            if criterion == 2:
+                result[n, k] = inter
+            else:
+                if criterion == -1:
+                    union = area_n + area_k - inter
+                elif criterion == 0:
+                    union = area_n
+                elif criterion == 1:
+                    union = area_k
+                else:
+                    union = 1.0
+                if union > 0:
+                    result[n, k] = inter / union
+                else:
+                    result[n, k] = 0.0
+
+
+def rotate_iou_cpu(boxes, query_boxes, criterion=-1):
+    """CPU-only rotated rectangle IoU using numba CPU jit (no CUDA).
+
+    Args:
+        boxes: (N, 5) [x, y, w, l, r]
+        query_boxes: (K, 5) [x, y, w, l, r]
+        criterion: -1 for IoU, 0 for area_inter/area_boxes,
+                   1 for area_inter/area_qboxes, 2 for area_inter
+    Returns:
+        (N, K) IoU or area matrix
+    """
+    boxes = np.asarray(boxes, dtype=np.float64)
+    query_boxes = np.asarray(query_boxes, dtype=np.float64)
+    N, K = boxes.shape[0], query_boxes.shape[0]
+    result = np.zeros((N, K), dtype=np.float64)
+    _rotate_iou_kernel(boxes, query_boxes, result, N, K, criterion)
+    return result.astype(np.float32)
+
+
 def get_thresholds(scores: np.ndarray, num_gt, num_sample_pts=41):
     scores.sort()
     scores = scores[::-1]
@@ -115,7 +232,6 @@ def clean_data(gt_anno, dt_anno, current_class, difficulty):
     return num_valid_gt, ignored_gt, ignored_dt, dc_bboxes
 
 
-@numba.jit(nopython=True)
 def image_box_overlap(boxes, query_boxes, criterion=-1):
     N = boxes.shape[0]
     K = query_boxes.shape[0]
@@ -149,17 +265,14 @@ def image_box_overlap(boxes, query_boxes, criterion=-1):
 
 def bev_box_overlap(boxes, qboxes, criterion=-1):
     from .rotate_iou import rotate_iou_gpu_eval
-    riou = rotate_iou_gpu_eval(boxes, qboxes, criterion)
-    return riou
+    return rotate_iou_gpu_eval(boxes, qboxes, criterion)
 
 
-@numba.jit(nopython=True, parallel=True)
 def d3_box_overlap_kernel(boxes, qboxes, rinc, criterion=-1):
     # ONLY support overlap in CAMERA, not lidar.
-    # TODO: change to use prange for parallel mode, should check the difference
     N, K = boxes.shape[0], qboxes.shape[0]
-    for i in numba.prange(N):
-        for j in numba.prange(K):
+    for i in range(N):
+        for j in range(K):
             if rinc[i, j] > 0:
                 # iw = (min(boxes[i, 1] + boxes[i, 4], qboxes[j, 1] +
                 #         qboxes[j, 4]) - max(boxes[i, 1], qboxes[j, 1]))
@@ -193,7 +306,6 @@ def d3_box_overlap(boxes, qboxes, criterion=-1):
     return rinc
 
 
-@numba.jit(nopython=True)
 def compute_statistics_jit(overlaps,
                            gt_datas,
                            dt_datas,
@@ -323,7 +435,6 @@ def get_split_parts(num, num_part):
         return [same_part] * num_part + [remain_num]
 
 
-@numba.jit(nopython=True)
 def fused_compute_statistics(overlaps,
                              pr,
                              gt_nums,

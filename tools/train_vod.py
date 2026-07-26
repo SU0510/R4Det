@@ -300,6 +300,16 @@ def main():
             f.write(f"Exception caught on RANK {rank}:\n")
             f.write(error_info)
         raise e
+    finally:
+        # Graceful distributed + CUDA cleanup to prevent SIGSEGV on exit
+        import torch.distributed as dist
+        if distributed:
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+            if dist.is_initialized():
+                dist.barrier()
+                dist.destroy_process_group()
+        print(f"[RANK {rank}] FINISH — training completed, cleanup done.")
 
 if __name__ == '__main__':
     main()
