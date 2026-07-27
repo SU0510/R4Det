@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 from mmcv.runner import BaseModule, auto_fp16
 from mmcv.cnn import ConvModule, xavier_init
@@ -61,18 +62,23 @@ class ConvGRUCell(nn.Module):
 
 @FUSION_LAYERS.register_module()
 class BEVRSSMTemporalFusion(BaseModule):
-    """True RSSM for BEV temporal fusion — per-frame recurrent processing.
+    """RSSM for BEV temporal fusion — per-frame recurrent processing (filtering mode).
 
     Each forward call processes ONE frame. The model maintains internal
     deterministic state h and stochastic state z across calls:
 
         h_t = ConvGRU(h_{t-1}, z_{t-1}, action)    ← recurrent transition
-        prior:     p(z_t | h_t)
-        posterior: q(z_t | h_t, encoder(feat))
-        z_t ~ q (train) / ~ p (inference)
+        prior:     p(z_t | h_t)                     ← KL regularizer only
+        posterior: q(z_t | h_t, encoder(feat))      ← used for both train & inference
         KL = KL(q || p)
+        output = output_proj(z_t) + feat
 
     h_0 is initialized to zeros (NOT from any observation).
+
+    By default, both training and validation use the posterior mean mu_q
+    deterministically (use_posterior=True, deterministic=True). The prior
+    only serves as a KL regularizer — it is never used as the detection
+    feature source at inference time.
 
     Args:
         in_channels (int): Input BEV feature channels.
@@ -82,6 +88,9 @@ class BEVRSSMTemporalFusion(BaseModule):
         hidden_dim (int): Encoder hidden dimension.
         action_dim (int): Action (velocity) dimension.
         kl_scale (float): KL loss weight.
+        free_nats (float): Free-bits threshold for KL (0 = disabled).
+        min_std (float): Minimum std for logstd constraint.
+        init_std (float): Initial std for prior/posterior logstd layers.
         norm_cfg (dict): Normalization config.
         act_cfg (dict): Activation config.
         init_cfg (dict): Init config.
@@ -96,6 +105,9 @@ class BEVRSSMTemporalFusion(BaseModule):
         hidden_dim=64,
         action_dim=2,
         kl_scale=1.0,
+        free_nats=0.0,
+        min_std=0.1,
+        init_std=0.2,
         norm_cfg=dict(type='BN', requires_grad=True),
         act_cfg=dict(type='ReLU', inplace=True),
         init_cfg=None
@@ -113,6 +125,10 @@ class BEVRSSMTemporalFusion(BaseModule):
         self.action_dim = action_dim
         self.kernel_size = kernel_size
         self.kl_scale = kl_scale
+        self.free_nats = free_nats
+        self.min_std = min_std
+        self.min_logstd = math.log(min_std)
+        self.init_std = init_std
 
         ################################################
         # Encoder: observation → latent_dim
@@ -201,15 +217,16 @@ class BEVRSSMTemporalFusion(BaseModule):
         )
 
         ################################################
-        # Output: h + z → out_channels
+        # Output: z_t → out_channels
+        # z_t already fuses temporal context (h_t) + current observation (e_t)
+        # via the posterior q(z | h_t, e_t), so we project z_t directly.
+        # Zero-init ensures output = feat at the start of training.
         ################################################
-        self.output_layer = ConvModule(
-            out_channels + latent_dim,
+        self.output_proj = nn.Conv2d(
+            latent_dim,
             out_channels,
             3,
-            padding=1,
-            norm_cfg=norm_cfg,
-            act_cfg=act_cfg
+            padding=1
         )
 
         # Internal recurrent state (per-batch, maintained across forward calls)
@@ -218,14 +235,34 @@ class BEVRSSMTemporalFusion(BaseModule):
 
         self.init_weights()
 
+    def _logstd_bias_value(self):
+        """Compute bias for logstd layers so initial std ≈ init_std.
+
+        Under the softplus constraint:
+            logstd = min_logstd + softplus(raw_logstd - min_logstd)
+
+        At init, raw_logstd = bias (weights are zero). Solving:
+            bias = min_logstd + log(init_std / min_std - 1)
+
+        For init_std=0.2, min_std=0.1: bias = log(0.1) ≈ -2.303, giving std ≈ 0.2.
+        Requires init_std > min_std.
+        """
+        assert self.init_std > self.min_std, \
+            f"init_std ({self.init_std}) must be > min_std ({self.min_std})"
+        return self.min_logstd + math.log(self.init_std / self.min_std - 1.0)
+
     def init_weights(self):
+        """Initialize weights with Xavier, then override output_proj and logstd bias."""
         super().init_weights()
 
+        # Group 1: Xavier init for mu/logstd/output layers
         for m in [self.prior_mu, self.prior_logstd,
-                  self.posterior_mu, self.posterior_logstd]:
+                  self.posterior_mu, self.posterior_logstd,
+                  self.output_proj]:
             if hasattr(m, 'weight'):
                 xavier_init(m, distribution='uniform')
 
+        # Group 2: Xavier init for ConvGRU layers
         for m in [self.transition.reset_conv,
                   self.transition.update_conv,
                   self.transition.candidate_conv]:
@@ -233,6 +270,15 @@ class BEVRSSMTemporalFusion(BaseModule):
                 xavier_init(m, distribution='uniform')
             if hasattr(m, 'bias') and m.bias is not None:
                 nn.init.uniform_(m.bias, -0.1, 0.1)
+
+        # Override: zero-init output_proj so output = feat at the start
+        nn.init.constant_(self.output_proj.weight, 0.0)
+        nn.init.constant_(self.output_proj.bias, 0.0)
+
+        # Override: init prior/posterior logstd bias for controlled initial std
+        bias_val = self._logstd_bias_value()
+        nn.init.constant_(self.prior_logstd.bias, bias_val)
+        nn.init.constant_(self.posterior_logstd.bias, bias_val)
 
     def reset_state(self):
         """Reset internal recurrent state (call at sequence boundaries)."""
@@ -249,26 +295,63 @@ class BEVRSSMTemporalFusion(BaseModule):
             self.h_state[mask] = 0.0
             self.z_state[mask] = 0.0
 
-    @staticmethod
-    def sample(mu, logstd):
+    def sample(self, mu, logstd):
+        """Sample from distribution with smooth minimum std constraint."""
+        # Smooth lower bound on logstd via softplus: guarantees std >= min_std
+        logstd = self.min_logstd + F.softplus(logstd - self.min_logstd)
+        # Upper bound for numerical stability
+        logstd = torch.clamp(logstd, max=3.0)
         std = torch.exp(logstd)
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    @staticmethod
-    def kl_loss(mu_q, logstd_q, mu_p, logstd_p):
+    def kl_loss(self, mu_q, logstd_q, mu_p, logstd_p):
+        """KL divergence with minimum variance, free-bits, and debug statistics.
+
+        Returns:
+            kl_mean: Averaged KL loss (after free-bits clamp).
+            stats: dict of detached scalar tensors for logging.
+        """
+        # Smooth lower bound on logstd
+        logstd_q = self.min_logstd + F.softplus(logstd_q - self.min_logstd)
+        logstd_p = self.min_logstd + F.softplus(logstd_p - self.min_logstd)
+        # Upper bound for numerical stability
+        logstd_q = torch.clamp(logstd_q, max=3.0)
+        logstd_p = torch.clamp(logstd_p, max=3.0)
+
         var_q = torch.exp(2.0 * logstd_q)
         var_p = torch.exp(2.0 * logstd_p)
+        std_q = torch.exp(logstd_q)
+        std_p = torch.exp(logstd_p)
 
-        kl = (
+        # Per-element KL (before free-bits clamp)
+        kl_raw = (
             logstd_p - logstd_q
             + (var_q + (mu_q - mu_p) ** 2) / (2.0 * var_p)
             - 0.5
         )
-        return kl.mean()
+
+        # Free-bits: clamp per-element KL to at least `free_nats`.
+        if self.free_nats > 0:
+            kl_clamped = torch.clamp(kl_raw, min=self.free_nats)
+        else:
+            kl_clamped = kl_raw
+
+        # Debug statistics (all detached — no graph retained)
+        stats = dict(
+            stat_kl_raw_mean=kl_raw.mean().detach(),
+            stat_kl_effective_mean=kl_clamped.mean().detach(),
+            stat_clamped_ratio=(kl_raw < self.free_nats).float().mean().detach() if self.free_nats > 0 else
+                torch.zeros((), device=kl_raw.device),
+            stat_mu_diff_sq=(mu_q - mu_p).square().mean().detach(),
+            stat_posterior_std=std_q.mean().detach(),
+            stat_prior_std=std_p.mean().detach(),
+        )
+
+        return kl_clamped.mean(), stats
 
     @auto_fp16(apply_to=['feat', 'velocity'])
-    def forward(self, feat, velocity=None):
+    def forward(self, feat, velocity=None, use_posterior=True, deterministic=True):
         """Process ONE frame through the RSSM.
 
         Uses internal h_{t-1}, z_{t-1} from the previous call.
@@ -277,6 +360,10 @@ class BEVRSSMTemporalFusion(BaseModule):
         Args:
             feat: Current BEV feature (B, C, H, W).
             velocity: Ego-motion (B, action_dim). Defaults to zeros.
+            use_posterior (bool): If True, use q(z|h,encoder(feat)).
+                If False, use p(z|h). Default: True (filtering mode).
+            deterministic (bool): If True, use the distribution mean (mu).
+                If False, sample with noise. Default: True.
 
         Returns:
             output: Fused BEV feature (B, out_channels, H, W).
@@ -284,6 +371,7 @@ class BEVRSSMTemporalFusion(BaseModule):
             kl: KL divergence loss (scalar).
             h_t: Deterministic state (B, out_channels, H, W).
             z_t: Stochastic state (B, latent_dim, H, W).
+            stats: dict of debug statistics (detached scalars).
         """
         B, C, H, W = feat.shape
 
@@ -337,17 +425,23 @@ class BEVRSSMTemporalFusion(BaseModule):
         logstd_q = self.posterior_logstd(torch.cat([h_t, e_t], dim=1))
 
         ################################################
-        # 5. Sample z_t (posterior during training, prior during inference)
+        # 5. Select z_t based on use_posterior / deterministic
         ################################################
-        if self.training:
-            z_t = self.sample(mu_q, logstd_q)
+        if use_posterior:
+            if deterministic:
+                z_t = mu_q
+            else:
+                z_t = self.sample(mu_q, logstd_q)
         else:
-            z_t = self.sample(mu_p, logstd_p)
+            if deterministic:
+                z_t = mu_p
+            else:
+                z_t = self.sample(mu_p, logstd_p)
 
         ################################################
-        # 6. KL divergence
+        # 6. KL divergence (with debug statistics)
         ################################################
-        kl = self.kl_loss(mu_q, logstd_q, mu_p, logstd_p)
+        kl, stats = self.kl_loss(mu_q, logstd_q, mu_p, logstd_p)
 
         ################################################
         # 7. Reconstruction: decoder(h_t, z_t) → feat
@@ -357,11 +451,10 @@ class BEVRSSMTemporalFusion(BaseModule):
         )
 
         ################################################
-        # 8. Output: output_layer(h_t, z_t) → fused feature
+        # 8. Output: z_t → out_channels → residual to feat
         ################################################
-        output = self.output_layer(
-            torch.cat([h_t, z_t], dim=1)
-        )
+        output = self.output_proj(z_t)
+        output = output + feat  # residual: preserves original BEV features
 
         ################################################
         # 9. Store state for next frame (detach — no grad across timesteps)
@@ -369,4 +462,4 @@ class BEVRSSMTemporalFusion(BaseModule):
         self.h_state = h_t.detach()
         self.z_state = z_t.detach()
 
-        return output, reconstruction, kl * self.kl_scale, h_t, z_t
+        return output, reconstruction, kl * self.kl_scale, h_t, z_t, stats

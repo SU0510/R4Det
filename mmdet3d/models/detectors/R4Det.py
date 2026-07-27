@@ -692,16 +692,19 @@ class R4Det(MVXFasterRCNN):
             bev_mask_logit_former = None
         rssm_kl = None
         rssm_recon_loss = None
+        rssm_stats = None
         if self.temporal_fusion is not None:
             if feat_or_dict == 0:
                 # Prev frame: run RSSM to update internal h/z state
                 # Caller wraps with torch.no_grad(), so no gradients flow
-                bev_feats, _, _, _, _ = self.temporal_fusion(bev_feats)
+                bev_feats, _, _, _, _, _ = self.temporal_fusion(
+                    bev_feats, use_posterior=True, deterministic=True)
             else:
                 # Curr frame: full RSSM forward with gradients + losses
                 bev_feats_cache = bev_feats
-                bev_feats, rssm_recon, rssm_kl, _, _ = \
-                    self.temporal_fusion(bev_feats)
+                bev_feats, rssm_recon, rssm_kl, _, _, rssm_stats = \
+                    self.temporal_fusion(
+                        bev_feats, use_posterior=True, deterministic=True)
                 rssm_recon_loss = F.mse_loss(rssm_recon, bev_feats_cache)
                 if is_valid_mask is not None:
                     is_valid_mask_dev = is_valid_mask.to(bev_feats.device)
@@ -757,7 +760,8 @@ class R4Det(MVXFasterRCNN):
                     depth_comple=depth_comple,
                     precise_depth=precise_depth,
                     rssm_kl=rssm_kl,
-                    rssm_recon_loss=rssm_recon_loss)
+                    rssm_recon_loss=rssm_recon_loss,
+                    rssm_stats=rssm_stats)
 
     def voxelpainting_depth_aware(self, context, pv_logits, depth_logits, points, lidar2img, temperature=1.0):
         B, _, H, W = pv_logits.shape
@@ -908,9 +912,9 @@ class R4Det(MVXFasterRCNN):
             if prev_gt_bboxes_3d is not None and prev_gt_labels_3d is not None:
                 prev_img_metas[i]['gt_bboxes_3d'] = prev_gt_bboxes_3d[i].to(gt_labels_3d[i].device)
                 prev_img_metas[i]['gt_labels_3d'] = prev_gt_labels_3d[i]
+        if self.temporal_fusion is not None:
+            self.temporal_fusion.reset_state()
         if is_valid_mask.any():
-            if self.temporal_fusion is not None:
-                self.temporal_fusion.reset_state()
             with torch.no_grad():
                 raw_prev_bev_feats = self.extract_feat(prev_points, prev_img, prev_img_metas,
                                                        is_valid_mask=is_valid_mask, feat_or_dict=0)
@@ -1098,8 +1102,10 @@ class R4Det(MVXFasterRCNN):
                 prev_img_metas[i]['gt_bboxes'] = HorizontalBoxes(prev_gt_bboxes[i], in_mode='xyxy')
             prev_img_metas[i]['gt_bboxes_3d'] = prev_gt_bboxes_3d[i].to(gt_labels_3d[i].device)
             prev_img_metas[i]['gt_labels_3d'] = prev_gt_labels_3d[i]
-        if self.temporal_fusion is not None and is_valid_mask.any():
+        # Always reset RSSM state at the start of each training step
+        if self.temporal_fusion is not None:
             self.temporal_fusion.reset_state()
+        if self.temporal_fusion is not None and is_valid_mask.any():
             with torch.no_grad():
                 raw_prev_bev_feats = self.extract_feat(prev_points, prev_img, prev_img_metas,
                                                        is_valid_mask=is_valid_mask, feat_or_dict=0)
@@ -1132,6 +1138,7 @@ class R4Det(MVXFasterRCNN):
         precise_depth = feature_dict['precise_depth']
         rssm_kl = feature_dict.get('rssm_kl')
         rssm_recon_loss = feature_dict.get('rssm_recon_loss')
+        rssm_stats = feature_dict.get('rssm_stats')
         # compute for all losses
         losses = dict()
 
@@ -1139,6 +1146,9 @@ class R4Det(MVXFasterRCNN):
         if self.temporal_fusion is not None and rssm_kl is not None:
             losses['loss_rssm_kl'] = rssm_kl
             losses['loss_rssm_recon'] = rssm_recon_loss
+            if rssm_stats is not None:
+                # stat_* keys: logged by logger but not summed into total loss
+                losses.update(rssm_stats)
 
         # img_feats = feature_dict.get('img_feats')
         instance_features = None
@@ -1662,8 +1672,8 @@ class R4Det(MVXFasterRCNN):
 
             pd_bbox_corners = pred_bboxes_3d.corners[:, [0, 2, 4, 6], :2].numpy()[:, (0, 1, 3, 2),
                               :] if pred_bboxes_3d is not None else None
-            gt_bbox_corners = gt_bboxes_3d.corners[:, [0, 2, 4, 6], :2].numpy()[:, (0, 1, 3, 2),
-                              :] if gt_bboxes_3d is not None else None
+            gt_bbox_corners = (gt_bboxes_3d.corners[:, [0, 2, 4, 6], :2].numpy()[:, (0, 1, 3, 2), :]
+                              if gt_bboxes_3d is not None and len(gt_bboxes_3d.tensor) > 0 else None)
 
             draw_bev_pts_bboxes(point, gt_bbox_corners, pd_bbox_corners, save_path=save_path, xlim=self.xlim,
                                 ylim=self.ylim)

@@ -1,5 +1,8 @@
 # initialization
-custom_imports = dict(imports=['mmdet3d'])
+custom_imports = dict(imports=[
+    'mmdet3d',
+    'mmdet3d.core.hook.kl_scale_scheduler',
+])
 find_unused_parameters = False
 # dataset settings
 dataset_type = 'TJ4DDataset'
@@ -204,11 +207,13 @@ model = dict(
         in_channels=_dim_,
         out_channels=_dim_,
         kernel_size=3,
-        deform_groups=1,
         latent_dim=_dim_,
         hidden_dim=64,
         action_dim=2,
-        kl_scale=1.0,
+        kl_scale=0.1,
+        free_nats=0.0,
+        min_std=0.1,
+        init_std=0.2,
         norm_cfg=dict(
             type='BN',
             requires_grad=True
@@ -309,14 +314,12 @@ train_pipeline = [
     dict(type='LoadImageFromFile', to_float32=True),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True),
     dict(type='ImageAug3D2', data_aug_conf=ida_aug_conf, is_train=True),
-    dict(type='DownsampleDepthMap', target_shape=(60, 80)),
     dict(type='GlobalRotScaleTransFlipAll', bda_aug_conf=bda_aug_conf, is_train=True),
     dict(type='PointsRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='PointShuffle'),
     dict(type='Normalize', **img_norm_cfg),
     dict(type='Pad', size_divisor=32),
-    dict(type='CreateDepthFromLiDAR', data_root=data_root, dataset='TJ4D'),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
     dict(type='CustomCollect3D2', keys=['points', 'img', 'gt_bboxes_3d', 'gt_labels_3d'],
          meta_keys=('filename', 'ori_shape', 'img_shape', 'lidar2img',
@@ -404,6 +407,19 @@ lr_config = dict(
     warmup_ratio=1.0 / 10,
     min_lr_ratio=1e-5)
 momentum_config = None
+
+# KL scale warm-up: kl_scale linearly increases from 0 to 0.1 over epochs 0-3.
+# Prior has zero KL gradient when kl_scale=0, letting posterior/detector stabilise
+# before the KL term forces prior to match posterior.
+custom_hooks = [
+    dict(
+        type='KLScaleSchedulerHook',
+        start_epoch=0,
+        end_epoch=3,
+        start_value=0.0,
+        end_value=0.1,
+    ),
+]
 
 # log checkpoint & evaluation
 evaluation = dict(interval=1, pipeline=eval_pipeline)

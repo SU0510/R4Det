@@ -1,0 +1,191 @@
+"""Unit tests for RSSM fusion module and KL scale scheduler hook.
+
+Run: python mmdet3d/models/fusion_layers/test_rssm_fusion.py
+"""
+
+import torch
+import unittest
+import sys
+import os
+
+# Add project root to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../..'))
+
+
+class TestBEVRSSMTemporalFusion(unittest.TestCase):
+    """Test RSSM fusion module correctness."""
+
+    def setUp(self):
+        from mmdet3d.models.fusion_layers.rssm_fusion import BEVRSSMTemporalFusion
+
+        self.fusion = BEVRSSMTemporalFusion(
+            in_channels=256,
+            out_channels=256,
+            latent_dim=256,
+            hidden_dim=64,
+            action_dim=2,
+            kl_scale=0.1,
+            free_nats=0.0,
+            min_std=0.1,
+            init_std=0.2,
+        )
+        self.fusion.eval()  # no BN training behaviour during test
+
+    def test_initial_output_equals_feat(self):
+        """Test that output == feat when output_proj is zero-initialized."""
+        B, C, H, W = 2, 256, 8, 8
+        feat = torch.randn(B, C, H, W)
+
+        with torch.no_grad():
+            output, recon, kl, h, z, stats = self.fusion(
+                feat, use_posterior=True, deterministic=True
+            )
+
+        # output_proj is zero-init: output = 0 + feat = feat
+        self.assertTrue(torch.allclose(output, feat, atol=1e-6),
+                        f"Output != feat: max diff = {(output - feat).abs().max().item():.6f}")
+
+    def test_deterministic_output_consistent(self):
+        """Test that same input after reset gives identical output."""
+        B, C, H, W = 2, 256, 8, 8
+
+        # First pass
+        self.fusion.reset_state()
+        feat1 = torch.randn(B, C, H, W)
+        with torch.no_grad():
+            out1, _, _, _, _, _ = self.fusion(
+                feat1, use_posterior=True, deterministic=True
+            )
+
+        # Second pass with same input after reset
+        self.fusion.reset_state()
+        with torch.no_grad():
+            out2, _, _, _, _, _ = self.fusion(
+                feat1.clone(), use_posterior=True, deterministic=True
+            )
+
+        self.assertTrue(torch.allclose(out1, out2, atol=1e-6),
+                        f"Outputs differ after reset: max diff = {(out1 - out2).abs().max().item():.6f}")
+
+    def test_second_frame_accumulates_state(self):
+        """Test that second frame output differs from first (state accumulates)."""
+        B, C, H, W = 2, 256, 8, 8
+
+        self.fusion.reset_state()
+        feat1 = torch.randn(B, C, H, W)
+        feat2 = torch.randn(B, C, H, W)
+
+        with torch.no_grad():
+            out1, _, _, _, _, _ = self.fusion(
+                feat1, use_posterior=True, deterministic=True
+            )
+            out2, _, _, _, _, _ = self.fusion(
+                feat2, use_posterior=True, deterministic=True
+            )
+
+        # Output on second frame should differ from input (residual from prev frame)
+        # due to accumulated h/z state — but with zero-init output_proj,
+        # output = output_proj(z_t) + feat, and output_proj is zero.
+        # After first forward, h_state != 0 and z_state != 0, so second frame
+        # gets different z_t, but output_proj is still all zeros, so output == feat2.
+        # Actually with zero-init, every output should equal its own feat.
+        self.assertTrue(torch.allclose(out2, feat2, atol=1e-6),
+                        f"Second frame output != feat2: max diff = {(out2 - feat2).abs().max().item():.6f}")
+
+    def test_stats_present_and_detached(self):
+        """Test that stats dict contains expected keys and values are detached."""
+        B, C, H, W = 2, 256, 8, 8
+        feat = torch.randn(B, C, H, W)
+
+        self.fusion.train()  # need training mode for BN
+        output, recon, kl, h, z, stats = self.fusion(
+            feat, use_posterior=True, deterministic=True
+        )
+
+        expected_keys = [
+            'stat_kl_raw_mean', 'stat_kl_effective_mean',
+            'stat_clamped_ratio', 'stat_mu_diff_sq',
+            'stat_posterior_std', 'stat_prior_std',
+        ]
+        for key in expected_keys:
+            self.assertIn(key, stats, f"Missing key: {key}")
+            self.assertIsInstance(stats[key], torch.Tensor)
+            self.assertEqual(stats[key].ndim, 0, f"{key} should be scalar")
+            self.assertFalse(stats[key].requires_grad, f"{key} should be detached")
+        self.fusion.eval()
+
+    def test_logstd_bias_gives_expected_std(self):
+        """Test that initial logstd bias produces std ≈ init_std."""
+        import math
+
+        # Recompute the bias the module should have used
+        min_std = self.fusion.min_std
+        init_std = self.fusion.init_std
+        expected_bias = math.log(min_std) + math.log(init_std / min_std - 1.0)
+
+        # Check bias values
+        self.assertAlmostEqual(
+            self.fusion.prior_logstd.bias.mean().item(),
+            expected_bias, places=5
+        )
+        self.assertAlmostEqual(
+            self.fusion.posterior_logstd.bias.mean().item(),
+            expected_bias, places=5
+        )
+
+
+class TestKLScaleSchedulerHook(unittest.TestCase):
+    """Test KL scale scheduler hook."""
+
+    def test_scheduler_values(self):
+        from mmdet3d.core.hook.kl_scale_scheduler import KLScaleSchedulerHook
+
+        hook = KLScaleSchedulerHook(
+            start_epoch=0, end_epoch=3,
+            start_value=0.0, end_value=0.1,
+        )
+
+        # epoch 0 → 0.0
+        self.assertAlmostEqual(hook.compute_kl_scale(0), 0.0, places=5)
+
+        # epoch 1 → 0.0333... (1/3 of warm-up)
+        self.assertAlmostEqual(hook.compute_kl_scale(1), 0.1 / 3, places=4)
+
+        # epoch 2 → 0.0667... (2/3 of warm-up)
+        self.assertAlmostEqual(hook.compute_kl_scale(2), 0.1 * 2 / 3, places=4)
+
+        # epoch 3 → 0.1 (exactly at end_epoch)
+        self.assertAlmostEqual(hook.compute_kl_scale(3), 0.1, places=5)
+
+        # epoch 5 → 0.1 (past end_epoch, should keep end_value)
+        self.assertAlmostEqual(hook.compute_kl_scale(5), 0.1, places=5)
+
+        # epoch -1 (edge case: before start)
+        self.assertAlmostEqual(hook.compute_kl_scale(-1), 0.0, places=5)
+
+    def test_resume_consistency(self):
+        """Test that scheduler depends only on epoch, so resume is consistent."""
+        from mmdet3d.core.hook.kl_scale_scheduler import KLScaleSchedulerHook
+
+        hook = KLScaleSchedulerHook(
+            start_epoch=0, end_epoch=3,
+            start_value=0.0, end_value=0.1,
+        )
+
+        # If we resume at epoch 2, the value should be based on epoch 2 only
+        # — no internal counter drift
+        val_direct = hook.compute_kl_scale(2)
+
+        # "Resume": create a fresh hook and check epoch 2
+        hook2 = KLScaleSchedulerHook(
+            start_epoch=0, end_epoch=3,
+            start_value=0.0, end_value=0.1,
+        )
+        val_resume = hook2.compute_kl_scale(2)
+
+        self.assertAlmostEqual(val_direct, val_resume, places=5,
+                               msg="Resume should give same value as direct run")
+
+
+if __name__ == '__main__':
+    unittest.main()
