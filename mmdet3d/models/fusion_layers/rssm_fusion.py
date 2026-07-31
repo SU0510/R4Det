@@ -300,8 +300,8 @@ class BEVRSSMTemporalFusion(BaseModule):
         """Sample from distribution with smooth minimum std constraint."""
         # Smooth lower bound on logstd via softplus: guarantees std >= min_std
         logstd = self.min_logstd + F.softplus(logstd - self.min_logstd)
-        # Upper bound for numerical stability
-        logstd = torch.clamp(logstd, max=3.0)
+        # Upper bound: std ≤ 1.0 to prevent variance explosion
+        logstd = torch.clamp(logstd, max=0.0)
         std = torch.exp(logstd)
         eps = torch.randn_like(std)
         return mu + eps * std

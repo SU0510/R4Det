@@ -210,8 +210,8 @@ model = dict(
         latent_dim=_dim_,
         hidden_dim=64,
         action_dim=2,
-        kl_scale=0.1,
-        free_nats=0.0,
+        kl_scale=1.0,
+        free_nats=1.0,
         min_std=0.1,
         init_std=0.2,
         norm_cfg=dict(
@@ -408,16 +408,16 @@ lr_config = dict(
     min_lr_ratio=1e-5)
 momentum_config = None
 
-# KL scale warm-up: kl_scale linearly increases from 0 to 0.1 over epochs 0-3.
+# KL scale warm-up: kl_scale linearly increases from 0 to 1.0 over epochs 0-5.
 # Prior has zero KL gradient when kl_scale=0, letting posterior/detector stabilise
 # before the KL term forces prior to match posterior.
 custom_hooks = [
     dict(
         type='KLScaleSchedulerHook',
         start_epoch=0,
-        end_epoch=3,
+        end_epoch=5,
         start_value=0.0,
-        end_value=0.1,
+        end_value=1.0,
     ),
 ]
 
