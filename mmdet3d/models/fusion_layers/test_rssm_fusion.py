@@ -187,5 +187,155 @@ class TestKLScaleSchedulerHook(unittest.TestCase):
                                msg="Resume should give same value as direct run")
 
 
+class TestMotionAlignedRSSMFusion(unittest.TestCase):
+    """Test MotionAlignedRSSMFusion correctness."""
+
+    def setUp(self):
+        from mmdet3d.models.fusion_layers.rssm_fusion import MotionAlignedRSSMFusion
+
+        self.fusion = MotionAlignedRSSMFusion(
+            in_channels=256,
+            out_channels=256,
+            latent_dim=256,
+            hidden_dim=64,
+            action_dim=2,
+            kl_scale=0.1,
+            free_nats=0.0,
+            min_std=0.1,
+            init_std=0.2,
+            align_kernel_size=3,
+            align_deform_groups=1,
+            align_z_state=True,
+        )
+        self.fusion.eval()
+
+    def test_initial_output_equals_feat(self):
+        """Zero-init alignment + zero-init output_proj: output == feat."""
+        B, C, H, W = 2, 256, 8, 8
+        feat = torch.randn(B, C, H, W)
+
+        with torch.no_grad():
+            output, recon, kl, h, z, stats = self.fusion(
+                feat, use_posterior=True, deterministic=True
+            )
+
+        self.assertTrue(torch.allclose(output, feat, atol=1e-6),
+                        f"Output != feat: max diff = {(output - feat).abs().max().item():.6f}")
+
+    def test_deterministic_output_consistent(self):
+        """Same input after reset → identical output."""
+        B, C, H, W = 2, 256, 8, 8
+
+        self.fusion.reset_state()
+        feat1 = torch.randn(B, C, H, W)
+        with torch.no_grad():
+            out1, _, _, _, _, _ = self.fusion(
+                feat1, use_posterior=True, deterministic=True
+            )
+
+        self.fusion.reset_state()
+        with torch.no_grad():
+            out2, _, _, _, _, _ = self.fusion(
+                feat1.clone(), use_posterior=True, deterministic=True
+            )
+
+        self.assertTrue(torch.allclose(out1, out2, atol=1e-6),
+                        f"Outputs differ after reset: max diff = {(out1 - out2).abs().max().item():.6f}")
+
+    def test_second_frame_accumulates_state(self):
+        """Second frame output == feat (zero-init output_proj dominates)."""
+        B, C, H, W = 2, 256, 8, 8
+
+        self.fusion.reset_state()
+        feat1 = torch.randn(B, C, H, W)
+        feat2 = torch.randn(B, C, H, W)
+
+        with torch.no_grad():
+            self.fusion(feat1, use_posterior=True, deterministic=True)
+            out2, _, _, _, _, _ = self.fusion(
+                feat2, use_posterior=True, deterministic=True
+            )
+
+        self.assertTrue(torch.allclose(out2, feat2, atol=1e-6),
+                        f"Second frame output != feat2: max diff = {(out2 - feat2).abs().max().item():.6f}")
+
+    def test_stats_present_and_detached(self):
+        """Stats dict contains expected keys and values are detached scalars."""
+        B, C, H, W = 2, 256, 8, 8
+        feat = torch.randn(B, C, H, W)
+
+        self.fusion.train()
+        output, recon, kl, h, z, stats = self.fusion(
+            feat, use_posterior=True, deterministic=True
+        )
+
+        expected_keys = [
+            'stat_kl_raw_mean', 'stat_kl_effective_mean',
+            'stat_clamped_ratio', 'stat_mu_diff_sq',
+            'stat_posterior_std', 'stat_prior_std',
+        ]
+        for key in expected_keys:
+            self.assertIn(key, stats, f"Missing key: {key}")
+            self.assertIsInstance(stats[key], torch.Tensor)
+            self.assertEqual(stats[key].ndim, 0)
+            self.assertFalse(stats[key].requires_grad)
+        self.fusion.eval()
+
+    def test_alignment_module_exists(self):
+        """Verify alignment submodules were constructed."""
+        self.assertTrue(hasattr(self.fusion, 'align_h_offset_mask'))
+        self.assertTrue(hasattr(self.fusion, 'align_h_deform_conv'))
+        self.assertTrue(hasattr(self.fusion, 'align_z_offset_mask'))
+        self.assertTrue(hasattr(self.fusion, 'align_z_deform_conv'))
+
+    def test_alignment_zero_init(self):
+        """Zero-init offset generator produces zero offsets and sigmoid(0) masks."""
+        B, C, H, W = 2, 256, 8, 8
+        feat = torch.randn(B, C, H, W)
+
+        self.fusion.reset_state()
+        # Populate state with a first forward pass (h_state starts as zeros)
+        with torch.no_grad():
+            self.fusion(feat, use_posterior=True, deterministic=True)
+
+        # Now h_state is populated, check zero-init offset generator behaviour
+        with torch.no_grad():
+            concat = torch.cat([feat, self.fusion.h_state], dim=1)
+            offset_and_mask = self.fusion.align_h_offset_mask(concat)
+            k2 = self.fusion.align_kernel_size ** 2
+            o1 = 2 * self.fusion.align_deform_groups * k2
+            offset = offset_and_mask[:, :o1, :, :]
+            mask_raw = offset_and_mask[:, o1:, :, :]
+            mask = mask_raw.sigmoid()
+
+        # Weights zero-init → offset should be all zeros
+        self.assertTrue(torch.allclose(offset, torch.zeros_like(offset), atol=1e-6),
+                        f"Offset not zero: max = {offset.abs().max().item():.6f}")
+        # Sigmoid(0) = 0.5
+        self.assertTrue(torch.allclose(mask, 0.5 * torch.ones_like(mask), atol=1e-6),
+                        f"Mask not 0.5: mean = {mask.mean().item():.6f}")
+
+    def test_align_z_state_false(self):
+        """With align_z_state=False, no z alignment modules."""
+        from mmdet3d.models.fusion_layers.rssm_fusion import MotionAlignedRSSMFusion
+
+        fusion_no_z = MotionAlignedRSSMFusion(
+            in_channels=256, out_channels=256,
+            latent_dim=256, hidden_dim=64, action_dim=2,
+            align_z_state=False,
+        )
+        fusion_no_z.eval()
+
+        self.assertFalse(hasattr(fusion_no_z, 'align_z_offset_mask'))
+        self.assertFalse(hasattr(fusion_no_z, 'align_z_deform_conv'))
+
+        B, C, H, W = 2, 256, 8, 8
+        feat = torch.randn(B, C, H, W)
+        with torch.no_grad():
+            output, _, _, _, _, _ = fusion_no_z(
+                feat, use_posterior=True, deterministic=True)
+        self.assertEqual(output.shape, (B, C, H, W))
+
+
 if __name__ == '__main__':
     unittest.main()

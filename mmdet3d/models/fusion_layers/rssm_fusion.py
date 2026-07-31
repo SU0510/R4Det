@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
+from mmcv.ops import ModulatedDeformConv2d
 from mmcv.runner import BaseModule, auto_fp16
 from mmcv.cnn import ConvModule, xavier_init
 
@@ -459,6 +460,223 @@ class BEVRSSMTemporalFusion(BaseModule):
         ################################################
         # 9. Store state for next frame (detach — no grad across timesteps)
         ################################################
+        self.h_state = h_t.detach()
+        self.z_state = z_t.detach()
+
+        return output, reconstruction, kl * self.kl_scale, h_t, z_t, stats
+
+
+@FUSION_LAYERS.register_module()
+class MotionAlignedRSSMFusion(BEVRSSMTemporalFusion):
+    """RSSM with motion-aware deformable alignment of historical states.
+
+    Before the ConvGRU transition, h_{t-1} and z_{t-1} are warped via
+    ModulatedDeformConv2d using offsets/masks predicted from
+    concat(feat_cur, h_{t-1}) and concat(feat_cur, z_{t-1}) respectively.
+
+    This compensates for object motion between frames — without alignment,
+    the GRU consumes spatially misaligned state at each pixel, injecting
+    noise into the reset/update gates.
+
+    Inherits all RSSM components (encoder, ConvGRU, prior, posterior,
+    decoder, output_proj, KL loss, state management) from
+    BEVRSSMTemporalFusion. Only the transition step is modified.
+
+    Args:
+        align_kernel_size (int): Kernel size for deformable alignment conv.
+        align_deform_groups (int): Deformable groups.
+        align_z_state (bool): Whether to also align z_state (default True).
+        (All other args inherited from BEVRSSMTemporalFusion.)
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size=3,
+        latent_dim=None,
+        hidden_dim=64,
+        action_dim=2,
+        kl_scale=1.0,
+        free_nats=0.0,
+        min_std=0.1,
+        init_std=0.2,
+        norm_cfg=dict(type='BN', requires_grad=True),
+        act_cfg=dict(type='ReLU', inplace=True),
+        align_kernel_size=3,
+        align_deform_groups=1,
+        align_z_state=True,
+        init_cfg=None
+    ):
+        # Set alignment attrs BEFORE super().__init__() because it calls
+        # init_weights() → _init_alignment_weights() which reads these.
+        self.align_kernel_size = align_kernel_size
+        self.align_deform_groups = align_deform_groups
+        self.align_z_state = align_z_state
+
+        # Parent sets up: encoder, transition, prior, posterior, decoder,
+        # output_proj, state attributes, and calls init_weights().
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            latent_dim=latent_dim,
+            hidden_dim=hidden_dim,
+            action_dim=action_dim,
+            kl_scale=kl_scale,
+            free_nats=free_nats,
+            min_std=min_std,
+            init_std=init_std,
+            norm_cfg=norm_cfg,
+            act_cfg=act_cfg,
+            init_cfg=init_cfg
+        )
+
+        k2 = align_kernel_size * align_kernel_size
+        align_offset_channels = 3 * align_deform_groups * k2
+
+        # Alignment for h_state: feat + h_state → offsets + mask → warp h_state
+        self.align_h_offset_mask = nn.Conv2d(
+            in_channels + out_channels,
+            align_offset_channels,
+            kernel_size=align_kernel_size,
+            padding=align_kernel_size // 2,
+        )
+        self.align_h_deform_conv = ModulatedDeformConv2d(
+            in_channels=out_channels,
+            out_channels=out_channels,
+            kernel_size=align_kernel_size,
+            padding=align_kernel_size // 2,
+            deform_groups=align_deform_groups,
+            bias=False,
+        )
+
+        # Alignment for z_state
+        if align_z_state:
+            self.align_z_offset_mask = nn.Conv2d(
+                in_channels + latent_dim,
+                align_offset_channels,
+                kernel_size=align_kernel_size,
+                padding=align_kernel_size // 2,
+            )
+            self.align_z_deform_conv = ModulatedDeformConv2d(
+                in_channels=latent_dim,
+                out_channels=latent_dim,
+                kernel_size=align_kernel_size,
+                padding=align_kernel_size // 2,
+                deform_groups=align_deform_groups,
+                bias=False,
+            )
+
+        # Re-init: parent init_weights() already ran, overlay alignment zero-init
+        self._init_alignment_weights()
+
+    def _init_alignment_weights(self):
+        """Zero-init offset/mask generators so alignment starts as identity."""
+        for prefix in ['align_h_', 'align_z_']:
+            if not self.align_z_state and prefix == 'align_z_':
+                continue
+            offset_mask = getattr(self, f'{prefix}offset_mask', None)
+            deform_conv = getattr(self, f'{prefix}deform_conv', None)
+            if offset_mask is not None:
+                nn.init.constant_(offset_mask.weight, 0)
+                nn.init.constant_(offset_mask.bias, 0)
+            if deform_conv is not None:
+                xavier_init(deform_conv, distribution='uniform')
+
+    def init_weights(self):
+        """Override: parent init + zero-init for alignment layers."""
+        super().init_weights()
+        self._init_alignment_weights()
+
+    def _deform_align(self, state, feat, offset_mask_conv, deform_conv):
+        """Align a state tensor to the current frame via deformable convolution.
+
+        Args:
+            state: (B, C, H, W) historical state to warp.
+            feat: (B, in_channels, H, W) current BEV feature (reference).
+            offset_mask_conv: Conv2d to predict offsets and mask.
+            deform_conv: ModulatedDeformConv2d to apply the warp.
+
+        Returns:
+            aligned: (B, C, H, W) warped state.
+        """
+        concat = torch.cat([feat, state], dim=1)
+        offset_and_mask = offset_mask_conv(concat)
+        k2 = self.align_kernel_size * self.align_kernel_size
+        o1 = 2 * self.align_deform_groups * k2
+        offset = offset_and_mask[:, :o1, :, :]
+        mask = offset_and_mask[:, o1:, :, :].sigmoid()
+        return deform_conv(state, offset, mask)
+
+    @auto_fp16(apply_to=['feat', 'velocity'])
+    def forward(self, feat, velocity=None, use_posterior=True, deterministic=True):
+        """Process ONE frame through the motion-aligned RSSM.
+
+        Same interface as BEVRSSMTemporalFusion.forward().
+        The only difference: h_{t-1} and z_{t-1} are deformably aligned
+        to the current feat before the ConvGRU transition.
+
+        Returns:
+            output, reconstruction, kl, h_t, z_t, stats
+        """
+        B, C, H, W = feat.shape
+
+        # ---- velocity --------------------------------------------------
+        if velocity is None:
+            velocity = torch.zeros(B, self.action_dim, device=feat.device)
+        velocity_map = velocity[:, :, None, None].expand(B, self.action_dim, H, W)
+
+        # ---- state init -------------------------------------------------
+        if self.h_state is None or self.h_state.shape[0] != B:
+            self.h_state = torch.zeros(
+                B, self.channels, H, W, device=feat.device, dtype=feat.dtype)
+            self.z_state = torch.zeros(
+                B, self.latent_dim, H, W, device=feat.device, dtype=feat.dtype)
+
+        # ---- motion-aware alignment of historical state ----------------
+        h_aligned = self._deform_align(
+            self.h_state, feat,
+            self.align_h_offset_mask, self.align_h_deform_conv)
+        if self.align_z_state:
+            z_aligned = self._deform_align(
+                self.z_state, feat,
+                self.align_z_offset_mask, self.align_z_deform_conv)
+        else:
+            z_aligned = self.z_state
+
+        # ---- 1. Deterministic transition (uses aligned states) ---------
+        x = torch.cat([z_aligned, velocity_map], dim=1)
+        h_t = self.transition(x, h_aligned)
+
+        # ---- 2. Prior ---------------------------------------------------
+        mu_p = self.prior_mu(h_t)
+        logstd_p = self.prior_logstd(h_t)
+
+        # ---- 3. Encode observation --------------------------------------
+        e_t = self.encoder(feat)
+
+        # ---- 4. Posterior -----------------------------------------------
+        mu_q = self.posterior_mu(torch.cat([h_t, e_t], dim=1))
+        logstd_q = self.posterior_logstd(torch.cat([h_t, e_t], dim=1))
+
+        # ---- 5. Select z_t ----------------------------------------------
+        if use_posterior:
+            z_t = mu_q if deterministic else self.sample(mu_q, logstd_q)
+        else:
+            z_t = mu_p if deterministic else self.sample(mu_p, logstd_p)
+
+        # ---- 6. KL divergence -------------------------------------------
+        kl, stats = self.kl_loss(mu_q, logstd_q, mu_p, logstd_p)
+
+        # ---- 7. Reconstruction ------------------------------------------
+        reconstruction = self.decoder(torch.cat([h_t, z_t], dim=1))
+
+        # ---- 8. Output --------------------------------------------------
+        output = self.output_proj(z_t)
+        output = output + feat
+
+        # ---- 9. Store state for next frame (detach) ---------------------
         self.h_state = h_t.detach()
         self.z_state = z_t.detach()
 
