@@ -29,7 +29,9 @@ def custom_draw_lidar_bbox3d_on_img(bboxes3d,
         thickness (int, optional): The thickness of bboxes. Default: 1.
     """
     img = raw_img.copy()
-    if bboxes3d is None: 
+    if bboxes3d is None:
+        return img
+    if len(bboxes3d.tensor) == 0:
         return img
     corners_3d = bboxes3d.corners
     num_bbox = corners_3d.shape[0]
