@@ -316,9 +316,9 @@ class BEVRSSMTemporalFusion(BaseModule):
         # Smooth lower bound on logstd
         logstd_q = self.min_logstd + F.softplus(logstd_q - self.min_logstd)
         logstd_p = self.min_logstd + F.softplus(logstd_p - self.min_logstd)
-        # Upper bound for numerical stability
-        logstd_q = torch.clamp(logstd_q, max=3.0)
-        logstd_p = torch.clamp(logstd_p, max=3.0)
+        # Upper bound: std ≤ 1.0 to prevent variance explosion
+        logstd_q = torch.clamp(logstd_q, max=0.0)
+        logstd_p = torch.clamp(logstd_p, max=0.0)
 
         var_q = torch.exp(2.0 * logstd_q)
         var_p = torch.exp(2.0 * logstd_p)
