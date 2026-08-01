@@ -3,6 +3,7 @@ import gc
 import io as sysio
 import numba
 import numpy as np
+from tqdm import tqdm
 
 
 @numba.jit(nopython=True)
@@ -502,6 +503,10 @@ def calculate_iou_partly(gt_annos, dt_annos, metric, num_parts=50):
     parted_overlaps = []
     example_idx = 0
 
+    metric_name = {0: 'bbox', 1: 'bev', 2: '3d'}[metric]
+    pbar = tqdm(total=len(split_parts), desc=f'IoU [{metric_name}]',
+                dynamic_ncols=True, unit='part')
+
     for num_part in split_parts:
         gt_annos_part = gt_annos[example_idx:example_idx + num_part]
         dt_annos_part = dt_annos[example_idx:example_idx + num_part]
@@ -543,6 +548,8 @@ def calculate_iou_partly(gt_annos, dt_annos, metric, num_parts=50):
             raise ValueError('unknown metric')
         parted_overlaps.append(overlap_part)
         example_idx += num_part
+        pbar.update(1)
+    pbar.close()
     overlaps = []
     example_idx = 0
     for j, num_part in enumerate(split_parts):
