@@ -1,18 +1,92 @@
-#####################
-# Based on https://github.com/hongzhenwang/RRPN-revise
-# Licensed under The MIT License
-#
-# Modified: replaced numba.cuda with numba CPU jit.
-# All division-by-zero paths are guarded.
-#####################
-import math
+"""Rotated rectangle IoU — GPU-accelerated via PyTorch + CUDA kernel.
 
-import numba
+Uses the pre-built iou3d CUDA extension (boxes_iou_bev_gpu /
+boxes_overlap_bev_gpu).  Former CPU-numba implementation is preserved
+below as ``rotate_iou_cpu_numba`` in case a fallback is ever needed.
+"""
+
 import numpy as np
+import torch
+
+from mmdet3d.ops.iou3d import boxes_iou_bev, boxes_overlap_bev
+
+
+def _center_to_corner_format(boxes_t):
+    """Convert [cx, cy, w, l, angle] → [x1, y1, x2, y2, angle].
+
+    The CUDA kernel expects axis-aligned rectangle + rotation-around-centre.
+    """
+    cx, cy = boxes_t[:, 0], boxes_t[:, 1]
+    w, l = boxes_t[:, 2], boxes_t[:, 3]
+    angle = boxes_t[:, 4]
+    hw, hl = w / 2.0, l / 2.0
+    return torch.stack(
+        [cx - hw, cy - hl, cx + hw, cy + hl, angle], dim=-1)
+
+
+def rotate_iou_gpu_eval(boxes, query_boxes, criterion=-1, device_id=0):
+    """Rotated box IoU on GPU.
+
+    Args:
+        boxes (np.ndarray): shape (N, 5), [cx, cy, w, l, angle].
+        query_boxes (np.ndarray): shape (K, 5).
+        criterion (int): -1=IoU, 0=inter/area1, 1=inter/area2, 2=inter_area.
+        device_id (int): CUDA device.
+
+    Returns:
+        np.ndarray: shape (N, K), dtype float32.
+    """
+    boxes_np = np.asarray(boxes, dtype=np.float32)
+    qboxes_np = np.asarray(query_boxes, dtype=np.float32)
+
+    if boxes_np.shape[0] == 0 or qboxes_np.shape[0] == 0:
+        return np.zeros((boxes_np.shape[0], qboxes_np.shape[0]),
+                        dtype=np.float32)
+
+    boxes_t = torch.from_numpy(boxes_np).cuda(device_id)
+    qboxes_t = torch.from_numpy(qboxes_np).cuda(device_id)
+
+    # Convert centre-format → corner-format expected by CUDA kernel
+    boxes_corner = _center_to_corner_format(boxes_t)
+    qboxes_corner = _center_to_corner_format(qboxes_t)
+
+    area_a = boxes_t[:, 2] * boxes_t[:, 3]   # (N,)  w * l
+    area_b = qboxes_t[:, 2] * qboxes_t[:, 3]  # (K,)
+
+    if criterion == 2:
+        # Intersection area (used by d3_box_overlap for height-gating)
+        result = boxes_overlap_bev(boxes_corner, qboxes_corner)
+    elif criterion == -1:
+        # Standard IoU
+        result = boxes_iou_bev(boxes_corner, qboxes_corner)
+    elif criterion == 0:
+        # inter / area1
+        iou = boxes_iou_bev(boxes_corner, qboxes_corner)
+        # IoU = inter / (A+B-inter) → inter = IoU*(A+B) / (1+IoU)
+        area_sum = area_a[:, None] + area_b[None, :]
+        inter = iou * area_sum / (1.0 + iou + 1e-12)
+        result = inter / area_a[:, None].clamp(min=1e-12)
+    elif criterion == 1:
+        # inter / area2
+        iou = boxes_iou_bev(boxes_corner, qboxes_corner)
+        area_sum = area_a[:, None] + area_b[None, :]
+        inter = iou * area_sum / (1.0 + iou + 1e-12)
+        result = inter / area_b[None, :].clamp(min=1e-12)
+    else:
+        raise ValueError(f'unknown criterion: {criterion}')
+
+    return result.cpu().numpy()
+
+
+# ---------------------------------------------------------------------------
+# CPU numba fallback (kept for environments without GPU / reference)
+# ---------------------------------------------------------------------------
+import math
+import numba
 
 
 @numba.jit(nopython=True)
-def div_up(m, n):
+def _div_up(m, n):
     return m // n + (m % n > 0)
 
 
@@ -71,31 +145,20 @@ def _sort_vertex_in_convex_polygon(int_pts, num_of_inter):
 
 @numba.jit(nopython=True)
 def _line_segment_intersection(pts1, pts2, i, j, temp_pts):
-    """Returns True and fills temp_pts if edge i of pts1 intersects edge j of pts2."""
-    a_x = pts1[2 * i]
-    a_y = pts1[2 * i + 1]
-    b_x = pts1[2 * ((i + 1) % 4)]
-    b_y = pts1[2 * ((i + 1) % 4) + 1]
-    c_x = pts2[2 * j]
-    c_y = pts2[2 * j + 1]
-    d_x = pts2[2 * ((j + 1) % 4)]
-    d_y = pts2[2 * ((j + 1) % 4) + 1]
-
-    ba_x = b_x - a_x
-    ba_y = b_y - a_y
-    da_x = d_x - a_x
-    ca_x = c_x - a_x
-    da_y = d_y - a_y
-    ca_y = c_y - a_y
-
+    a_x = pts1[2 * i]; a_y = pts1[2 * i + 1]
+    b_x = pts1[2 * ((i + 1) % 4)]; b_y = pts1[2 * ((i + 1) % 4) + 1]
+    c_x = pts2[2 * j]; c_y = pts2[2 * j + 1]
+    d_x = pts2[2 * ((j + 1) % 4)]; d_y = pts2[2 * ((j + 1) % 4) + 1]
+    ba_x = b_x - a_x; ba_y = b_y - a_y
+    da_x = d_x - a_x; ca_x = c_x - a_x
+    da_y = d_y - a_y; ca_y = c_y - a_y
     acd = da_y * ca_x > ca_y * da_x
     bcd = (d_y - b_y) * (c_x - b_x) > (c_y - b_y) * (d_x - b_x)
     if acd != bcd:
         abc = ca_y * ba_x > ba_y * ca_x
         abd = da_y * ba_x > ba_y * da_x
         if abc != abd:
-            dc_x = d_x - c_x
-            dc_y = d_y - c_y
+            dc_x = d_x - c_x; dc_y = d_y - c_y
             abba = a_x * b_y - b_x * a_y
             cddc = c_x * d_y - d_x * c_y
             dh = ba_y * dc_x - ba_x * dc_y
@@ -110,12 +173,9 @@ def _line_segment_intersection(pts1, pts2, i, j, temp_pts):
 
 @numba.jit(nopython=True)
 def _point_in_quadrilateral(pt_x, pt_y, corners):
-    ab0 = corners[2] - corners[0]
-    ab1 = corners[3] - corners[1]
-    ad0 = corners[6] - corners[0]
-    ad1 = corners[7] - corners[1]
-    ap0 = pt_x - corners[0]
-    ap1 = pt_y - corners[1]
+    ab0 = corners[2] - corners[0]; ab1 = corners[3] - corners[1]
+    ad0 = corners[6] - corners[0]; ad1 = corners[7] - corners[1]
+    ap0 = pt_x - corners[0]; ap1 = pt_y - corners[1]
     abab = ab0 * ab0 + ab1 * ab1
     abap = ab0 * ap0 + ab1 * ap1
     adad = ad0 * ad0 + ad1 * ad1
@@ -148,15 +208,12 @@ def _quadrilateral_intersection(pts1, pts2, int_pts):
 @numba.jit(nopython=True)
 def _rbbox_to_corners(rbbox):
     angle = rbbox[4]
-    a_cos = math.cos(angle)
-    a_sin = math.sin(angle)
-    center_x = rbbox[0]
-    center_y = rbbox[1]
-    x_d = rbbox[2]
-    y_d = rbbox[3]
+    a_cos = math.cos(angle); a_sin = math.sin(angle)
+    center_x = rbbox[0]; center_y = rbbox[1]
+    x_d = rbbox[2]; y_d = rbbox[3]
     corners = np.zeros(8, dtype=np.float32)
-    c_x0, c_x1, c_x2, c_x3 = -x_d / 2.0, -x_d / 2.0, x_d / 2.0, x_d / 2.0
-    c_y0, c_y1, c_y2, c_y3 = -y_d / 2.0, y_d / 2.0, y_d / 2.0, -y_d / 2.0
+    c_x0 = -x_d / 2.0; c_x1 = -x_d / 2.0; c_x2 = x_d / 2.0; c_x3 = x_d / 2.0
+    c_y0 = -y_d / 2.0; c_y1 = y_d / 2.0; c_y2 = y_d / 2.0; c_y3 = -y_d / 2.0
     corners[0] = a_cos * c_x0 + a_sin * c_y0 + center_x
     corners[1] = -a_sin * c_x0 + a_cos * c_y0 + center_y
     corners[2] = a_cos * c_x1 + a_sin * c_y1 + center_x
@@ -178,13 +235,16 @@ def _inter(rbbox1, rbbox2):
     return _polygon_area(intersection_corners, num_inter)
 
 
-def rotate_iou_gpu_eval(boxes, query_boxes, criterion=-1, device_id=0):
-    """Rotated box IoU — CPU numba implementation.
+def rotate_iou_cpu_numba(boxes, query_boxes, criterion=-1):
+    """CPU-only numba fallback for rotated IoU.
 
     Args:
-        boxes (np.ndarray): shape (N, 5), format [cx, cy, w, l, angle].
-        query_boxes (np.ndarray): shape (K, 5).
-        criterion (int): -1=Iou, 0=inter/area1, 1=inter/area2, else=area_inter.
+        boxes (np.ndarray): (N, 5), [cx, cy, w, l, angle].
+        query_boxes (np.ndarray): (K, 5).
+        criterion (int): see ``rotate_iou_gpu_eval``.
+
+    Returns:
+        np.ndarray: (N, K), float32.
     """
     boxes = boxes.astype(np.float32)
     query_boxes = query_boxes.astype(np.float32)

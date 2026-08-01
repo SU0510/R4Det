@@ -7,8 +7,10 @@ def boxes_iou_bev(boxes_a, boxes_b):
     """Calculate boxes IoU in the bird view.
 
     Args:
-        boxes_a (torch.Tensor): Input boxes a with shape (M, 5).
-        boxes_b (torch.Tensor): Input boxes b with shape (N, 5).
+        boxes_a (torch.Tensor): Input boxes a with shape (M, 5)
+            [x1, y1, x2, y2, angle].
+        boxes_b (torch.Tensor): Input boxes b with shape (N, 5)
+            [x1, y1, x2, y2, angle].
 
     Returns:
         ans_iou (torch.Tensor): IoU result with shape (M, N).
@@ -20,6 +22,27 @@ def boxes_iou_bev(boxes_a, boxes_b):
                                  ans_iou)
 
     return ans_iou
+
+
+def boxes_overlap_bev(boxes_a, boxes_b):
+    """Calculate intersection area in bird view.
+
+    Args:
+        boxes_a (torch.Tensor): Input boxes a with shape (M, 5)
+            [x1, y1, x2, y2, angle].
+        boxes_b (torch.Tensor): Input boxes b with shape (N, 5)
+            [x1, y1, x2, y2, angle].
+
+    Returns:
+        ans_overlap (torch.Tensor): Intersection area with shape (M, N).
+    """
+    ans_overlap = boxes_a.new_zeros(
+        torch.Size((boxes_a.shape[0], boxes_b.shape[0])))
+
+    iou3d_cuda.boxes_overlap_bev_gpu(
+        boxes_a.contiguous(), boxes_b.contiguous(), ans_overlap)
+
+    return ans_overlap
 
 
 def nms_gpu(boxes, scores, thresh, pre_maxsize=None, post_max_size=None):
