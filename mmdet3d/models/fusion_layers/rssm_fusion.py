@@ -153,10 +153,16 @@ class BEVRSSMTemporalFusion(BaseModule):
             )
         )
 
+        # Build-time switch: action_dim <= 0 disables the velocity branch
+        # entirely (no extra channels, no zero-input in the graph). Set
+        # action_dim>0 AND pass velocity in forward to re-enable. The action
+        # code paths below are preserved for that future use.
+        self.use_action = action_dim > 0
+
         ################################################
-        # ConvGRU: h_{t-1} + z_{t-1} + action → h_t
+        # ConvGRU: h_{t-1} + z_{t-1} [+ action] → h_t
         ################################################
-        gru_input_dim = latent_dim + action_dim  # z_{t-1} + action
+        gru_input_dim = latent_dim + (action_dim if self.use_action else 0)
         self.transition = ConvGRUCell(
             input_dim=gru_input_dim,
             hidden_dim=out_channels,
@@ -221,7 +227,8 @@ class BEVRSSMTemporalFusion(BaseModule):
         # Output: z_t → out_channels
         # z_t already fuses temporal context (h_t) + current observation (e_t)
         # via the posterior q(z | h_t, e_t), so we project z_t directly.
-        # Zero-init ensures output = feat at the start of training.
+        # Xavier-init (see init_weights); residual `+ feat` in forward keeps
+        # output ≈ feat at the start while letting z_t contribute from step 1.
         ################################################
         self.output_proj = nn.Conv2d(
             latent_dim,
@@ -253,7 +260,14 @@ class BEVRSSMTemporalFusion(BaseModule):
         return self.min_logstd + math.log(self.init_std / self.min_std - 1.0)
 
     def init_weights(self):
-        """Initialize weights with Xavier, then override output_proj and logstd bias."""
+        """Initialize weights with Xavier, then override logstd bias.
+
+        output_proj is Xavier-initialized (Group 1 below) — NOT zero-init —
+        so z_t contributes to the output from step 1. The residual `+ feat`
+        in forward keeps output ≈ feat when z_t is small, but the projection
+        is no longer frozen at zero, so the RSSM branch starts learning
+        immediately instead of being gated off at init.
+        """
         super().init_weights()
 
         # Group 1: Xavier init for mu/logstd/output layers
@@ -271,10 +285,6 @@ class BEVRSSMTemporalFusion(BaseModule):
                 xavier_init(m, distribution='uniform')
             if hasattr(m, 'bias') and m.bias is not None:
                 nn.init.uniform_(m.bias, -0.1, 0.1)
-
-        # Override: zero-init output_proj so output = feat at the start
-        nn.init.constant_(self.output_proj.weight, 0.0)
-        nn.init.constant_(self.output_proj.bias, 0.0)
 
         # Override: init prior/posterior logstd bias for controlled initial std
         bias_val = self._logstd_bias_value()
@@ -377,16 +387,19 @@ class BEVRSSMTemporalFusion(BaseModule):
         B, C, H, W = feat.shape
 
         ################################################
-        # Velocity / action
+        # Velocity / action (skipped when use_action is False — keeps the
+        # branch out of the graph without deleting the code).
         ################################################
-        if velocity is None:
-            velocity = torch.zeros(
-                B, self.action_dim, device=feat.device
+        if self.use_action:
+            if velocity is None:
+                velocity = torch.zeros(
+                    B, self.action_dim, device=feat.device
+                )
+            velocity_map = velocity[:, :, None, None].expand(
+                B, self.action_dim, H, W
             )
-
-        velocity_map = velocity[:, :, None, None].expand(
-            B, self.action_dim, H, W
-        )
+        else:
+            velocity_map = None
 
         ################################################
         # Initialize state if first call
@@ -403,9 +416,12 @@ class BEVRSSMTemporalFusion(BaseModule):
             )
 
         ################################################
-        # 1. Deterministic transition: h_t = ConvGRU(h_{t-1}, z_{t-1}, action)
+        # 1. Deterministic transition: h_t = ConvGRU(h_{t-1}, z_{t-1} [, action])
         ################################################
-        x = torch.cat([self.z_state, velocity_map], dim=1)
+        if self.use_action:
+            x = torch.cat([self.z_state, velocity_map], dim=1)
+        else:
+            x = self.z_state
         h_t = self.transition(x, self.h_state)
 
         ################################################
@@ -622,10 +638,13 @@ class MotionAlignedRSSMFusion(BEVRSSMTemporalFusion):
         """
         B, C, H, W = feat.shape
 
-        # ---- velocity --------------------------------------------------
-        if velocity is None:
-            velocity = torch.zeros(B, self.action_dim, device=feat.device)
-        velocity_map = velocity[:, :, None, None].expand(B, self.action_dim, H, W)
+        # ---- velocity (skipped when use_action is False) ---------------
+        if self.use_action:
+            if velocity is None:
+                velocity = torch.zeros(B, self.action_dim, device=feat.device)
+            velocity_map = velocity[:, :, None, None].expand(B, self.action_dim, H, W)
+        else:
+            velocity_map = None
 
         # ---- state init -------------------------------------------------
         if self.h_state is None or self.h_state.shape[0] != B:
@@ -646,7 +665,10 @@ class MotionAlignedRSSMFusion(BEVRSSMTemporalFusion):
             z_aligned = self.z_state
 
         # ---- 1. Deterministic transition (uses aligned states) ---------
-        x = torch.cat([z_aligned, velocity_map], dim=1)
+        if self.use_action:
+            x = torch.cat([z_aligned, velocity_map], dim=1)
+        else:
+            x = z_aligned
         h_t = self.transition(x, h_aligned)
 
         # ---- 2. Prior ---------------------------------------------------
