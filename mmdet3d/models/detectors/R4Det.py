@@ -181,6 +181,7 @@ class R4Det(MVXFasterRCNN):
                  test_cfg=None,
                  instance_feature_fusion_layer=None,
                  temporal_fusion=None,
+                 seq_len=2,
                  **kwargs):
         super(R4Det, self).__init__(train_cfg=train_cfg, test_cfg=test_cfg, **kwargs)
         HEADS.module_dict['StandardRoIHead'] = StandardRoIHead
@@ -283,6 +284,10 @@ class R4Det(MVXFasterRCNN):
         self.temporal_fusion = None
         if temporal_fusion:
             self.temporal_fusion = builder.build_fusion_layer(temporal_fusion)
+        # Temporal sequence length (current frame + seq_len-1 history frames).
+        # seq_len=2 reproduces the original prev/curr behaviour.
+        assert seq_len >= 2, f'seq_len must be >= 2, got {seq_len}'
+        self.seq_len = seq_len
         # init weights and freeze if needed
         self.init_flexible_modules()
         self.init_weights()
@@ -888,50 +893,47 @@ class R4Det(MVXFasterRCNN):
         """Test function without augmentaiton."""
         outs_pts = None
         if len(img_metas) != 1: img_metas = [img_metas]
-        prev_points = points[0]
-        points = points[1]
-        prev_img = img[0, ...]
-        img = img[1, ...]
-        prev_img_metas = [meta[0] for meta in img_metas]
-        img_metas = [meta[1] for meta in img_metas]
-        prev_gt_bboxes_3d = [gt[0] for gt in gt_bboxes_3d] if gt_bboxes_3d is not None else None
-        gt_bboxes_3d = [gt[1] for gt in gt_bboxes_3d] if gt_bboxes_3d is not None else None
-        prev_gt_labels_3d = [gt[0] for gt in gt_labels_3d] if gt_labels_3d is not None else None
-        gt_labels_3d = [gt[1] for gt in gt_labels_3d] if gt_labels_3d is not None else None
-        prev_gt_labels = [gt[0] for gt in gt_labels] if gt_labels is not None else None
-        prev_gt_bboxes = [gt[0] for gt in gt_bboxes] if gt_bboxes is not None else None
-        gt_labels = [gt[1] for gt in gt_labels] if gt_labels is not None else None
-        gt_bboxes = [gt[1] for gt in gt_bboxes] if gt_bboxes is not None else None
-        #gt_masks = [gt[1] for gt in gt_masks] if gt_masks is not None else None
-        is_valid_mask = torch.tensor([meta['is_prev_frame_valid'] for meta in prev_img_metas], device=img.device)
-        for i in range(len(prev_img_metas)):
-            if prev_gt_labels is not None:
-                prev_img_metas[i]['gt_labels'] = prev_gt_labels[i]
-            if prev_gt_bboxes is not None:
-                prev_img_metas[i]['gt_bboxes'] = HorizontalBoxes(prev_gt_bboxes[i], in_mode='xyxy')
-            if prev_gt_bboxes_3d is not None and prev_gt_labels_3d is not None:
-                prev_img_metas[i]['gt_bboxes_3d'] = prev_gt_bboxes_3d[i].to(gt_labels_3d[i].device)
-                prev_img_metas[i]['gt_labels_3d'] = prev_gt_labels_3d[i]
+        # Test runs with batch=1: points is a length-seq_len list (one entry
+        # per frame); img shape [seq_len, C, H, W]; img_metas[0] is a
+        # length-seq_len list of per-frame metas.
+        N = self.seq_len
+        frame_points = [points[t] for t in range(N)]
+        frame_img = [img[t, ...] for t in range(N)]
+        frame_img_metas = [[meta[t] for meta in img_metas] for t in range(N)]
+        frame_valid = [torch.tensor([meta[t]['is_prev_frame_valid'] for meta in img_metas],
+                                    device=img.device) for t in range(N)]
+
+        # Current-frame GT (frame N-1)
+        gt_bboxes_3d = [gt[N - 1] for gt in gt_bboxes_3d] if gt_bboxes_3d is not None else None
+        gt_labels_3d = [gt[N - 1] for gt in gt_labels_3d] if gt_labels_3d is not None else None
+        gt_labels = [gt[N - 1] for gt in gt_labels] if gt_labels is not None else None
+        gt_bboxes = [gt[N - 1] for gt in gt_bboxes] if gt_bboxes is not None else None
+
         if self.temporal_fusion is not None:
             self.temporal_fusion.reset_state()
-        if is_valid_mask.any():
-            with torch.no_grad():
-                raw_prev_bev_feats = self.extract_feat(prev_points, prev_img, prev_img_metas,
-                                                       is_valid_mask=is_valid_mask, feat_or_dict=0)
-                prev_bev_feats = raw_prev_bev_feats * is_valid_mask[:, None, None, None]
-            if self.temporal_fusion is not None and (~is_valid_mask).any():
-                self.temporal_fusion.reset_for_samples(~is_valid_mask)
-        if gt_bboxes_3d is not None:
-            for i in range(len(img_metas)):
-                if gt_labels is not None:
-                    img_metas[i]['gt_labels'] = gt_labels[i]
-                if gt_bboxes is not None:
-                    img_metas[i]['gt_bboxes'] = HorizontalBoxes(gt_bboxes[i], in_mode='xyxy')
-                img_metas[i]['gt_bboxes_3d'] = gt_bboxes_3d[i].to(gt_labels_3d[i].device)
-                img_metas[i]['gt_labels_3d'] = gt_labels_3d[i]
+        if self.temporal_fusion is not None:
+            for t in range(N - 1):
+                valid_t = frame_valid[t]
+                if valid_t.any():
+                    with torch.no_grad():
+                        self.extract_feat(frame_points[t], frame_img[t], frame_img_metas[t],
+                                          is_valid_mask=valid_t, feat_or_dict=0)
+                if (~valid_t).any():
+                    self.temporal_fusion.reset_for_samples(~valid_t)
 
-        feature_dict = self.extract_feat(points, img=img, img_metas=img_metas,
-                                           is_valid_mask=is_valid_mask, feat_or_dict=1)
+        if gt_bboxes_3d is not None:
+            for i in range(len(frame_img_metas[N - 1])):
+                if gt_labels is not None:
+                    frame_img_metas[N - 1][i]['gt_labels'] = gt_labels[i]
+                if gt_bboxes is not None:
+                    frame_img_metas[N - 1][i]['gt_bboxes'] = HorizontalBoxes(gt_bboxes[i], in_mode='xyxy')
+                frame_img_metas[N - 1][i]['gt_bboxes_3d'] = gt_bboxes_3d[i].to(gt_labels_3d[i].device)
+                frame_img_metas[N - 1][i]['gt_labels_3d'] = gt_labels_3d[i]
+
+        last_hist_valid = frame_valid[N - 2] if N >= 2 else torch.ones(
+            len(frame_img_metas[N - 1]), dtype=torch.bool, device=frame_img[N - 1].device)
+        feature_dict = self.extract_feat(frame_points[N - 1], img=frame_img[N - 1], img_metas=frame_img_metas[N - 1],
+                                           is_valid_mask=last_hist_valid, feat_or_dict=1)
         img_feats = feature_dict['img_feats']
         pts_feats = feature_dict['pts_feats']
         precise_depth = feature_dict.get('precise_depth')
@@ -1064,66 +1066,75 @@ class R4Det(MVXFasterRCNN):
                       bev_semantic_mask=None,
                       my_gt_depth=None,
                       **kwargs):
-        prev_points = [p[0] for p in points]
-        points = [p[1] for p in points]
-        prev_img = img[:, 0, ...]
-        img = img[:, 1, ...]
-        prev_img_metas = [meta[0] for meta in img_metas]
-        img_metas = [meta[1] for meta in img_metas]
-        prev_gt_bboxes_3d = [gt[0] for gt in gt_bboxes_3d]
-        gt_bboxes_3d = [gt[1] for gt in gt_bboxes_3d]
-        prev_gt_labels_3d = [gt[0] for gt in gt_labels_3d]
-        gt_labels_3d = [gt[1] for gt in gt_labels_3d]
-        prev_gt_labels = [gt[0] for gt in gt_labels] if gt_labels is not None else None
-        prev_gt_bboxes = [gt[0] for gt in gt_bboxes] if gt_bboxes is not None else None
-        prev_gt_bboxes_ignore = [gt[0] for gt in gt_bboxes_ignore] if gt_bboxes_ignore is not None else None
-        gt_labels = [gt[1] for gt in gt_labels] if gt_labels is not None else None
-        gt_bboxes = [gt[1] for gt in gt_bboxes] if gt_bboxes is not None else None
-        gt_masks = [gt[1] for gt in gt_masks] if gt_masks is not None else None
-        gt_bboxes_ignore = [gt[1] for gt in gt_bboxes_ignore] if gt_bboxes_ignore is not None else None
-        prev_my_gt_depth = my_gt_depth[0] if my_gt_depth is not None else None
-        my_gt_depth = my_gt_depth[1] if my_gt_depth is not None else None
+        # img shape: [B, seq_len, C, H, W]; per-sample points/img_metas/gt
+        # are lists of length seq_len (old→new). The last frame is current.
+        N = self.seq_len
+        # Per-frame slices (old→new). extract_feat (even feat_or_dict=0) reads
+        # gt_bboxes_3d/gt_labels_3d from img_metas in preprocessing_information,
+        # so EVERY frame's img_metas must carry its GT.
+        frame_points = [[p[t] for p in points] for t in range(N)]
+        frame_img = [img[:, t, ...] for t in range(N)]
+        frame_img_metas = [[meta[t] for meta in img_metas] for t in range(N)]
+        # per-frame validity, current frame always valid
+        frame_valid = [torch.tensor([meta[t]['is_prev_frame_valid'] for meta in img_metas],
+                                    device=img.device) for t in range(N)]
+        # per-frame GT (old→new), each a per-sample list
+        frame_gt3d = [[gt[t] for gt in gt_bboxes_3d] for t in range(N)]
+        frame_gtl3d = [[gt[t] for gt in gt_labels_3d] for t in range(N)]
+        frame_gtlabels = [[gt[t] for gt in gt_labels] for t in range(N)] if gt_labels is not None else None
+        frame_gtbboxes = [[gt[t] for gt in gt_bboxes] for t in range(N)] if gt_bboxes is not None else None
+
+        # Populate every frame's img_metas with its GT (preprocessing_information
+        # requires gt_bboxes_3d/gt_labels_3d on all frames in training mode).
+        for t in range(N):
+            for i in range(len(frame_img_metas[t])):
+                if frame_gtlabels is not None:
+                    frame_img_metas[t][i]['gt_labels'] = frame_gtlabels[t][i]
+                if frame_gtbboxes is not None:
+                    frame_img_metas[t][i]['gt_bboxes'] = HorizontalBoxes(frame_gtbboxes[t][i], in_mode='xyxy')
+                frame_img_metas[t][i]['gt_bboxes_3d'] = frame_gt3d[t][i].to(frame_gtl3d[t][i].device)
+                frame_img_metas[t][i]['gt_labels_3d'] = frame_gtl3d[t][i]
+
+        # Current-frame GT for loss (frame N-1)
+        gt_bboxes_3d = frame_gt3d[N - 1]
+        gt_labels_3d = frame_gtl3d[N - 1]
+        gt_labels = frame_gtlabels[N - 1] if frame_gtlabels is not None else None
+        gt_bboxes = frame_gtbboxes[N - 1] if frame_gtbboxes is not None else None
+        gt_masks = [gt[N - 1] for gt in gt_masks] if gt_masks is not None else None
+        gt_bboxes_ignore = [gt[N - 1] for gt in gt_bboxes_ignore] if gt_bboxes_ignore is not None else None
+        my_gt_depth = my_gt_depth[N - 1] if my_gt_depth is not None else None
         if bev_semantic_mask is not None and isinstance(bev_semantic_mask, list):
-            prev_bev_semantic_mask = bev_semantic_mask[0]
-            bev_semantic_mask = bev_semantic_mask[1]
-
+            bev_semantic_mask = bev_semantic_mask[N - 1]
         if img_depth is not None and isinstance(img_depth, list):
-            prev_img_depth = img_depth[0]
-            img_depth = img_depth[1]
-
+            img_depth = img_depth[N - 1]
         if proposals is not None and isinstance(proposals, list):
-            prev_proposals = proposals[0]
-            proposals = proposals[1]
-        is_valid_mask = torch.tensor([meta['is_prev_frame_valid'] for meta in prev_img_metas], device=img.device)
-        for i in range(len(prev_img_metas)):
-            if prev_gt_labels is not None:
-                prev_img_metas[i]['gt_labels'] = prev_gt_labels[i]
-            if prev_gt_bboxes is not None:
-                prev_img_metas[i]['gt_bboxes'] = HorizontalBoxes(prev_gt_bboxes[i], in_mode='xyxy')
-            prev_img_metas[i]['gt_bboxes_3d'] = prev_gt_bboxes_3d[i].to(gt_labels_3d[i].device)
-            prev_img_metas[i]['gt_labels_3d'] = prev_gt_labels_3d[i]
+            proposals = proposals[N - 1]
+
         # Always reset RSSM state at the start of each training step
         if self.temporal_fusion is not None:
             self.temporal_fusion.reset_state()
-        if self.temporal_fusion is not None and is_valid_mask.any():
-            with torch.no_grad():
-                raw_prev_bev_feats = self.extract_feat(prev_points, prev_img, prev_img_metas,
-                                                       is_valid_mask=is_valid_mask, feat_or_dict=0)
-                prev_bev_feats = raw_prev_bev_feats * is_valid_mask[:, None, None, None]
-            # Reset RSSM state for samples where prev frame was invalid
-            if (~is_valid_mask).any():
-                self.temporal_fusion.reset_for_samples(~is_valid_mask)
+        # Roll history frames (old→new) through RSSM with no_grad to advance
+        # the internal h/z state. Invalid samples keep the previous state
+        # (reset_for_samples skips the update for them).
+        if self.temporal_fusion is not None:
+            for t in range(N - 1):
+                valid_t = frame_valid[t]
+                if valid_t.any():
+                    with torch.no_grad():
+                        self.extract_feat(frame_points[t], frame_img[t], frame_img_metas[t],
+                                          is_valid_mask=valid_t, feat_or_dict=0)
+                if (~valid_t).any():
+                    self.temporal_fusion.reset_for_samples(~valid_t)
 
-        # preparation for loss caculation
-        for i in range(len(img_metas)):
-            if gt_labels is not None:
-                img_metas[i]['gt_labels'] = gt_labels[i]
-            if gt_bboxes is not None:
-                img_metas[i]['gt_bboxes'] = HorizontalBoxes(gt_bboxes[i], in_mode='xyxy')
-            img_metas[i]['gt_bboxes_3d'] = gt_bboxes_3d[i].to(gt_labels_3d[i].device)
-            img_metas[i]['gt_labels_3d'] = gt_labels_3d[i]
-        feature_dict = self.extract_feat(points, img=img, img_metas=img_metas,
-                                               is_valid_mask=is_valid_mask, feat_or_dict=1)
+        # Current frame: full RSSM forward with gradients. Pass the LAST
+        # history frame's validity — if the most recent history frame was
+        # invalid, the RSSM state for those samples is unreliable, so the
+        # current-frame output falls back to the un-fused feat (see
+        # extract_feat feat_or_dict=1 path).
+        last_hist_valid = frame_valid[N - 2] if N >= 2 else torch.ones(
+            len(frame_img_metas[N - 1]), dtype=torch.bool, device=frame_img[N - 1].device)
+        feature_dict = self.extract_feat(frame_points[N - 1], img=frame_img[N - 1], img_metas=frame_img_metas[N - 1],
+                                               is_valid_mask=last_hist_valid, feat_or_dict=1)
         # feature_dict = torch.load(load_path)
 
         img_feats = feature_dict['img_feats']

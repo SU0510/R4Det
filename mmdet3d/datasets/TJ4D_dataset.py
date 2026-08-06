@@ -68,7 +68,8 @@ class TJ4DDataset(Custom3DDataset):
                  box_type_3d='LiDAR',
                  filter_empty_gt=True,
                  test_mode=False,
-                 pcd_limit_range=[0, -40, -3, 70.4, 40, 0.0]):
+                 pcd_limit_range=[0, -40, -3, 70.4, 40, 0.0],
+                 seq_len=2):
         super().__init__(
             data_root=data_root,
             ann_file=ann_file,
@@ -84,6 +85,10 @@ class TJ4DDataset(Custom3DDataset):
         assert self.modality is not None
         self.pcd_limit_range = pcd_limit_range
         self.pts_prefix = pts_prefix
+        # Temporal sequence length (current frame + seq_len-1 history frames).
+        # seq_len=2 reproduces the original prev/curr behaviour.
+        assert seq_len >= 2, f'seq_len must be >= 2, got {seq_len}'
+        self.seq_len = seq_len
 
 
     def _get_pts_filename(self, idx):
@@ -228,8 +233,9 @@ class TJ4DDataset(Custom3DDataset):
         return anns_results
 
 
-    def _create_empty_prev_data(self, data_curr):
-        """Helper method to create an empty previous frame data dictionary."""
+    def _create_empty_frame_data(self, data_curr):
+        """Helper method to create an empty frame data dict (used as a
+        placeholder for unavailable history frames)."""
         data_prev = {}
         for key, val in data_curr.items():
             inner = val.data if isinstance(val, DataContainer) else val
@@ -266,58 +272,85 @@ class TJ4DDataset(Custom3DDataset):
 
         return data_prev
 
-    def _pack_final_data(self, data_prev, data_curr, has_prev_frame):
-        """Helper method to pack prev and curr data into the final dictionary."""
-        final_data = {}
-        for key in data_curr.keys():
-            curr_val = data_curr[key]
-            prev_val = data_prev[key]
+    def _pack_final_data(self, data_frames, frame_valid):
+        """Pack a list of per-frame data dicts into the final sequence dict.
 
-            is_container = isinstance(curr_val, DataContainer)
-            inner_curr = curr_val.data if is_container else curr_val
-            inner_prev = prev_val.data if isinstance(prev_val, DataContainer) else prev_val
+        Args:
+            data_frames (list[dict]): length seq_len, ordered old→new. The
+                last element is the current frame; earlier ones are history.
+                History frames that were unavailable are empty placeholders
+                produced by _create_empty_frame_data.
+            frame_valid (list[bool]): length seq_len, per-frame validity
+                (image_idx continuity from that frame to current). The last
+                element is always True.
+
+        Returns:
+            dict: keys map to DataContainers/lists of length seq_len.
+        """
+        assert len(data_frames) == self.seq_len == len(frame_valid)
+        final_data = {}
+        curr_val = data_frames[-1]  # current frame drives container flags
+        for key in curr_val.keys():
+            is_container = isinstance(curr_val[key], DataContainer)
+            inners = []
+            for fr in data_frames:
+                v = fr[key]
+                inners.append(v.data if isinstance(v, DataContainer) else v)
 
             if key in ['points', 'gt_bboxes_3d', 'gt_labels_3d', 'gt_bboxes', 'gt_labels', 'gt_masks']:
-                # Do not stack these items, pass them as a list
-                final_data[key] = DataContainer([inner_prev, inner_curr], stack=False,
-                                                cpu_only=getattr(curr_val, 'cpu_only', True))
+                # Do not stack these items, pass them as a list (old→new)
+                final_data[key] = DataContainer(inners, stack=False,
+                                                cpu_only=getattr(curr_val[key], 'cpu_only', True))
             elif key == 'img_metas':
-                meta_prev = inner_prev[0] if isinstance(inner_prev, list) and inner_prev else inner_prev
-                meta_curr = inner_curr[0] if isinstance(inner_curr, list) and inner_curr else inner_curr
-
-                meta_prev = copy.deepcopy(meta_prev)
-                meta_curr = copy.deepcopy(meta_curr)
-                meta_prev['is_prev_frame_valid'] = has_prev_frame
-                meta_curr['is_prev_frame_valid'] = True
-
-                final_data[key] = DataContainer([meta_prev, meta_curr], stack=False, cpu_only=True)
-            elif isinstance(inner_curr, torch.Tensor):
-                # Stack image/depth tensors
-                stacked_data = torch.stack([inner_prev, inner_curr])
-                final_data[key] = DataContainer(stacked_data, stack=getattr(curr_val, 'stack', True),
-                                                cpu_only=getattr(curr_val, 'cpu_only', False))
+                metas = []
+                for i, inner in enumerate(inners):
+                    meta = inner[0] if isinstance(inner, list) and inner else inner
+                    meta = copy.deepcopy(meta)
+                    meta['is_prev_frame_valid'] = bool(frame_valid[i])
+                    metas.append(meta)
+                final_data[key] = DataContainer(metas, stack=False, cpu_only=True)
+            elif isinstance(inners[-1], torch.Tensor):
+                # Stack image/depth tensors along a new leading frame dim (old→new)
+                stacked_data = torch.stack(inners)
+                final_data[key] = DataContainer(stacked_data, stack=getattr(curr_val[key], 'stack', True),
+                                                cpu_only=getattr(curr_val[key], 'cpu_only', False))
             else:
-                final_data[key] = [inner_prev, inner_curr]
+                final_data[key] = inners
 
         return final_data
 
     def __getitem__(self, idx):
-        """Get item from infos according to the given index."""
-        while True:
-            has_prev_frame = False
-            if idx > 0:
-                info_curr = self.data_infos[idx]
-                info_prev = self.data_infos[idx - 1]
-                if info_curr['image']['image_idx'] - info_prev['image']['image_idx'] == 1:
-                    has_prev_frame = True
+        """Get item from infos according to the given index.
 
+        Builds a sequence of seq_len frames ordered old→new. The last frame
+        is the current one (always valid). A history frame is valid only if
+        image_idx is continuous from that frame through the current frame;
+        once a gap appears, that frame and all earlier ones are invalid and
+        replaced with empty placeholders (matching the original 2-frame
+        semantics where a gap meant has_prev_frame=False).
+        """
+        while True:
             seed = random.randint(0, 2 ** 32 - 1)
             np.random.seed(seed)
             random.seed(seed)
 
             prepare_func = self.prepare_test_data if self.test_mode else self.prepare_train_data
-            data_curr = prepare_func(idx)
 
+            # Determine per-frame validity (old→new), last frame always valid.
+            # frame_valid[t] = image_idx continuous for indices [idx-seq_len+1+t .. idx].
+            frame_valid = [False] * self.seq_len
+            frame_valid[-1] = True
+            if idx - self.seq_len + 1 >= 0:
+                contig = True  # continuity from current frame backwards
+                for t in range(self.seq_len - 2, -1, -1):
+                    j = idx - self.seq_len + 1 + t
+                    info_hi = self.data_infos[j + 1]
+                    info_lo = self.data_infos[j]
+                    contig = contig and (info_hi['image']['image_idx'] - info_lo['image']['image_idx'] == 1)
+                    frame_valid[t] = contig
+
+            # Prepare the current frame first (drives reseed / retry on None).
+            data_curr = prepare_func(idx)
             if data_curr is None:
                 if self.test_mode:
                     return None
@@ -325,17 +358,26 @@ class TJ4DDataset(Custom3DDataset):
                     idx = self._rand_another(idx)
                     continue
 
-            data_prev = None
-            if has_prev_frame:
-                np.random.seed(seed)
-                random.seed(seed)
-                data_prev = prepare_func(idx - 1)
-                if data_prev is None:
-                    has_prev_frame = False
-            if not has_prev_frame:
-                data_prev = self._create_empty_prev_data(data_curr)
+            # Collect all frames old→new. Invalid / out-of-range history
+            # frames use empty placeholders.
+            data_frames = []
+            for t in range(self.seq_len):
+                j = idx - self.seq_len + 1 + t
+                if t == self.seq_len - 1:
+                    data_frames.append(data_curr)
+                elif frame_valid[t]:
+                    np.random.seed(seed)
+                    random.seed(seed)
+                    fr = prepare_func(j)
+                    if fr is None:
+                        frame_valid[t] = False
+                        data_frames.append(self._create_empty_frame_data(data_curr))
+                    else:
+                        data_frames.append(fr)
+                else:
+                    data_frames.append(self._create_empty_frame_data(data_curr))
 
-            return self._pack_final_data(data_prev, data_curr, has_prev_frame)
+            return self._pack_final_data(data_frames, frame_valid)
     def drop_arrays_by_name(self, gt_names, used_classes):
         """Drop irrelevant ground truths by name.
 

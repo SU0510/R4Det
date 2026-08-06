@@ -1,16 +1,18 @@
 {
   "collection": "ms_r4det_9fc1693c",
   "failed_files": [],
-  "last_completed_at": "2026-07-31T14:30:26.712884Z",
-  "last_error": "RuntimeError: Cannot send a request, as the client has been closed.",
-  "last_failed_at": "2026-07-31T14:30:26.712884Z",
-  "last_started_at": "2026-07-31T14:30:12.502529Z",
+  "indexed_chunks": 3,
+  "indexed_files": 2,
+  "last_completed_at": "2026-08-06T09:54:28.860915Z",
+  "last_started_at": "2026-08-06T09:54:25.649839Z",
+  "last_success_at": "2026-08-06T09:54:28.860915Z",
   "milvus_uri": "~/.memsearch/milvus.db",
   "operation": "index",
   "paths": [
     "/home/lurui/workspace/R4Det/.memsearch/memory"
   ],
   "schema_version": 1,
-  "status": "error",
-  "updated_at": "2026-07-31T14:30:26.712884Z"
+  "status": "ok",
+  "total_files": 2,
+  "updated_at": "2026-08-06T09:54:28.860915Z"
 }

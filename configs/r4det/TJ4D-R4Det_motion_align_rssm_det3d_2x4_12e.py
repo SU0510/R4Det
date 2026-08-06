@@ -227,6 +227,7 @@ model = dict(
         )
     ),
     # NOTE: backward_projection (PDF) removed — disabled
+    seq_len=3,  # temporal sequence length (current + 2 history frames) for RSSM
 
     pts_bbox_head=dict(
         type='Anchor3DHead',
@@ -373,7 +374,8 @@ data = dict(
             modality=input_modality,
             classes=class_names,
             test_mode=False,
-            box_type_3d='LiDAR')),
+            box_type_3d='LiDAR',
+            seq_len=3)),
     val=dict(
         type=dataset_type,
         data_root=data_root,
@@ -384,7 +386,8 @@ data = dict(
         modality=input_modality,
         classes=class_names,
         test_mode=True,
-        box_type_3d='LiDAR'),
+        box_type_3d='LiDAR',
+        seq_len=3),
     test=dict(
         type=dataset_type,
         data_root=data_root,
@@ -395,7 +398,8 @@ data = dict(
         modality=input_modality,
         classes=class_names,
         test_mode=True,
-        box_type_3d='LiDAR'))
+        box_type_3d='LiDAR',
+        seq_len=3))
 
 # Training settings
 lr = 0.0002
