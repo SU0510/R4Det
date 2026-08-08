@@ -356,7 +356,7 @@ class R4Det(MVXFasterRCNN):
         pred_masks_list = pred_masks.split(num_pos_per_img, 0)
         pos_rois_list = pos_rois.split(num_pos_per_img, 0)
         for i in range(batch_size):
-            img_meta = img_metas[i]
+            img_meta = img_metas[i][-1]  # current-frame meta from N-frame list
             depth_map = precise_depth[i, 0]
             pred_masks_per_img = pred_masks_list[i]
             pos_rois_per_img = pos_rois_list[i]
@@ -892,10 +892,11 @@ class R4Det(MVXFasterRCNN):
                     gt_bboxes=None, **kwargs):
         """Test function without augmentaiton."""
         outs_pts = None
-        if len(img_metas) != 1: img_metas = [img_metas]
-        # Test runs with batch=1: points is a length-seq_len list (one entry
-        # per frame); img shape [seq_len, C, H, W]; img_metas[0] is a
-        # length-seq_len list of per-frame metas.
+        # img_metas is list[list[dict]]: batch_size × N_frames.
+        # Each meta[t] is the single-frame img_meta dict for frame t.
+        # Test runs with batch≥1: points is a length-seq_len list (one entry
+        # per frame); img shape [seq_len, C, H, W]; img_metas[i] is a
+        # length-seq_len list of per-frame metas for sample i.
         N = self.seq_len
         frame_points = [points[t] for t in range(N)]
         frame_img = [img[t, ...] for t in range(N)]
@@ -1002,7 +1003,7 @@ class R4Det(MVXFasterRCNN):
 
         bbox_list = [dict() for i in range(len(img_metas))]
         if pts_feats and self.with_pts_bbox and self.use_box3d_supervision:  # pts means 3D detection
-            bbox_pts, outs_pts = self.simple_test_pts(pts_feats, img_metas, rescale=rescale)
+            bbox_pts, outs_pts = self.simple_test_pts(pts_feats, frame_img_metas[N - 1], rescale=rescale)
             for result_dict, pts_bbox in zip(bbox_list, bbox_pts):
                 result_dict['pts_bbox'] = pts_bbox
 
