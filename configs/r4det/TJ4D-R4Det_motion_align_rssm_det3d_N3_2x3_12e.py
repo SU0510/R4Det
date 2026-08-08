@@ -401,10 +401,10 @@ data = dict(
         seq_len=3))
 
 # Training settings
-lr = 0.00015
+lr = 0.0003
 max_epochs = 18
 optimizer = dict(type='AdamW', lr=lr, betas=(0.95, 0.99), weight_decay=0.01)
-optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
+optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2), cumulative_iters=2)
 runner = dict(type='EpochBasedRunner', max_epochs=max_epochs)
 lr_config = dict(
     policy='CosineAnnealing',
