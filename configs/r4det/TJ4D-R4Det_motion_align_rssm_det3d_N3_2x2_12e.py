@@ -227,6 +227,7 @@ model = dict(
         )
     ),
     # NOTE: backward_projection (PDF) removed — disabled
+    seq_len=3,  # temporal sequence length (current + 2 history frames) for RSSM
     pts_bbox_head=dict(
         type='Anchor3DHead',
         num_classes=len(class_names),
@@ -357,7 +358,7 @@ eval_pipeline = test_pipeline
 
 # dataset settings
 data = dict(
-    samples_per_gpu=4,
+    samples_per_gpu=2,
     workers_per_gpu=2,
     train=dict(
         type='RepeatDataset',
@@ -372,7 +373,8 @@ data = dict(
             modality=input_modality,
             classes=class_names,
             test_mode=False,
-            box_type_3d='LiDAR')),
+            box_type_3d='LiDAR',
+            seq_len=3)),
     val=dict(
         type=dataset_type,
         data_root=data_root,
@@ -383,7 +385,8 @@ data = dict(
         modality=input_modality,
         classes=class_names,
         test_mode=True,
-        box_type_3d='LiDAR'),
+        box_type_3d='LiDAR',
+        seq_len=3),
     test=dict(
         type=dataset_type,
         data_root=data_root,
@@ -394,10 +397,11 @@ data = dict(
         modality=input_modality,
         classes=class_names,
         test_mode=True,
-        box_type_3d='LiDAR'))
+        box_type_3d='LiDAR',
+        seq_len=3))
 
 # Training settings
-lr = 0.0002
+lr = 0.0001
 max_epochs = 18
 optimizer = dict(type='AdamW', lr=lr, betas=(0.95, 0.99), weight_decay=0.01)
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
