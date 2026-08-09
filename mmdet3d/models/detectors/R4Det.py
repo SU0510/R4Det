@@ -1026,20 +1026,24 @@ class R4Det(MVXFasterRCNN):
         # visualization for test stage
         threshold = 0.3
         if gt_bboxes_3d is not None and self.use_box3d_supervision:
-            if img.dim() == 3 and img.size(0)== 3: img = img.unsqueeze(0)
-            if not isinstance(points, list): points = [points]
-            self.draw_gt_pred_figures_3d(points, img, gt_bboxes_3d, gt_labels_3d, img_metas, False, threshold, outs_pts=outs_pts)
+            cur_img = frame_img[N - 1]
+            if cur_img.dim() == 3 and cur_img.size(0)== 3: cur_img = cur_img.unsqueeze(0)
+            cur_pts = frame_points[N - 1]
+            if not isinstance(cur_pts, list): cur_pts = [cur_pts]
+            self.draw_gt_pred_figures_3d(cur_pts, cur_img, gt_bboxes_3d, gt_labels_3d,
+                                         frame_img_metas[N - 1], False, threshold, outs_pts=outs_pts)
         else: # vanilla testing method
             self.vis_time_box3d += 1
             if self.vis_time_box3d % self.SAVE_INTERVALS == 0:
                 figures_path_det3d = self.figures_path_det3d_test
-                input_img = np.array(img.cpu()).transpose(1,2,0)
+                cur_img = frame_img[N - 1]
+                input_img = np.array(cur_img[0].cpu()).transpose(1,2,0)
                 input_img = input_img*self.std[None, None, :] + self.mean[None, None, :]
                 pred_bboxes_3d = bbox_pts[0]['boxes_3d']
                 pred_scores_3d = bbox_pts[0]['scores_3d']
                 pred_bboxes_3d = pred_bboxes_3d[pred_scores_3d>threshold].to('cpu')
-                proj_mat = img_metas[0]["final_lidar2img"] # update lidar2img
-                img_name = img_metas[0]['filename'].split('/')[-1].split('.')[0]
+                proj_mat = frame_img_metas[N - 1][0]["final_lidar2img"] # update lidar2img
+                img_name = frame_img_metas[N - 1][0]['filename'].split('/')[-1].split('.')[0]
                 # project 3D bboxes to image and get show figures
                 if len(pred_bboxes_3d) == 0: pred_bboxes_3d = None
                 filename = str(self.vis_time_box3d) + '_' + img_name + '_det3d'
