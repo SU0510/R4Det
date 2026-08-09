@@ -897,6 +897,14 @@ class R4Det(MVXFasterRCNN):
         # Test runs with batch≥1: points is a length-seq_len list (one entry
         # per frame); img shape [seq_len, C, H, W]; img_metas[i] is a
         # length-seq_len list of per-frame metas for sample i.
+
+        # When val batch=1, base.py:43 strips one level from the collated
+        # DataContainer, yielding a flat N-frame list.  Detect and re-wrap.
+        if hasattr(img_metas, 'data'):
+            img_metas = img_metas.data
+        if img_metas and not isinstance(img_metas[0], list):
+            img_metas = [img_metas]
+
         N = self.seq_len
         frame_points = [points[t] for t in range(N)]
         frame_img = [img[t, ...] for t in range(N)]
