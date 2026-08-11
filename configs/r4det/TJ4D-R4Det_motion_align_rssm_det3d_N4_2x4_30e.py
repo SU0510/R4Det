@@ -401,7 +401,7 @@ data = dict(
         seq_len=4))
 
 # Training settings
-lr = 0.0002
+lr = 0.00015
 max_epochs = 30
 optimizer = dict(type='AdamW', lr=lr, betas=(0.95, 0.99), weight_decay=0.01)
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
