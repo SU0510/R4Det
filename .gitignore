@@ -24,3 +24,8 @@ data/
 # IDE
 .vscode/
 .idea/
+
+# internal tools
+.memsearch/
+.tokensave/
+.agents/
