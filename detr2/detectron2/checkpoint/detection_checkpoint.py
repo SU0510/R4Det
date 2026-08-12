@@ -20,6 +20,17 @@ class DetectionCheckpointer:
         self.save_dir = save_dir
         self.checkpointables = {}
 
+    @staticmethod
+    def _load_checkpoint(filepath):
+        """Load checkpoint file. Uses pickle for .pkl (detectron2 format), torch for .pth."""
+        if filepath.endswith('.pkl'):
+            import pickle
+            with open(filepath, 'rb') as f:
+                return pickle.load(f)
+        else:
+            return torch.load(filepath, map_location=torch.device('cpu'))
+
+
     def _download_and_load(self, path: str) -> Dict[str, Any]:
         import subprocess
         import hashlib
@@ -31,15 +42,31 @@ class DetectionCheckpointer:
         ext = '.pkl' if path.endswith('.pkl') else '.pth'
         local_path = os.path.join(cache_dir, f'{url_hash}{ext}')
 
-        # Validate cached file
+        # Also check for file saved with original URL basename (user manual download)
+        orig_basename = os.path.basename(path)
+        alt_path = os.path.join(cache_dir, orig_basename)
+        if os.path.exists(alt_path) and os.path.getsize(alt_path) > 100 * 1024 * 1024:
+            if not os.path.exists(local_path) or os.path.getsize(alt_path) > os.path.getsize(local_path):
+                logger.info(f"Found alternative cache file: {alt_path}, using it")
+                if os.path.exists(local_path):
+                    os.remove(local_path)
+                os.rename(alt_path, local_path)
+
+        # Validate cached file (check header bytes first to avoid loading corrupted files)
         if os.path.exists(local_path):
-            try:
-                torch.load(local_path, map_location=torch.device('cpu'))
-                logger.info(f"Using cached checkpoint: {local_path}")
-                return torch.load(local_path, map_location=torch.device('cpu'))
-            except Exception as e:
-                logger.warning(f"Cached checkpoint corrupted ({e}), re-downloading...")
-                os.remove(local_path)
+            with open(local_path, 'rb') as f:
+                header = f.read(8)
+            valid_headers = (b'\x80\x02', b'\x80\x03', b'\x80\x04', b'\x80\x05', b'PK')
+            if header[:2] in valid_headers:
+                logger.info(f"Using cached checkpoint: {local_path} ({os.path.getsize(local_path)/1024/1024:.0f} MB)")
+                return self._load_checkpoint(local_path)
+            else:
+                logger.warning(
+                    f"Cached file has invalid header ({header[:4].hex()}), may be HTML/corrupt. "
+                    f"Will re-download but keeping old file as backup."
+                )
+                # Don't delete — keep as backup in case re-download also fails
+                os.rename(local_path, local_path + '.bak')
 
         # Download
         logger.info(f"Downloading checkpoint from {path} ...")
@@ -83,7 +110,7 @@ class DetectionCheckpointer:
                     )
 
                 # Full validation
-                torch.load(tmp_path, map_location=torch.device('cpu'))
+                self._load_checkpoint(tmp_path)
                 os.rename(tmp_path, local_path)
                 logger.info(f"Saved to {local_path}")
                 download_ok = True
@@ -104,15 +131,40 @@ class DetectionCheckpointer:
             )
             raise RuntimeError(msg)
 
-        return torch.load(local_path, map_location=torch.device('cpu'))
+        return self._load_checkpoint(local_path)
 
     def _extract_state_dict(self, checkpoint: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract model state dict and convert numpy arrays to torch tensors."""
+        import numpy as np
+        from collections import OrderedDict
+
         if isinstance(checkpoint, dict):
             if 'model' in checkpoint:
-                return checkpoint['model']
-            if 'state_dict' in checkpoint:
-                return checkpoint['state_dict']
-        return checkpoint
+                state_dict = checkpoint['model']
+            elif 'state_dict' in checkpoint:
+                state_dict = checkpoint['state_dict']
+            else:
+                state_dict = checkpoint
+        else:
+            state_dict = checkpoint
+
+        # Convert OrderedDict to regular dict
+        if isinstance(state_dict, OrderedDict):
+            state_dict = dict(state_dict)
+
+        # Convert numpy arrays to torch tensors
+        converted = {}
+        for k, v in state_dict.items():
+            if isinstance(v, np.ndarray):
+                converted[k] = torch.from_numpy(v)
+            elif isinstance(v, OrderedDict):
+                # Nested OrderedDict (e.g., from collections.OrderedDict)
+                converted[k] = {sk: torch.from_numpy(sv) if isinstance(sv, np.ndarray) else sv
+                               for sk, sv in v.items()}
+            else:
+                converted[k] = v
+
+        return converted
 
     def load(self, path: str, **kwargs) -> Dict[str, Any]:
         import re
@@ -132,7 +184,7 @@ class DetectionCheckpointer:
             if not os.path.exists(path):
                 logger.warning(f"Checkpoint file not found: {path}, skipping.")
                 return {}
-            checkpoint = torch.load(path, map_location=torch.device('cpu'))
+            checkpoint = self._load_checkpoint(path)
 
         state_dict = self._extract_state_dict(checkpoint)
         if any(k.startswith('module.') for k in state_dict.keys()):
