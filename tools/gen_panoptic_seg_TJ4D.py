@@ -23,7 +23,9 @@ from torchvision.utils import save_image
 # class_names = ['Pedestrian', 'Cyclist', 'Car','Truck'] # TJ4D
 
 def initialization(save_panoptic_masks_dir):
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    # Respect external CUDA_VISIBLE_DEVICES; default to '0' if not set
+    if 'CUDA_VISIBLE_DEVICES' not in os.environ:
+        os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print('Device: {}'.format(device))
 
