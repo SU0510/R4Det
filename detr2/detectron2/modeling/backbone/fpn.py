@@ -49,7 +49,6 @@ class FPN(Backbone):
                 which takes the element-wise mean of the two.
         """
         print(f"--- FPN Class Initialized From: {__file__} ---")
-        exit(0)
         super(FPN, self).__init__()
         assert isinstance(bottom_up, Backbone)
         assert in_features, in_features
