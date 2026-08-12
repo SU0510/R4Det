@@ -321,6 +321,39 @@ resume_from:     None -> v1 latest.pth   (续训 v1)
 - Cyc 意外大涨 (+3.65)，可能与 N=4 多帧时序对骑行者有效
 - **三角关系确认**: N=4 需要 hdim=128 配合才能达最佳效果；hdim=128 也需要 N=4 配合
 
+### Run 10 -- N=4 RSSM (seq_len=4, hidden_dim=128, 30 epochs)
+
+- config: configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_30e.py
+- work_dir: work_dirs/rssm_N4_2x4_30e
+- 改动: 同 Run 7 (N=4, hdim=128)，仅 total_epochs=18→30
+- 目的: 验证 hdim=128 是否欠收敛（Run 7 ep17 peak→ep18 跌）
+- BEST: ep22 34.71 🥇
+- LAST: ep30 33.99
+
+与 N=4 hdim=128 12e (Run 7) 对比:
+- Overall: **+0.66** (34.05→34.71) 🔥 首次超越 GRU baseline！
+- Car loose: +5.79 (53.67→59.46) 历史最高
+- Car strict: -2.15 (38.49→36.34)
+- Cyc loose: -2.31 (48.59→46.28)
+- Ped loose: +2.96 (24.46→27.42)
+- Trk loose: +1.53 (48.97→50.50)
+- Trk strict: +4.16 (24.64→28.80)
+
+关键观察:
+- **34.71 超越 baseline_temporal (34.50)**，RSSM 首次登顶 🥇
+- Car loose 59.46 全场最高（之前最高 N=2 v3: 56.03）
+- 收敛曲线显著后移：ep22 peak vs ep17 peak（12e），hdim=128 确实需要更长训练
+- ep19 起进入 34+ 高原区（ep20=34.37, ep22=34.71, ep25=34.33），训练稳定性好于 12e
+- ep30=33.99 未暴跌，印证 12e ep18 的下跌是欠收敛而非过拟合
+- 不足: Car strict 从 38.49 降至 36.34，定位精度被更多 recall 稀释
+
+### N4 30e epoch 19-30 延伸曲线
+
+| epoch | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 3D_mod | 32.37 | 34.37 | 33.51 | **34.71** | 34.38 | 33.07 | 34.33 | 33.82 | 33.95 | 33.42 | 33.19 | 33.99 |
+
+
 ### N=3 和 N=4 epoch-by-epoch
 
 | epoch | N=4 hdim64 | N=3 hdim128 | N=4 hdim128 | N=3 hdim64 | N=2 v3 | baseline_temporal |
@@ -351,6 +384,7 @@ resume_from:     None -> v1 latest.pth   (续训 v1)
 | baseline_temporal (N=2) | 12 | 52.18 | 32.82 | 48.63 | 22.52 | **26.64** | 0.04 | 43.02 | 29.91 | **34.50** |
 | N=3 (hdim=64) | 14 | **55.70** | 34.01 | 48.48 | 21.73 | 22.88 | 0.05 | 47.48 | **31.72** | 34.27 |
 | N=4 (hdim=128) | 17 | 53.67 | **38.49** | 48.59 | 20.76 | 24.46 | 0.02 | **48.97** | 24.64 | 34.05 |
+| N=4 hdim=128 30e | 22 | **59.46** | 36.34 | 46.28 | 21.20 | **27.42** | 0.05 | **50.50** | 28.80 | **34.71** |
 | N=4 (hdim=64) | 12 | 50.42 | 33.38 | 52.13 | 20.74 | 24.68 | **2.52** | 47.52 | 21.81 | 33.00 |
 | N=3 (hdim=128) | 17 | 51.13 | 32.58 | 45.65 | 19.67 | 24.07 | 0.02 | 48.16 | 29.17 | 32.87 |
 | N=2 v3 (hdim=64) | 11 | 56.03 | 33.20 | **49.02** | **22.49** | 23.35 | 0.01 | 43.65 | 29.51 | 33.77 |
@@ -364,32 +398,34 @@ resume_from:     None -> v1 latest.pth   (续训 v1)
 
 | # | Run | N | hdim | BEST ep | 3D_mod |
 |---|---:|---|---:|---:|
-| 1 | baseline_temporal (GRU) | 2 | -- | 12 | **34.50** |
-| 2 | N=3 RSSM | 3 | 64 | 14 | 34.27 |
-| 3 | N=4 RSSM (hdim=128) | 4 | 128 | 17 | 34.05 |
-| 4 | v2 RSSM | 2 | 64 | 14 | 34.01 |
-| 5 | v3 RSSM | 2 | 64 | 11 | 33.77 |
-| 6 | baseline_rssm (no align) | 2 | 64 | 17 | 33.54 |
-| 7 | N=4 RSSM (hdim=64) | 4 | 64 | 12 | 33.00 |
-| 8 | N=3 RSSM (hdim=128) | 3 | 128 | 17 | 32.87 |
-| 9 | v1 RSSM (KL broken) | 2 | 64 | 10 | 30.89 |
+| 1 | N=4 RSSM 30e (hdim=128) | 4 | 128 | 22 | **34.71** |
+| 2 | baseline_temporal (GRU) | 2 | -- | 12 | 34.50 |
+| 3 | N=3 RSSM | 3 | 64 | 14 | 34.27 |
+| 4 | N=4 RSSM (hdim=128) 12e | 4 | 128 | 17 | 34.05 |
+| 5 | v2 RSSM | 2 | 64 | 14 | 34.01 |
+| 6 | v3 RSSM | 2 | 64 | 11 | 33.77 |
+| 7 | baseline_rssm (no align) | 2 | 64 | 17 | 33.54 |
+| 8 | N=4 RSSM (hdim=64) | 4 | 64 | 12 | 33.00 |
+| 9 | N=3 RSSM (hdim=128) | 3 | 128 | 17 | 32.87 |
+| 10 | v1 RSSM (KL broken) | 2 | 64 | 10 | 30.89 |
 
 ### 核心发现
 
-1. N=2->3 (hdim=64) 有 +0.50 正向提升，主要来自 Truck (+3.83)
-2. N=3->4 (hdim=64) **反效果 -1.27** (34.27→33.00) — 单独增加帧数有害
-3. N=3->4 (hdim=128) 微弱 +0.05 (34.27→34.05) — 帧数+容量同时增加能维持性能
-4. **三角锁定关系**: N=4↔hdim=128 互锁 — N=4 需要 hdim=128 才有价值，hdim=128 也需要 N=4 才能发挥
-5. **Ped strict 首次突破**: N=4+hdim=64 的 Ped 3D strict=2.52，打破所有 run 的 0.01~0.05 魔咒
-6. hdim=128 贡献 Car strict 提升 (+5.11, 33.38→38.49)，但 hdim=64 有更好的 Cyc 和 Ped
-7. 所有RSSM变体都没超过N=2 GRU baseline (34.50) — 差距0.23~1.63
-8. 18 epoch 对 hdim=128 不够，ep17才peak且ep18暴跌
+1. **🥇 RSSM 首次超越 GRU baseline**: N4 hdim=128 30e @ep22=34.71，超过 baseline_temporal (34.50)
+2. N=2→3 (hdim=64) 有 +0.50 正向提升，主要来自 Truck (+3.83)
+3. N=3→4 (hdim=64) 反效果 -1.27 — 单独增加帧数有害；N=4↔hdim=128 互锁
+4. **30 epoch 是 hdim=128 的关键**: 12e ep17 peak→ep18跌是欠收敛，30e ep22才peak且ep30未跌
+5. Car loose 59.46 历史最高 — 延长训练主要提升 recall
+6. **Ped strict 首次突破**: N=4+hdim=64 的 Ped 3D strict=2.52，打破 0.01~0.05 魔咒
+7. hdim=128 提升 Car strict (+5.11)，hdim=64 有更好的 Cyc (+3.65) 和 Ped
+8. 延长训练后所有指标趋于稳定，ep19-30 在 33-35 区间波动，无暴跌
 
 ### 待做消融
 
 - [x] N=3 + hidden_dim=128: hdim=128 在 N=3 下全面劣化，确认需要 N=4 配合
-- [x] N=4 + hidden_dim=64: N=4 单独有害 (-1.27 vs N=3)，确认 N=4↔hdim=128 互锁
-- [ ] N=4 + hdim=128, 24-30ep 延长训练: 当前 ep17 peak→ep18 跌，需更长收敛 + lr scheduler
-- [ ] N=4 + hdim=64, 24-30ep 延长训练: Ped strict 2.52 亮点值得深挖
-- [ ] velocity 分支注入 (action_dim=2): 所有当前 RSSM 使用 action_dim=0
+- [x] N=4 + hidden_dim=64: N=4 单独有害 (-1.27)，确认 N=4↔hdim=128 互锁
+- [x] N=4 + hdim=128, 30ep 延长训练: **RSSM 首次超越 GRU (34.71)**，确认欠收敛假说
+- [ ] velocity 分支注入 (action_dim=2): 所有当前 RSSM 使用 action_dim=0，最大未尝试方向
 - [ ] deformable alignment 消融: MotionAlignedRSSMFusion vs 纯 flow warp vs 无对齐
+- [ ] N=4 hdim=128 + velocity: 将最佳配置与 velocity 注入结合
+- [ ] extended training + lr schedule 优化: 尝试 cosine annealing 或更长 warmup
