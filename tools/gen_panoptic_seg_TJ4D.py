@@ -1,4 +1,3 @@
-from nuscenes.nuscenes import NuScenes, NuScenesExplorer
 import os
 import numpy as np
 import os
@@ -15,7 +14,7 @@ setup_logger()
 import numpy as np
 import cv2
 # import some common detectron2 utilities
-from detectron2 import model_zoo
+import detectron2.model_zoo as model_zoo
 from detectron2.engine import DefaultPredictor
 from detectron2.config import get_cfg
 from detectron2.utils.visualizer import Visualizer
