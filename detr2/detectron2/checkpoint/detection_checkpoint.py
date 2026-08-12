@@ -28,10 +28,10 @@ class DetectionCheckpointer:
     def _download_and_load(self, path: str) -> Dict[str, Any]:
         """
         Download a checkpoint from a URL and load it with torch.load.
-        Handles detectron2 .pkl format (pickle).
-        Uses /tmp for caching to avoid read-only filesystem issues.
+        Uses curl for reliable downloads (handles proxies better than urllib).
+        Uses /tmp for caching, validates file integrity, re-downloads if corrupted.
         """
-        import urllib.request
+        import subprocess
         import hashlib
 
         # Use /tmp for download cache
@@ -43,19 +43,50 @@ class DetectionCheckpointer:
         ext = '.pkl' if path.endswith('.pkl') else '.pth'
         local_path = os.path.join(cache_dir, f'{url_hash}{ext}')
 
-        if not os.path.exists(local_path):
-            logger.info(f"Downloading checkpoint from {path} ...")
-            logger.info(f"Saving to {local_path}")
+        # Validate cached file before using it
+        if os.path.exists(local_path):
             try:
-                urllib.request.urlretrieve(path, local_path)
+                torch.load(local_path, map_location=torch.device('cpu'))
+                logger.info(f"Using cached checkpoint: {local_path}")
+                return torch.load(local_path, map_location=torch.device('cpu'))
             except Exception as e:
-                logger.error(f"Download failed: {e}")
-                raise
-        else:
-            logger.info(f"Using cached checkpoint: {local_path}")
+                logger.warning(f"Cached checkpoint corrupted ({e}), re-downloading...")
+                os.remove(local_path)
 
-        checkpoint = torch.load(local_path, map_location=torch.device('cpu'))
-        return checkpoint
+        # Download using curl (more reliable than urllib with proxies)
+        logger.info(f"Downloading checkpoint from {path} ...")
+        tmp_path = local_path + '.tmp'
+        
+        # Remove any stale temp file
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        
+        try:
+            # Use curl with resume support and follow redirects
+            cmd = ['curl', '-sL', '--retry', '3', '--retry-delay', '5',
+                   '--connect-timeout', '60', '--max-time', '1800',
+                   '-o', tmp_path, path]
+            result = subprocess.run(cmd, capture_output=False, text=True)
+            
+            if result.returncode != 0 or not os.path.exists(tmp_path):
+                raise RuntimeError(
+                    f"curl failed with code {result.returncode}: {result.stderr.strip()}"
+                )
+            
+            # Validate the download
+            file_size = os.path.getsize(tmp_path)
+            logger.info(f"Downloaded {file_size / 1024 / 1024:.0f} MB, validating...")
+            
+            torch.load(tmp_path, map_location=torch.device('cpu'))
+            os.rename(tmp_path, local_path)
+            logger.info(f"Saved to {local_path}")
+        except Exception as e:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            logger.error(f"Download failed: {e}")
+            raise
+
+        return torch.load(local_path, map_location=torch.device('cpu'))
 
     def _load_from_file(self, path: str) -> Dict[str, Any]:
         """Load a local checkpoint file."""
