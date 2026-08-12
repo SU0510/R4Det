@@ -61,30 +61,61 @@ class DetectionCheckpointer:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
         
-        try:
-            # Use curl with resume support and follow redirects
-            cmd = ['curl', '-sL', '--retry', '3', '--retry-delay', '5',
-                   '--connect-timeout', '60', '--max-time', '1800',
-                   '-o', tmp_path, path]
-            result = subprocess.run(cmd, capture_output=False, text=True)
-            
-            if result.returncode != 0 or not os.path.exists(tmp_path):
-                raise RuntimeError(
-                    f"curl failed with code {result.returncode}: {result.stderr.strip()}"
-                )
-            
-            # Validate the download
-            file_size = os.path.getsize(tmp_path)
-            logger.info(f"Downloaded {file_size / 1024 / 1024:.0f} MB, validating...")
-            
-            torch.load(tmp_path, map_location=torch.device('cpu'))
-            os.rename(tmp_path, local_path)
-            logger.info(f"Saved to {local_path}")
-        except Exception as e:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            logger.error(f"Download failed: {e}")
-            raise
+        download_ok = False
+        last_error = None
+        
+        # Strategy 1: try without proxy (noproxy)
+        for strategy, extra_args in [
+            ("direct (no proxy)", ['--noproxy', '*']),
+            ("with system proxy", []),
+        ]:
+            try:
+                logger.info(f"Trying download {strategy}...")
+                cmd = ['curl', '-sL', '--retry', '3', '--retry-delay', '5',
+                       '--connect-timeout', '60', '--max-time', '1800',
+                       '-o', tmp_path, path] + extra_args
+                result = subprocess.run(cmd, capture_output=False, text=True)
+                
+                if result.returncode != 0:
+                    raise RuntimeError(f"curl exit code {result.returncode}")
+                if not os.path.exists(tmp_path):
+                    raise RuntimeError("no output file")
+                
+                file_size = os.path.getsize(tmp_path)
+                logger.info(f"Downloaded {file_size / 1024 / 1024:.0f} MB, validating...")
+                
+                # Quick validation: check first bytes
+                with open(tmp_path, 'rb') as f:
+                    header = f.read(8)
+                if header[:2] not in (b'\x80\x02', b'\x80\x03', b'\x80\x04', b'\x80\x05', b'PK'):
+                    raise RuntimeError(
+                        f"Invalid file format. First 8 bytes: {header.hex()} "
+                        f"({repr(header[:60])}). File may be HTML/redirect, "
+                        f"not a pickle checkpoint."
+                    )
+                
+                # Full validation
+                torch.load(tmp_path, map_location=torch.device('cpu'))
+                os.rename(tmp_path, local_path)
+                logger.info(f"Saved to {local_path}")
+                download_ok = True
+                break
+            except Exception as e:
+                last_error = e
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                logger.warning(f"Download {strategy} failed: {e}")
+                continue
+        
+        if not download_ok:
+            raise RuntimeError(
+                f"All download strategies failed. Last error: {last_error}. "
+                f"Please download manually:
+"
+                f"  curl -L -o {local_path} '{path}'
+"
+                f"Then re-run this script."
+            )
 
         return torch.load(local_path, map_location=torch.device('cpu'))
 
