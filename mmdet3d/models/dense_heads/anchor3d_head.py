@@ -210,7 +210,7 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
 
     def loss_single(self, cls_score, bbox_pred, dir_cls_preds, labels,
                     label_weights, bbox_targets, bbox_weights, dir_targets,
-                    dir_weights, num_total_samples, iou_pred=None, anchors=None):
+                    dir_weights, iou_pred, anchors, num_total_samples):
         """Calculate loss of Single-level results.
 
         Args:
@@ -430,8 +430,8 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
             bbox_weights_list,
             dir_targets_list,
             dir_weights_list,
-            iou_pred=iou_preds,
-            anchors=anchor_levels,
+            iou_preds,
+            anchor_levels,
             num_total_samples=num_total_samples)
         loss_dict = dict(
             loss_cls=losses_cls, loss_bbox=losses_bbox, loss_dir=losses_dir)
