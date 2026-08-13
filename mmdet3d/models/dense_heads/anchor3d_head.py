@@ -1,6 +1,7 @@
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from mmcv.runner import BaseModule, force_fp32
 from torch import nn as nn
 
@@ -74,6 +75,9 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         self.feat_channels = feat_channels
         self.diff_rad_by_sin = diff_rad_by_sin
         self.use_direction_classifier = use_direction_classifier
+        self.ignore_dir_classes = kwargs.get('ignore_dir_classes', [])
+        self.anchor_class_mapping = kwargs.get('anchor_class_mapping', None)
+        self.use_iou_branch = kwargs.get('use_iou_branch', False)
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.assigner_per_size = assigner_per_size
@@ -139,6 +143,8 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         if self.use_direction_classifier:
             self.conv_dir_cls = nn.Conv2d(self.feat_channels,
                                           self.num_anchors * 2, 1)
+        if self.use_iou_branch:
+            self.conv_iou = nn.Conv2d(self.feat_channels, self.num_anchors, 1)
 
     def forward_single(self, x):
         """Forward function on a single-scale feature map.
@@ -175,6 +181,9 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         if feats is not None and len(feats) > 0:
             first_feat = feats[0]
 
+        if self.use_iou_branch:
+            # Compute iou_preds via side channel to keep API compatible
+            self._iou_preds = [self.conv_iou(f).sigmoid() for f in feats]
 
         return multi_apply(self.forward_single, feats)
 
@@ -200,7 +209,7 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
 
     def loss_single(self, cls_score, bbox_pred, dir_cls_preds, labels,
                     label_weights, bbox_targets, bbox_weights, dir_targets,
-                    dir_weights, num_total_samples):
+                    dir_weights, num_total_samples, iou_pred=None, anchors=None):
         """Calculate loss of Single-level results.
 
         Args:
@@ -272,6 +281,12 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
             # direction classification loss
             loss_dir = None
             if self.use_direction_classifier:
+                # Apply ignore_dir_classes: zero out dir weights for excluded classes
+                if self.ignore_dir_classes:
+                    pos_labels = labels[pos_inds]
+                    pos_dir_weights = pos_dir_weights.clone()
+                    for ignore_cls in self.ignore_dir_classes:
+                        pos_dir_weights[pos_labels == ignore_cls] = 0.0
                 loss_dir = self.loss_dir(
                     pos_dir_cls_preds,
                     pos_dir_targets,
@@ -282,7 +297,27 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
             if self.use_direction_classifier:
                 loss_dir = pos_dir_cls_preds.sum()
 
-        return loss_cls, loss_bbox, loss_dir
+        # IoU-aware quality branch loss
+        loss_iou = None
+        if iou_pred is not None and num_pos > 0:
+            with torch.no_grad():
+                pos_anchors = anchors[pos_inds]
+                # Decode predicted and target boxes
+                pos_pred_boxes = self.bbox_coder.decode(pos_anchors, pos_bbox_pred)
+                pos_gt_boxes = self.bbox_coder.decode(pos_anchors, pos_bbox_targets)
+                # Compute centerness proxy (BEV distance normalized by box diagonal)
+                pred_xy = pos_pred_boxes[:, :2]
+                gt_xy = pos_gt_boxes[:, :2]
+                gt_dims = pos_gt_boxes[:, 3:5]  # w, l
+                diag = torch.sqrt(gt_dims[:, 0]**2 + gt_dims[:, 1]**2 + 1e-6)
+                dist = torch.sqrt(((pred_xy - gt_xy)**2).sum(dim=1))
+                iou_target = torch.exp(-dist / diag).clamp(0, 1)
+            iou_pred_flat = iou_pred.permute(0, 2, 3, 1).reshape(-1)
+            pos_iou_pred = iou_pred_flat[pos_inds]
+            loss_iou = F.l1_loss(pos_iou_pred, iou_target, reduction='none')
+            loss_iou = loss_iou.mean()
+
+        return loss_cls, loss_bbox, loss_dir, loss_iou
 
     @staticmethod
     def add_sin_difference(boxes1, boxes2):
@@ -376,7 +411,14 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         num_total_samples = (
             num_total_pos + num_total_neg if self.sampling else num_total_pos)
 
-        losses_cls, losses_bbox, losses_dir = multi_apply(
+        # Get IoU predictions from side channel (set during forward)
+        iou_preds = getattr(self, '_iou_preds', None)
+        if iou_preds is None:
+            iou_preds = [None] * len(cls_scores)
+        # Prepare per-level anchors for IoU decoding
+        anchor_levels = [a.reshape(-1, self.box_code_size) for a in anchor_list[0]] if anchor_list else [None] * len(cls_scores)
+
+        losses_cls, losses_bbox, losses_dir, losses_iou = multi_apply(
             self.loss_single,
             cls_scores,
             bbox_preds,
@@ -387,9 +429,14 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
             bbox_weights_list,
             dir_targets_list,
             dir_weights_list,
+            iou_pred=iou_preds,
+            anchors=anchor_levels,
             num_total_samples=num_total_samples)
-        return dict(
+        loss_dict = dict(
             loss_cls=losses_cls, loss_bbox=losses_bbox, loss_dir=losses_dir)
+        if any(l is not None for l in losses_iou):
+            loss_dict['loss_iou'] = losses_iou
+        return loss_dict
 
     def get_bboxes(self,
                    cls_scores,
@@ -397,7 +444,8 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                    dir_cls_preds,
                    input_metas,
                    cfg=None,
-                   rescale=False):
+                   rescale=False,
+                   iou_preds=None):
         """Get bboxes of anchor head.
 
         Args:
@@ -434,9 +482,16 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                 dir_cls_preds[i][img_id].detach() for i in range(num_levels)
             ]
             input_meta = input_metas[img_id]
+            # Extract per-image IoU predictions
+            iou_pred_list = None
+            if iou_preds is not None and iou_preds[0] is not None:
+                iou_pred_list = [
+                    iou_preds[i][img_id].detach() for i in range(num_levels)
+                ]
             proposals = self.get_bboxes_single(cls_score_list, bbox_pred_list,
                                                dir_cls_pred_list, mlvl_anchors,
-                                               input_meta, cfg, rescale)
+                                               input_meta, cfg, rescale,
+                                               iou_pred=iou_pred_list)
             result_list.append(proposals)
         return result_list
 
@@ -473,8 +528,12 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         mlvl_bboxes = []
         mlvl_scores = []
         mlvl_dir_scores = []
-        for cls_score, bbox_pred, dir_cls_pred, anchors in zip(
-                cls_scores, bbox_preds, dir_cls_preds, mlvl_anchors):
+        if iou_pred is not None:
+            iou_pred_levels = iou_pred
+        else:
+            iou_pred_levels = [None] * len(cls_scores)
+        for cls_score, bbox_pred, dir_cls_pred, anchors, iou_pred_level in zip(
+                cls_scores, bbox_preds, dir_cls_preds, mlvl_anchors, iou_pred_levels):
             assert cls_score.size()[-2:] == bbox_pred.size()[-2:]
             assert cls_score.size()[-2:] == dir_cls_pred.size()[-2:]
             dir_cls_pred = dir_cls_pred.permute(1, 2, 0).reshape(-1, 2)
@@ -489,6 +548,11 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
 
             bbox_pred = bbox_pred.permute(1, 2,
                                           0).reshape(-1, self.box_code_size)
+
+            # Apply IoU-aware quality score
+            if iou_pred_level is not None:
+                iou_flat = iou_pred_level.permute(1, 2, 0).reshape(-1, 1)
+                scores = scores * iou_flat
 
             nms_pre = cfg.get('nms_pre', -1)
             if nms_pre > 0 and scores.shape[0] > nms_pre:
