@@ -68,7 +68,8 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                  loss_bbox=dict(
                      type='SmoothL1Loss', beta=1.0 / 9.0, loss_weight=2.0),
                  loss_dir=dict(type='CrossEntropyLoss', loss_weight=0.2),
-                 init_cfg=None):
+                 init_cfg=None,
+                 **kwargs):
         super().__init__(init_cfg=init_cfg)
         self.in_channels = in_channels
         self.num_classes = num_classes
