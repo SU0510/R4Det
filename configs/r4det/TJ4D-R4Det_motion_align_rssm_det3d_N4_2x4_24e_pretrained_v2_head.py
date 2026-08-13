@@ -267,7 +267,7 @@ model = dict(
             type='FocalLoss',
             use_sigmoid=True,
             gamma=2.0,
-            alpha=[0.4, 0.25, 0.15, 0.2],  # Ped, Cyc, Car, Truck
+            alpha=0.25,  # TODO: per-class alpha requires custom FocalLoss (CUDA kernel only supports float)
             loss_weight=1.0),
         loss_bbox=dict(type='SmoothL1Loss', beta=1.0 / 9.0, loss_weight=2.0),
         loss_dir=dict(
