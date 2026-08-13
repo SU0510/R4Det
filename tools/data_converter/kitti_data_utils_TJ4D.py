@@ -505,7 +505,7 @@ def add_difficulty_to_annos(info):  # 根据图像内目标的高速和遮挡截
         elif is_hard[i]:
             diff.append(2)
         else:
-            diff.append(2)  ###buguolv
+            diff.append(-1)  ###buguolv
     annos['difficulty'] = np.array(diff, np.int32)
     return diff
 
