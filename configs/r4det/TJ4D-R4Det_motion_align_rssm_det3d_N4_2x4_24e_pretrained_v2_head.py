@@ -428,7 +428,7 @@ data = dict(
 
 # Training settings
 lr = 0.00015
-max_epochs = 30
+max_epochs = 24
 optimizer = dict(type='AdamW', lr=lr, betas=(0.95, 0.99), weight_decay=0.01)
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 runner = dict(type='EpochBasedRunner', max_epochs=max_epochs)
@@ -440,14 +440,14 @@ lr_config = dict(
     min_lr_ratio=1e-5)
 momentum_config = None
 
-# KL scale warm-up: kl_scale linearly increases from 0 to 1.0 over epochs 0-8.
+# KL scale warm-up: kl_scale linearly increases from 0 to 1.0 over epochs 0-10.
 # Prior has zero KL gradient when kl_scale=0, letting posterior/detector stabilise
 # before the KL term forces prior to match posterior.
 custom_hooks = [
     dict(
         type='KLScaleSchedulerHook',
         start_epoch=0,
-        end_epoch=12,
+        end_epoch=10,
         start_value=0.0,
         end_value=1.0,
     ),
