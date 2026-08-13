@@ -302,7 +302,9 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         loss_iou = None
         if iou_pred is not None and num_pos > 0:
             with torch.no_grad():
-                pos_anchors = anchors[pos_inds]
+                # anchors is per-image; pos_inds are batch-level. All images share same anchor layout, so use modulo.
+                num_anchors_per_img = anchors.size(0)
+                pos_anchors = anchors[pos_inds % num_anchors_per_img]
                 # Decode predicted and target boxes
                 pos_pred_boxes = self.bbox_coder.decode(pos_anchors, pos_bbox_pred)
                 pos_gt_boxes = self.bbox_coder.decode(pos_anchors, pos_bbox_targets)
