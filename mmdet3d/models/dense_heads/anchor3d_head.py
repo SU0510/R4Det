@@ -183,7 +183,6 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
             first_feat = feats[0]
 
         if self.use_iou_branch:
-            # Compute iou_preds via side channel to keep API compatible
             self._iou_preds = [self.conv_iou(f).sigmoid() for f in feats]
 
         return multi_apply(self.forward_single, feats)
@@ -447,8 +446,7 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                    dir_cls_preds,
                    input_metas,
                    cfg=None,
-                   rescale=False,
-                   iou_preds=None):
+                   rescale=False):
         """Get bboxes of anchor head.
 
         Args:
@@ -485,16 +483,9 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                 dir_cls_preds[i][img_id].detach() for i in range(num_levels)
             ]
             input_meta = input_metas[img_id]
-            # Extract per-image IoU predictions
-            iou_pred_list = None
-            if iou_preds is not None and iou_preds[0] is not None:
-                iou_pred_list = [
-                    iou_preds[i][img_id].detach() for i in range(num_levels)
-                ]
             proposals = self.get_bboxes_single(cls_score_list, bbox_pred_list,
                                                dir_cls_pred_list, mlvl_anchors,
-                                               input_meta, cfg, rescale,
-                                               iou_pred=iou_pred_list)
+                                               input_meta, cfg, rescale)
             result_list.append(proposals)
         return result_list
 
@@ -531,12 +522,8 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         mlvl_bboxes = []
         mlvl_scores = []
         mlvl_dir_scores = []
-        if iou_pred is not None:
-            iou_pred_levels = iou_pred
-        else:
-            iou_pred_levels = [None] * len(cls_scores)
-        for cls_score, bbox_pred, dir_cls_pred, anchors, iou_pred_level in zip(
-                cls_scores, bbox_preds, dir_cls_preds, mlvl_anchors, iou_pred_levels):
+        for cls_score, bbox_pred, dir_cls_pred, anchors in zip(
+                cls_scores, bbox_preds, dir_cls_preds, mlvl_anchors):
             assert cls_score.size()[-2:] == bbox_pred.size()[-2:]
             assert cls_score.size()[-2:] == dir_cls_pred.size()[-2:]
             dir_cls_pred = dir_cls_pred.permute(1, 2, 0).reshape(-1, 2)
@@ -552,10 +539,7 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
             bbox_pred = bbox_pred.permute(1, 2,
                                           0).reshape(-1, self.box_code_size)
 
-            # Apply IoU-aware quality score
-            if iou_pred_level is not None:
-                iou_flat = iou_pred_level.permute(1, 2, 0).reshape(-1, 1)
-                scores = scores * iou_flat
+
 
             nms_pre = cfg.get('nms_pre', -1)
             if nms_pre > 0 and scores.shape[0] > nms_pre:
