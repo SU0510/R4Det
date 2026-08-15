@@ -473,3 +473,99 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
   3. Pedestrian strict: needs detection head / loss function fix (all-run issue)
   4. Velocity signal injection: switch from action_dim=0 to using ego velocity from dataset
   5. Ablate pretrained depth_net vs image backbone contributions separately
+
+
+---
+
+## 10. N=4 Pretrained RSSM + Detection Head v2 (24e)
+
+> Branch: `detection_head_v2`。基于 Run 9 配置（N4, hdim=128, pretrained backbone），**唯一改动是检测头 Anchor3DHead**。
+> 时序模块、backbone、pretrained 权重、评估口径与 Run 9 完全一致，因此 Run 10 vs Run 9 是干净的「检测头消融」。
+>
+> 检测头改动（4 项，3 项生效）：
+> 1. **行人 3 anchors**：anchor 组 4→6，Ped×3 + Cyc/Car/Truck 各 1，`anchor_class_mapping=[0,0,0,1,2,3]`
+> 2. **行人关闭方向分类**：`ignore_dir_classes=[0]`
+> 3. **IoU-aware quality 分支**：`use_iou_branch=True`，训练期给 L1 回归信号，推理不打分（避免与 N 帧 RSSM 前向冲突）
+> 4. ~~per-class FocalLoss alpha~~ 已回退 `alpha=0.25`（CUDA kernel 只支持 float）
+>
+> 24 epochs，samples_per_gpu=4，lr=1.5e-4（CosineAnnealing），grad_accum=2，`load_from=pretrained_tj4d.pth`，**`checkpoint_interval=2`（注意：奇数 epoch 不存）**。
+
+### Run 10: N=4 Pretrained RSSM + head-v2
+
+- config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head.py`
+- work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head`
+- **BEST overall: ep11 = 40.60** ⚠️ 未存（奇数 epoch，interval=2）
+- **BEST SAVED overall: ep14 = 39.65**
+- **Car strict BEST: ep20 = 53.04（已存）**
+- LAST: ep24 = 38.76
+
+### 10.1 Epoch curve: Overall 3D_moderate
+
+| ep | mod | ep | mod | ep | mod |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 17.11 | 9 | 37.97 | 17 | 35.64 ⬇ |
+| 2 | 23.29 | 10 | 36.47 | 18 | 39.03 ⬆ |
+| 3 | 26.52 | 11 | **40.60** | 19 | 38.77 |
+| 4 | 33.17 | 12 | 39.26 | 20 | 38.50 |
+| 5 | 34.63 | 13 | 39.03 | 21 | 38.78 |
+| 6 | 35.44 | 14 | 39.65 | 22 | 38.14 |
+| 7 | 36.92 | 15 | 38.97 | 23 | 38.34 |
+| 8 | 35.38 | 16 | 38.40 | 24 | 38.76 |
+
+- **ep11 冲到 40.60 全场峰值**，ep12–16 在 38.4–39.7 高位震荡；ep17 突发断崖到 35.64（Car 52→47，验证集偶发抖动），ep18 立即拉回 39.03，之后 ep18–24 稳定在 38.1–38.8 平台。
+- **峰在 ep11（40.60），但 interval=2 导致 ep11 权重未落盘**，这是本轮唯一的实质损失。
+
+### 10.2 BEST vs LAST
+
+| Metric | BEST | epoch | LAST (ep24) |
+|---|---:|---:|---:|
+| Overall 3D_moderate | **40.60** | 11 (未存) | 38.76 |
+| Overall 3D_moderate（已存） | **39.65** | 14 | 38.76 |
+| Overall 3D_easy | 42.49 | 15 | 40.73 |
+| Overall 3D_hard | 39.06 | 11 | 37.42 |
+| Overall BEV_moderate | 48.70 | 13 | 46.66 |
+| Car 3D_mod_strict | **53.04** | 20 | 51.80 |
+| Cyclist 3D_mod_strict | 25.41 | 8 | 23.62 |
+| Pedestrian 3D_mod_strict | 0.42 | 2 | 0.08 |
+| Truck 3D_mod_strict | 33.23 | 11 | 26.26 |
+
+### 10.3 vs Run 9（同 base，唯一差异=检测头）
+
+| Metric | Run 9 BEST (ep19) | Run 10 BEST | Run 10 已存 best | Δ (BEST) |
+|---|---:|---:|---:|---:|
+| Overall 3D_moderate | 37.94 | **40.60** (ep11) | 39.65 (ep14) | **+2.66 / +1.71** |
+| Overall 3D_easy | 40.80 | **42.49** (ep15) | 41.58 (ep14) | +1.69 |
+| Overall 3D_hard | 36.41 | **39.06** (ep11) | 38.14 (ep14) | +2.65 |
+| Overall BEV_moderate | 43.17 | **48.70** (ep13) | 47.50 (ep14) | +5.53 |
+| Car 3D_mod_strict | 48.96 | **53.04** (ep20) | 53.04 (ep20) | **+4.08** |
+| Cyclist 3D_mod_strict | 25.05 | 25.41 (ep8) | 24.59 (ep21) | +0.36 |
+| Pedestrian 3D_mod_strict | 0.07 | 0.42 (ep2) | 0.14 (ep20) | 噪声级 |
+| Truck 3D_mod_strict | 33.31 | 33.23 (ep11) | 30.26 (ep14) | −0.08 |
+
+### 10.4 Per-class loose（召回口径，0.25 IoU）
+
+| Metric | Run 9 BEST | Run 10 BEST | Δ |
+|---|---:|---:|---:|
+| Car 3D_mod_loose | 65.25 | **73.96** (ep12) | **+8.71** |
+| Cyclist 3D_mod_loose | 41.43 | **52.75** (ep12) | **+11.32** |
+| Pedestrian 3D_mod_loose | 28.07 | 28.74 (ep10) | +0.67 |
+| Truck 3D_mod_loose | 47.94 | **53.16** (ep18) | **+5.22** |
+
+### 10.5 Key findings
+
+1. **检测头改动带来明确正向收益**：Overall 3D_moderate +1.71（已存 ep14）/ +2.66（峰值 ep11），BEV 口径 +5.53。Car strict 刷到 **53.04**，全库历史最高，超 Run 9 达 +4.08。
+2. **loose（召回）口径全面提升**：Car +8.71、Cyclist +11.32、Truck +5.22。来源是多 anchor + `anchor_class_mapping` + IoU-proxy 训练信号共同改善了共享检测头特征与打分质量；Car/Cyclist/Truck 仍各只有 1 个 anchor，说明提升是「共享头标定变好」，不是简单加 anchor。
+3. **Pedestrian strict 依旧 ≈ 0**：3 组行人 anchor 只让 loose 微涨（+0.67）、strict 在 0.08–0.42 的噪声带内横跳。**证实瓶颈是 BEV 0.16m 分辨率 + 点云稀疏（行人仅 ~15 cell），不是 anchor 数量**，与上轮判断一致。
+4. **Truck strict 持平（33.2 vs 33.3）但 loose +5.22**：召回上去了、定位没上去，**证实短货车(2.8m)到半挂(25.5m)的巨大尺寸方差 + 单 anchor 才是 Truck 瓶颈**，与尺寸方差分析吻合。
+5. **Cyclist strict 几乎没动（25.4 vs 25.1）**：`ignore_dir_classes=[0]` 只关了行人方向分类，未伤及 Cyclist；但也没带来骑行者 strict 提升。
+6. ⚠️ **`checkpoint_interval=2` 丢掉了本轮的峰值 checkpoint**（ep11=40.60 只存在于日志）。下一轮必须改成 `interval=1`（或加 `max_keep_ckpts`），否则奇数 epoch 的峰值还会再次丢失。
+
+### 10.6 Conclusions / Next
+
+- **head-v2 是当前最强模型**：已存最优 ep14（Overall 39.65）+ 新纪录 Car strict ep20（53.04）。按需选点：看 Overall 用 ep14，看 Car 单项用 ep20。
+- 检测头这一刀砍对了方向，但它主要救了 Car / 召回，**没解决 Ped strict 和 Truck strict 两个真正的硬骨头**。
+- 下一步优先级：
+  1. **Truck 多 anchor**（van/标准货/半挂 3 组）——直接打当前最大的 strict 差距（Truck 26~33 vs Car 52），零替代风险；
+  2. `checkpoint_interval=1` 必修，避免再丢峰值；
+  3. Pedestrian 需跳出 anchor 层——BEV 分辨率 / 点云稠密化 / point-based 头，才是真正杠杆；
+  4. Cyclist：loose 已大涨，strict 未跟上，可考虑骑行者专属 size/增强。
