@@ -572,3 +572,86 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
   2. `checkpoint_interval=1` 必修，避免再丢峰值；
   3. Pedestrian 需跳出 anchor 层——BEV 分辨率 / 点云稠密化 / point-based 头，才是真正杠杆；
   4. Cyclist：loose 已大涨，strict 未跟上，可考虑骑行者专属 size/增强。
+
+---
+
+## 11. N=4 Pretrained RSSM + head-v2 + Truck 多 anchor (24e)
+
+> Branch: `detection_head_v2`。基于 Run 10 配置，**唯一改动是给 Truck 加 3 组 anchor**（其余时序/backbone/pretrain/评估口径与 Run 10 完全一致）。
+> Truck anchor 来源：训练集 k-means（`[w,l,h]`）：短货车 `[2.50, 6.72, 2.36]`、标准货车 `[3.81, 9.96, 2.66]`、长半挂 `[4.09, 17.88, 3.08]`。
+> 同时把 `checkpoint_interval` 2→1，修复 Run 10 丢峰值的问题。
+
+### Run 11: N=4 Pretrained RSSM + head-v2 + Truck×3 anchor
+
+- config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_truck.py`
+- work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head_truck`
+- **BEST Overall: ep11 = 38.45（✅ 已存，interval=1 生效）**
+- **LAST: ep24 = 37.20**
+- Truck strict BEST: **35.03 @ep11（历史最高）**
+- Cyclist strict BEST: **27.11 @ep20（历史最高）**
+- Car strict BEST: 48.03 @ep18
+
+### 11.1 Epoch curve: Overall 3D_moderate
+
+| ep | mod | ep | mod | ep | mod |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 16.23 | 9 | 37.02 | 17 | 36.11 |
+| 2 | 22.68 | 10 | 34.91 | 18 | 37.97 |
+| 3 | 23.74 | 11 | **38.45** | 19 | 36.74 |
+| 4 | 32.03 | 12 | 36.29 | 20 | 37.28 |
+| 5 | 32.36 | 13 | 37.71 | 21 | 35.43 |
+| 6 | 33.27 | 14 | 37.35 | 22 | 35.88 |
+| 7 | 35.77 | 15 | 36.51 | 23 | 36.53 |
+| 8 | 33.65 | 16 | 37.50 | 24 | 37.20 |
+
+- 前期比 Run 10 慢（ep1 16.23 vs 17.11/E，ep2 22.68 vs 23.29），但 ep7 起追平，ep11 冲到峰值 38.45 后一直在 35.4–38.0 震荡，没有出现 Run 10 的 ep17 断崖。
+- **ep11 峰值全部落盘**，本轮没有 checkpoint 丢失问题。
+
+### 11.2 BEST vs LAST
+
+| Metric | BEST (ep11) | LAST (ep24) |
+|---|---:|---:|
+| Overall 3D_moderate | **38.45** | 37.20 |
+| Overall 3D_easy | 40.57 | 38.95 |
+| Overall 3D_hard | 36.90 | 35.74 |
+| Overall BEV_moderate | 45.10 | 43.78 |
+| Car 3D_mod_strict | 48.03 (ep18) | 44.91 |
+| Cyclist 3D_mod_strict | 27.11 (ep20) | 26.10 |
+| Pedestrian 3D_mod_strict | 0.28 (ep2) | 0.08 |
+| Truck 3D_mod_strict | 35.03 (ep11) | 30.46 |
+
+### 11.3 vs Run 10（同 base，唯一差异=Truck 多 anchor）
+
+| Metric | Run 10 BEST | Run 11 BEST | Δ |
+|---|---:|---:|---:|
+| Overall 3D_moderate | **40.60** (ep11) / 39.65 已存 | 38.45 (ep11) | **−2.15 / −1.20** |
+| Car 3D_mod_strict | **53.04** (ep20) | 48.03 (ep18) | **−5.01** ❌ |
+| Truck 3D_mod_strict | 33.23 (ep11) | **35.03** (ep11) | **+1.80** ✅ 历史最高 |
+| Cyclist 3D_mod_strict | 25.41 (ep8) | **27.11** (ep20) | **+1.70** ✅ 历史最高 |
+| Pedestrian 3D_mod_strict | 0.42 (ep2) | 0.28 (ep2) | 噪声级 |
+
+### 11.4 Per-class loose（召回口径，0.25 IoU）
+
+| Metric | Run 10 BEST | Run 11 BEST | Δ |
+|---|---:|---:|---:|
+| Car 3D_mod_loose | **73.96** (ep12) | 70.03 (ep13) | **−3.93** ❌ |
+| Cyclist 3D_mod_loose | **52.75** (ep12) | 48.25 (ep20) | **−4.50** ❌ |
+| Pedestrian 3D_mod_loose | 28.74 (ep10) | 29.71 (ep9) | +0.97 |
+| Truck 3D_mod_loose | 53.16 (ep18) | 52.38 (ep11) | −0.78 |
+
+### 11.5 Key findings
+
+1. **Truck 多 anchor 的目标达成了**：Truck strict 35.03，历史最高（此前 33.31 Run 9 / 33.23 Run 10），+1.80。Cyclist strict 也顺带涨到 27.11（历史最高）。
+2. **但代价是 Car 显著回吐**：Car strict −5.01（53.04→48.03），Car loose −3.93、Cyclist loose −4.50。因为 Car 占数据集 48.1%、主导 Overall，**Overall 反降 −1.2~−2.2**。
+3. **本质是"抢正样本"**：3 组 Truck 的 MaxIoU 分配器把更多 head 容量和正样本判给 Truck；标准货车 anchor `3.81×9.96` 与 Car 尺寸高度重叠，直接吃掉了 Car 的召回。属于拆东墙补西墙。
+4. **Truck 与 Car 的混淆是根子**，不是 anchor 数：Truck 长度谱 2.8–25.5m 且与 Car 重叠区大，加 anchor 只换来 +1.8 strict，付出了 −5 Car 的代价。
+5. Pedestrian strict 依旧在 0.03–0.28 噪声带内，与 anchor 无关（同上轮结论）。
+6. ✅ `checkpoint_interval=1` 生效，ep1–24 全部落盘，**峰值 ep11 保住了**——Run 10 的坑已补。
+
+### 11.6 Conclusions / Next
+
+- **这一轮是负收益**：以 Overall 指标为标准，Truck 多 anchor 不值得默认采用（−1.2 已存口径）。主模型仍应回退到 **Run 10 head-v2 ep14（39.65）** 或 ep20（Car strict 53.04）。
+- **除非指标权重明确偏向 Truck**，否则不要保留 Truck×3 anchor。若要保留 Truck 提升，可考虑：
+  1. Car 与 Truck 分离预测分支 / 类专属 head，避免共享 head 正样本互抢；
+  2. 先做 Car–Truck 混淆消融（类间 hard example 采样、尺寸先验），而不是继续加 anchor。
+- 真正没解决的两个硬骨头仍是 **Car–Truck 混淆**（Truck strict 35 vs Car strict 48）和 **Pedestrian strict ≈ 0**（BEV 分辨率/点云稀疏瓶颈）。
