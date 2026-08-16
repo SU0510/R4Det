@@ -79,6 +79,8 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         self.ignore_dir_classes = kwargs.get('ignore_dir_classes', [])
         self.anchor_class_mapping = kwargs.get('anchor_class_mapping', None)
         self.use_iou_branch = kwargs.get('use_iou_branch', False)
+        self.confusion_pairs = kwargs.get('confusion_pairs', None)
+        self.confusion_loss_weight = kwargs.get('confusion_loss_weight', 0.0)
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.assigner_per_size = assigner_per_size
@@ -238,6 +240,34 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         assert labels.max().item() <= self.num_classes
         loss_cls = self.loss_cls(
             cls_score, labels, label_weights, avg_factor=num_total_samples)
+
+        # Car<->Truck (or arbitrary class-pair) confusion suppression:
+        # on positive samples of class A, explicitly push class B's logit down
+        # (and vice versa). This targets hard false positives directly, instead
+        # of waiting for the plain per-class focal term to fix them.
+        if self.confusion_pairs is not None and self.confusion_loss_weight > 0:
+            loss_conf = cls_score.new_zeros(())
+            total_pairs = 0
+            for cls_a, cls_b in self.confusion_pairs:
+                mask_a = labels == cls_a
+                mask_b = labels == cls_b
+                n_a = int(mask_a.sum())
+                n_b = int(mask_b.sum())
+                if n_a > 0:
+                    loss_conf = loss_conf + F.binary_cross_entropy_with_logits(
+                        cls_score[mask_a, cls_b],
+                        cls_score.new_zeros(n_a),
+                        reduction='sum')
+                    total_pairs += n_a
+                if n_b > 0:
+                    loss_conf = loss_conf + F.binary_cross_entropy_with_logits(
+                        cls_score[mask_b, cls_a],
+                        cls_score.new_zeros(n_b),
+                        reduction='sum')
+                    total_pairs += n_b
+            if total_pairs > 0:
+                loss_conf = loss_conf / total_pairs
+            loss_cls = loss_cls + self.confusion_loss_weight * loss_conf
 
         # regression loss
         bbox_pred = bbox_pred.permute(0, 2, 3,
