@@ -48,9 +48,9 @@ class PillarFeatureNet(nn.Module):
                  with_cluster_center=True,
                  with_voxel_center=True,
                  voxel_size=(0.2, 0.2, 4),
-                 point_cloud_range=(0, -40, -3, 70.4, 40, 1),
-                 norm_cfg=dict(type='BN1d', eps=1e-3, momentum=0.01),
-                 mode='max',
+                          point_cloud_range=(0, -40, -3, 70.4, 40, 1),
+                          norm_cfg=dict(type='BN1d', eps=1e-3, momentum=0.01),
+                          mode='max',
                  legacy=True):
         super(PillarFeatureNet, self).__init__()
         assert len(feat_channels) > 0
@@ -478,11 +478,12 @@ class RadarPillarFeatureNet(nn.Module):
                  with_cluster_center=True,
                  with_voxel_center=True,
                  voxel_size=(0.2, 0.2, 4),
-                 point_cloud_range=(0, -40, -3, 70.4, 40, 1),
-                 norm_cfg=dict(type='BN1d', eps=1e-3, momentum=0.01),
-                 mode='max',
+        point_cloud_range=(0, -40, -3, 70.4, 40, 1),
+        norm_cfg=dict(type='BN1d', eps=1e-3, momentum=0.01),
+        mode='max',
                  legacy=True, ##  false为默认的
-                 with_velocity_snr_center=True):
+                 with_velocity_snr_center=True,
+                 dynamic_weight=0.0):
         super(RadarPillarFeatureNet, self).__init__()
         assert len(feat_channels) > 0
         self.legacy = legacy
@@ -498,6 +499,7 @@ class RadarPillarFeatureNet(nn.Module):
         self._with_cluster_center = with_cluster_center  # 点中心
         self._with_voxel_center = with_voxel_center  # voxel中心
         self._with_velocity_snr_center = with_velocity_snr_center
+        self.dynamic_weight = dynamic_weight
         self.fp16_enabled = False
         # Create PillarFeatureNet layers
         self.in_channels = in_channels
@@ -539,6 +541,21 @@ class RadarPillarFeatureNet(nn.Module):
         Returns:
             torch.Tensor: Features of pillars.
         """
+        # Optional 6th channel is the per-point dynamic score produced by
+        # `RadarStaticDynamicScore`. Consume it here as a soft mask over the
+        # velocity/SNR channels — keeping the pillar encoder input layout
+        # identical to the original 5-channel path (no index shift in
+        # PFNLayer_Radar). When absent, this is a no-op.
+        if features.shape[-1] == 6:
+            score = features[:, :, 5:6]
+            if self.dynamic_weight > 0:
+                gating = 1.0 + self.dynamic_weight * score
+                features = torch.cat(
+                    [features[:, :, :3], features[:, :, 3:5] * gating],
+                    dim=-1)
+            else:
+                features = features[:, :, :5]
+
         features_ls = [features]
         # Find distance of x, y, and z from cluster center
         if self._with_cluster_center:

@@ -177,7 +177,8 @@ model = dict(
         voxel_size=[voxel_size[0]/2, voxel_size[1]/2, voxel_size[2]],
         point_cloud_range=point_cloud_range,
         legacy=False,
-        with_velocity_snr_center=True),
+        with_velocity_snr_center=True,
+        dynamic_weight=1.0),
     pts_middle_encoder=dict(
         type='PointPillarsScatter', in_channels=64, output_shape=[bev_w_*2, bev_h_*2]),
     pts_backbone=dict(
