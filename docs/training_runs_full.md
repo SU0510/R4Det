@@ -736,3 +736,38 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 - 每个 epoch 的 Overall 最优 checkpoint 已保存为 Run 12 ep14；如果只关注 Car 单项，Run 12 ep14 的 Car strict 53.77 已是新纪录；综合指标仍回退到 **Run 10 head-v2 ep14（39.65）**。
 - anchor 床铺已经加到 Ped×3/Cyc×1/Car×2/Truck×3，继续加 anchor 预计收益会更低。下一步应转向解决共享 head 的 Car–Truck 争夺：优先验证仓库中已备好的 `confusion_pairs=[[2,3]]` 抑制 loss 配置（`_head_confuse.py`），或拆分 Car/Truck 专属分支。
 - 另一个未落入 Run 12 的改变是 Doppler static/dynamic mask（`_head_dynmask.py`），应在不混入 anchor 变量的前提下单独跑消融。
+
+## 13. Doppler 动静 mask 设计注记（未训练，待单变量消融）
+
+> Branch: `radar_static_dynamic`。基于 Run 10 最优配置（head-v2，无 anchor 变量），新增 `RadarStaticDynamicScore` 点云变换 + `RadarPillarFeatureNet` 的 soft-mask 门控，利用 4D 雷达自带的径向多普勒速度做「动/静」显式建模。config 为
+> `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_dynmask.py`。
+
+### 13.1 设计与数据流
+
+1. **点云变换 `RadarStaticDynamicScore`**（在 `loading.py`，置于任何旋转/缩放增广**之前**，保证方向向量与径向速度同处于传感器系）：
+   - 对每帧点云，用所有点的单位方向向量 `u` 对径向速度 `v_r` 做一次最小二乘拟合估计 ego 速度 `v_ego`（静态点满足 `v_r ≈ u @ v_ego`），再用内点（`|residual| < 0.5 m/s`）refit 一次以剔除运动目标；
+   - 目标点残余越大越「动」：`dynamic_score = 1 - exp(-(e / sigma)^2)`，作为第 6 通道拼接（`in_channels=6`）。
+2. **PFN 之前的 soft-mask 消费**（`pillar_encoder.py` 的 `RadarPillarFeatureNet.forward`）：
+   - 第 6 通道**不进入** 12 维 PFN 布局，而是在构建 PFN 输入前被消耗为门控：`gating = 1 + β · score`；
+   - **velocity-only 模式**（默认 `dynamic_mask_snr=False`）：只对第 3 维速度乘门控，SNR（第 4 维）不变。即 `[x, y, z, v·gating, snr]`；
+   - 可选 `dynamic_mask_snr=True` 时对 `[v, snr]` 同乘门控（更强但会稀释弱目标 SNR，当前默认关闭）。
+
+### 13.2 为什么必须是 velocity-only + β=0.5（设计取舍备忘）
+
+1. **先发现的硬 bug：6 通道不能直接进 PFN。** `PFNLayer_Radar` 硬编码了 12 维布局的索引 `[0..11]`（中心 x/y/z + 离群 x/y/z + 体素中心 x/y/z + v/snr 各一维）。若把原始 6 通道喂进 `RadarPillarFeatureNet`，会产出 13 维特征，既悄悄打乱 spatial/velocity/SNR 中心特征的顺序，又让 score 被误读成 cluster-x。因此 score 必须像上面一样在进 PFN 前消费掉，PFN 布局与**预训练权重零错位**。
+2. **先数据后拍板：对慢速目标（尤其行人）的稀释风险是真实存在的。** 在 80 个训练帧上把点投到 GT 3D 框里统计 dynamic_score：
+   - Pedestrian：mean 0.145 / **median 0.000** / 仅 15% 点 > 0.5 —— 行人基本是静止的，速度维没有可提取的运动信号；
+   - Car：mean 0.315 / median 0.169；
+   - Cyclist：mean 0.488 / median 0.50。
+
+   结论：如果对 SNR 或整体特征做门控，低速行人会在相对意义上被系统性压低，行人 3D 本来就难（strict 长期 0.1–0.31 噪声带），不可接受。
+3. **因此收敛到当前的保守版本**：
+   - `dynamic_mask_snr=False`：SNR 完全不动，只放大/保留速度维，弱回波行人的 SNR 不被蚕食；
+   - `dynamic_weight=0.5`（β），而不是 1.0：温和提升动目标速度显著性，避免大动态目标单点主导；
+   - `sigma=0.5`（而非默认 0.3）：让分数更平滑，中段速度不会一上来就饱和到 1。
+4. **开关语义**：`dynamic_weight=0.0` 或输入为 5 通道时整个分支是 identity no-op，作为同 config 的反向对照可以直接复用。
+
+### 13.3 待做
+
+- 单变量消融：本 config vs 同 config 但 `dynamic_weight=0.0`（即回到纯 Run 10 数据流）；对比 Overall、Car/Truck 混淆、Pedestrian 是否退化。
+- 后续可把 ego-velocity（拟合出的 `v_ego`）接入 RSSM `action_dim`，与 Doppler 点级 mask 正交。
