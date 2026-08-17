@@ -178,7 +178,7 @@ model = dict(
         point_cloud_range=point_cloud_range,
         legacy=False,
         with_velocity_snr_center=True,
-        dynamic_weight=1.0),
+        dynamic_weight=0.5),
     pts_middle_encoder=dict(
         type='PointPillarsScatter', in_channels=64, output_shape=[bev_w_*2, bev_h_*2]),
     pts_backbone=dict(
@@ -341,7 +341,7 @@ model = dict(
 # pipeline settings — simplified: removed 2D-related transforms
 train_pipeline = [
     dict(type='LoadPointsFromFile', coord_type='LIDAR', load_dim=8, use_dim=[0,1,2,3,5]),
-    dict(type='RadarStaticDynamicScore', velocity_dim=3, sigma=0.3, inlier_thr=0.5, min_points=10),
+    dict(type='RadarStaticDynamicScore', velocity_dim=3, sigma=0.5, inlier_thr=0.5, min_points=10),
     dict(type='LoadImageFromFile', to_float32=True),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True),
     dict(type='ImageAug3D2', data_aug_conf=ida_aug_conf, is_train=True),
@@ -364,7 +364,7 @@ train_pipeline = [
 ]
 test_pipeline = [
     dict(type='LoadPointsFromFile', coord_type='LIDAR', load_dim=8, use_dim=[0,1,2,3,5]),
-    dict(type='RadarStaticDynamicScore', velocity_dim=3, sigma=0.3, inlier_thr=0.5, min_points=10),
+    dict(type='RadarStaticDynamicScore', velocity_dim=3, sigma=0.5, inlier_thr=0.5, min_points=10),
     dict(type='LoadImageFromFile', to_float32=True),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True),
     dict(type='ImageAug3D2', data_aug_conf=ida_aug_conf, is_train=False),

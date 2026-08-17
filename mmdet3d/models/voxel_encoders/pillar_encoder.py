@@ -483,7 +483,8 @@ class RadarPillarFeatureNet(nn.Module):
         mode='max',
                  legacy=True, ##  false为默认的
                  with_velocity_snr_center=True,
-                 dynamic_weight=0.0):
+                 dynamic_weight=0.0,
+                 dynamic_mask_snr=False):
         super(RadarPillarFeatureNet, self).__init__()
         assert len(feat_channels) > 0
         self.legacy = legacy
@@ -500,6 +501,7 @@ class RadarPillarFeatureNet(nn.Module):
         self._with_voxel_center = with_voxel_center  # voxel中心
         self._with_velocity_snr_center = with_velocity_snr_center
         self.dynamic_weight = dynamic_weight
+        self.dynamic_mask_snr = dynamic_mask_snr
         self.fp16_enabled = False
         # Create PillarFeatureNet layers
         self.in_channels = in_channels
@@ -543,16 +545,19 @@ class RadarPillarFeatureNet(nn.Module):
         """
         # Optional 6th channel is the per-point dynamic score produced by
         # `RadarStaticDynamicScore`. Consume it here as a soft mask over the
-        # velocity/SNR channels — keeping the pillar encoder input layout
-        # identical to the original 5-channel path (no index shift in
-        # PFNLayer_Radar). When absent, this is a no-op.
+        # velocity channel (SNR left untouched so slow/small objects such as
+        # pedestrians are never relatively diluted). When absent, no-op.
         if features.shape[-1] == 6:
             score = features[:, :, 5:6]
             if self.dynamic_weight > 0:
                 gating = 1.0 + self.dynamic_weight * score
-                features = torch.cat(
-                    [features[:, :, :3], features[:, :, 3:5] * gating],
-                    dim=-1)
+                if self.dynamic_mask_snr:
+                    v_snr = features[:, :, 3:5] * gating
+                else:
+                    v_snr = torch.cat(
+                        [features[:, :, 3:4] * gating, features[:, :, 4:5]],
+                        dim=-1)
+                features = torch.cat([features[:, :, :3], v_snr], dim=-1)
             else:
                 features = features[:, :, :5]
 
