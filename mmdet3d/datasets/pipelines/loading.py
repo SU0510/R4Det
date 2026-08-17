@@ -696,7 +696,9 @@ class RadarStaticDynamicScore(object):
         """Compute dynamic score for a numpy array of shape (N, >=4)."""
         n = arr.shape[0]
         if n < self.min_points:
-            return np.full(n, 0.5, dtype=arr.dtype)
+            # Too few points to fit the ego velocity. "Unknown" must be a
+            # no-op (score=0 -> gating=1) so sparse frames are not biased.
+            return np.zeros(n, dtype=arr.dtype)
 
         xyz = arr[:, :3].astype(np.float64)
         v = arr[:, self.velocity_dim].astype(np.float64)
