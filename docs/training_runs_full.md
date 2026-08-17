@@ -766,6 +766,11 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
    - `dynamic_weight=0.5`（β），而不是 1.0：温和提升动目标速度显著性，避免大动态目标单点主导；
    - `sigma=0.5`（而非默认 0.3）：让分数更平滑，中段速度不会一上来就饱和到 1。
 4. **开关语义**：`dynamic_weight=0.0` 或输入为 5 通道时整个分支是 identity no-op，作为同 config 的反向对照可以直接复用。
+5. **`pts_voxel_encoder.in_channels=6` 要保留，不要「顺手优化成 5」**：
+   - `RadarPillarFeatureNet.__init__` 用这个值做装饰通道计数，会得到 `self.in_channels=13`；但 `PFNLayer_Radar` 的 forward 用的是**硬编码** `linear1(8→32)/linear2(2→16)/linear3(2→16)` 与 `index_select([0,1,2,5,6,7,8,9] / [3,10] / [4,11])`，完全不读 `self.in_channels`——所以 13 vs 12 无 runtime 差异，预训练权重照常匹配（形状都是 8/2/2）。
+   - 而 `R4Det.pts_dim = kwargs['pts_voxel_encoder']['in_channels']` 需要「原始点 = 6 通道」这个真值，所以 `in_channels=6` 对这条路径才是对的；当前 `use_sa_radarnet=False` 使这几处 `pts_dim` 成为死代码，但语义要保留正确。
+   - 结论：保持 `in_channels=6`。改成 5 会在将来启用 voxelpainting/`use_sa_radarnet` 时把 `pts_dim` 算错。
+6. **稀疏帧 fallback 已修**：`n < min_points(10)` 时原返回 `score=0.5`（整帧 velocity 被统一 ×1.25），改为 `score=0.0`（`gating=1`，identity）——「分不清动/静」应退回 baseline 而不是施加偏置，与 velocity-only 的保守原则一致。
 
 ### 13.3 待做
 
