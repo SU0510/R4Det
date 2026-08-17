@@ -658,6 +658,96 @@ class LoadPointsFromFile(object):
 
 
 @PIPELINES.register_module()
+class RadarStaticDynamicScore(object):
+    """Append a per-point static/dynamic score derived from Doppler velocity.
+
+    For 4D radar, each point carries a radial Doppler velocity ``v_r``. For a
+    static point, ``v_r ≈ u @ v_ego`` where ``u`` is the unit direction vector
+    and ``v_ego`` is the ego-velocity; for a moving object the residual
+    ``e = v_r - u @ v_ego`` is large. A robust least-squares fit estimates
+    ``v_ego`` from all points (then refits once using inliers), and appends
+    ``dynamic_score = 1 - exp(-(e / sigma)^2)`` as an extra channel.
+
+    This transform must be called BEFORE any coordinate augmentation
+    (rotation/scaling) so that ``u`` and ``v_r`` remain in the same sensor
+    frame.
+
+    Args:
+        velocity_dim (int): Index of the radial Doppler velocity in the loaded
+            point tensor. Defaults to 3 (after ``use_dim=[0,1,2,3,5]``).
+        sigma (float): Scale of the soft static/dynamic score. Defaults to 0.3.
+        inlier_thr (float): Residual threshold (m/s) for the inlier refit.
+            Defaults to 0.5.
+        min_points (int): Minimum number of valid points to attempt the fit.
+            Defaults to 10.
+    """
+
+    def __init__(self,
+                 velocity_dim=3,
+                 sigma=0.3,
+                 inlier_thr=0.5,
+                 min_points=10):
+        self.velocity_dim = velocity_dim
+        self.sigma = sigma
+        self.inlier_thr = inlier_thr
+        self.min_points = min_points
+
+    def _compute_score(self, arr):
+        """Compute dynamic score for a numpy array of shape (N, >=4)."""
+        n = arr.shape[0]
+        if n < self.min_points:
+            return np.full(n, 0.5, dtype=arr.dtype)
+
+        xyz = arr[:, :3].astype(np.float64)
+        v = arr[:, self.velocity_dim].astype(np.float64)
+        r = np.linalg.norm(xyz, axis=1)
+        u = xyz / np.clip(r[:, None], 1e-3, None)
+
+        # first fit on all points
+        v_ego, *_ = np.linalg.lstsq(u, v, rcond=None)
+        residual = v - u @ v_ego
+
+        # one inlier-refinement pass to reject moving objects
+        inliers = np.abs(residual) < self.inlier_thr
+        if int(inliers.sum()) >= self.min_points:
+            v_ego2, *_ = np.linalg.lstsq(u[inliers], v[inliers], rcond=None)
+            residual = v - u @ v_ego2
+
+        score = 1.0 - np.exp(-(residual / self.sigma) ** 2)
+        return score.astype(arr.dtype)
+
+    def __call__(self, results):
+        if 'points' not in results:
+            return results
+        pts = results['points']
+        tensor = pts.tensor
+
+        if torch.is_tensor(tensor):
+            arr = tensor.detach().cpu().numpy()
+            score = self._compute_score(arr)
+            new_tensor = torch.cat(
+                [tensor, tensor.new_tensor(score[:, None])], dim=1)
+        else:
+            arr = np.asarray(tensor)
+            score = self._compute_score(arr)
+            new_tensor = np.concatenate([arr, score[:, None]], axis=1)
+
+        pts_cls = type(pts)
+        new_pts = pts_cls(
+            new_tensor,
+            points_dim=new_tensor.shape[-1],
+            attribute_dims=pts.attribute_dims)
+        results['points'] = new_pts
+        return results
+
+    def __repr__(self):
+        return (f'{self.__class__.__name__}('
+                f'velocity_dim={self.velocity_dim}, '
+                f'sigma={self.sigma}, '
+                f'inlier_thr={self.inlier_thr})')
+
+
+@PIPELINES.register_module()
 class LoadPointsFromDict(LoadPointsFromFile):
     """Load Points From Dict."""
 
