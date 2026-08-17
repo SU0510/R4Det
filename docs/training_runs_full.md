@@ -655,3 +655,84 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
   1. Car 与 Truck 分离预测分支 / 类专属 head，避免共享 head 正样本互抢；
   2. 先做 Car–Truck 混淆消融（类间 hard example 采样、尺寸先验），而不是继续加 anchor。
 - 真正没解决的两个硬骨头仍是 **Car–Truck 混淆**（Truck strict 35 vs Car strict 48）和 **Pedestrian strict ≈ 0**（BEV 分辨率/点云稀疏瓶颈）。
+
+---
+
+## 12. N=4 Pretrained RSSM + head-v2 + Car-large + Truck×3 anchor (24e)
+
+> Branch: `detection_head_v2`。基于 Run 11 配置，**唯一改动是给 Car 增加一组大 anchor**（标准 Car `1.84×4.56×1.70` + Car-large/SUV/van `1.94×5.07×2.02`），即 anchor 构成从 Run 11 的 Ped×3/Cyc×1/Car×1/Truck×3 变为 **Ped×3/Cyc×1/Car×2/Truck×3**。
+> 时序模块、pretrained backbone、训练 schedule、评估口径与 Run 11 完全一致，因此 Run 12 vs Run 11 是干净的「Car-large anchor」消融。`checkpoint_interval=1`，所有 epoch 已落盘。
+
+### Run 12: N=4 Pretrained RSSM + head-v2 + Car×2 + Truck×3 anchor
+
+- config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_truck_car2.py`
+- work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head_truck_car2`
+- **BEST Overall: ep14 = 38.11（✅ 已存）**
+- **LAST: ep24 = 35.73**
+- Car strict BEST: **53.77 @ep14（历史最高）**
+- Truck strict BEST: 29.05 @ep20
+- Cyclist strict BEST: 23.81 @ep8
+
+### 12.1 Epoch curve: Overall 3D_moderate
+
+| ep | mod | ep | mod | ep | mod |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 15.20 | 9 | 35.64 | 17 | 34.60 |
+| 2 | 19.43 | 10 | 33.77 | 18 | 35.65 |
+| 3 | 22.81 | 11 | 36.87 | 19 | 36.35 |
+| 4 | 31.31 | 12 | 37.79 | 20 | 35.92 |
+| 5 | 31.84 | 13 | 37.04 | 21 | 36.00 |
+| 6 | 31.12 | 14 | **38.11** | 22 | 35.15 |
+| 7 | 34.99 | 15 | 36.78 | 23 | 35.57 |
+| 8 | 34.19 | 16 | 35.52 | 24 | 35.73 |
+
+- 起点明显偏低（ep1=15.20，低于 Run 10 的 17.11 和 Run 11 的 16.23），但 ep4 追到 31.31，ep12–14 升到 37.8–38.1 平台。
+- 峰值出现在 ep14（38.11），之后 34.6–36.4 震荡，没有再突破峰值；整体曲线波动比 Run 10 更平缓，没有 ep17 断崖。
+
+### 12.2 BEST vs LAST
+
+| Metric | BEST | epoch | LAST (ep24) |
+|---|---:|---:|---:|
+| Overall 3D_moderate | **38.11** | 14 | 35.73 |
+| Overall 3D_easy | 39.99 | 14 | 37.83 |
+| Overall 3D_hard | 36.71 | 14 | 34.37 |
+| Overall BEV_moderate | 46.34 | 14 | 43.49 |
+| Car 3D_mod_strict | 53.77 | 14 | 49.05 |
+| Cyclist 3D_mod_strict | 23.81 | 8 | 20.49 |
+| Pedestrian 3D_mod_strict | 0.31 | 17 | 0.16 |
+| Truck 3D_mod_strict | 29.05 | 20 | 27.16 |
+
+### 12.3 vs Run 11（同 base，唯一差异=Car-large anchor）
+
+| Metric | Run 11 BEST | Run 12 BEST | Δ |
+|---|---:|---:|---:|
+| Overall 3D_moderate | **38.45** (ep11) | 38.11 (ep14) | **−0.34** |
+| Car 3D_mod_strict | 48.03 (ep18) | **53.77** (ep14) | **+5.74** ✅ 历史最高 |
+| Truck 3D_mod_strict | **35.03** (ep11) | 29.05 (ep20) | **−5.98** ❌ |
+| Cyclist 3D_mod_strict | **27.11** (ep20) | 23.81 (ep8) | **−3.30** ❌ |
+| Pedestrian 3D_mod_strict | 0.28 (ep2) | 0.31 (ep17) | +0.03（噪声级） |
+
+### 12.4 Per-class loose（召回口径，0.25 IoU）
+
+| Metric | Run 11 BEST | Run 12 BEST | Δ |
+|---|---:|---:|---:|
+| Car 3D_mod_loose | 70.03 (ep13) | **74.33** (ep13) | **+4.30** ✅ 历史最高 |
+| Cyclist 3D_mod_loose | **48.25** (ep20) | 47.98 (ep8) | −0.27 |
+| Pedestrian 3D_mod_loose | 29.71 (ep9) | 29.44 (ep21) | −0.27 |
+| Truck 3D_mod_loose | **52.38** (ep11) | 51.85 (ep20) | −0.53 |
+
+### 12.5 Key findings
+
+1. **Car-large anchor 对 Car 非常有效**：Car strict 53.77（ep14）刷新历史最高，超过 Run 10 的 53.04（ep20）+0.73；Car loose 74.33（ep13）也超过 Run 10 的 73.96 +0.37。Run 11 被 Truck anchor 吃掉的那部分 Car 基本抢回来了。
+2. **但共享检测头继续零和博弈**：Truck strict 从 Run 11 峰值 35.03 回落到 29.05（−5.98），Run 11 拿到的 Truck 增益几乎全部还回去；Cyclist strict 也从 27.11 退到 23.81（−3.30）。
+3. **Overall 不升反微降**：38.11 vs Run 11 38.45（−0.34），并且仍比 Run 10 已存 ep14 39.65 低 **−1.54**。Car 类占比最大，但对 Overall 的贡献被 Truck/Cyclist 回吐抵消。
+4. **Car-Truck 的根因不是 anchor 数量**：三轮 anchor 调整的结果都是拆东墙补西墙；共享 head 中 max-IoU 正样本分配像跷跷板，重划给 Car 的容量会从 Truck 抢回正样本，反之亦然。
+5. Pedestrian strict 依然在 0.10–0.31 的噪声带内，anchor 数量继续被证明不是行人 3D strict 的瓶颈。
+6. ✅ `checkpoint_interval=1` 继续生效，ep1–24 全部落盘，峰值 ep14 已保存。
+
+### 12.6 Conclusions / Next
+
+- **本轮仍是负收益**：Car-large anchor 单独使用能救 Car，但会牺牲 Truck/Cyclist，Overall 没有超过 Run 11，更低于 Run 10 已存最优。
+- 每个 epoch 的 Overall 最优 checkpoint 已保存为 Run 12 ep14；如果只关注 Car 单项，Run 12 ep14 的 Car strict 53.77 已是新纪录；综合指标仍回退到 **Run 10 head-v2 ep14（39.65）**。
+- anchor 床铺已经加到 Ped×3/Cyc×1/Car×2/Truck×3，继续加 anchor 预计收益会更低。下一步应转向解决共享 head 的 Car–Truck 争夺：优先验证仓库中已备好的 `confusion_pairs=[[2,3]]` 抑制 loss 配置（`_head_confuse.py`），或拆分 Car/Truck 专属分支。
+- 另一个未落入 Run 12 的改变是 Doppler static/dynamic mask（`_head_dynmask.py`），应在不混入 anchor 变量的前提下单独跑消融。
