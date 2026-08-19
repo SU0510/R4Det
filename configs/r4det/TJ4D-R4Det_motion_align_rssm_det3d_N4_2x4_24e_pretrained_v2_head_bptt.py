@@ -386,7 +386,7 @@ eval_pipeline = test_pipeline
 
 # dataset settings
 data = dict(
-    samples_per_gpu=4,
+    samples_per_gpu=3,
     workers_per_gpu=2,
     train=dict(
         type='RepeatDataset',
