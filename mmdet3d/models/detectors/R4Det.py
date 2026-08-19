@@ -182,6 +182,7 @@ class R4Det(MVXFasterRCNN):
                  instance_feature_fusion_layer=None,
                  temporal_fusion=None,
                  seq_len=2,
+                 rssm_bptt_steps=1,
                  **kwargs):
         super(R4Det, self).__init__(train_cfg=train_cfg, test_cfg=test_cfg, **kwargs)
         HEADS.module_dict['StandardRoIHead'] = StandardRoIHead
@@ -246,6 +247,10 @@ class R4Det(MVXFasterRCNN):
         self.project_name = meta_info['project_name']
         if 'vod' in self.project_name.lower(): self.dataset_type = 'VoD'
         if 'tj4d' in self.project_name.lower(): self.dataset_type = 'TJ4D'
+
+        # Number of history timesteps folded into the training graph. None or
+        # negative means "all available history frames".
+        self.rssm_bptt_steps = rssm_bptt_steps
 
         # other papa for convenience
         self.xbound = self.grid_config['xbound']
@@ -587,7 +592,9 @@ class R4Det(MVXFasterRCNN):
 
     # NOTE: core model here, processing multi-modality feats
 
-    def extract_feat(self, points, img, img_metas, is_valid_mask=None, feat_or_dict=0):
+    def extract_feat(self, points, img, img_metas, is_valid_mask=None, feat_or_dict=0,
+                     rssm_detach_state=True, rssm_deterministic=None,
+                     rssm_history_losses=None):
         """Extract features from images and points."""
         # preparation of camera-geo-aware input
         if img.dim() == 3 and img.size(0) == 3: img = img.unsqueeze(0)
@@ -699,17 +706,27 @@ class R4Det(MVXFasterRCNN):
         rssm_recon_loss = None
         rssm_stats = None
         if self.temporal_fusion is not None:
+            if rssm_deterministic is None:
+                rssm_deterministic = not self.training
             if feat_or_dict == 0:
                 # Prev frame: run RSSM to update internal h/z state
-                # Caller wraps with torch.no_grad(), so no gradients flow
-                bev_feats, _, _, _, _, _ = self.temporal_fusion(
-                    bev_feats, use_posterior=True, deterministic=True)
+                bev_feats_cache = bev_feats
+                bev_feats, rssm_recon, rssm_kl, _, _, rssm_stats = \
+                    self.temporal_fusion(
+                        bev_feats, use_posterior=True,
+                        deterministic=rssm_deterministic,
+                        detach_state=rssm_detach_state)
+                if rssm_history_losses is not None:
+                    rssm_history_losses.append(
+                        (F.mse_loss(rssm_recon, bev_feats_cache),
+                         rssm_kl, rssm_stats))
             else:
                 # Curr frame: full RSSM forward with gradients + losses
                 bev_feats_cache = bev_feats
                 bev_feats, rssm_recon, rssm_kl, _, _, rssm_stats = \
                     self.temporal_fusion(
-                        bev_feats, use_posterior=True, deterministic=True)
+                        bev_feats, use_posterior=True,
+                        deterministic=rssm_deterministic)
                 rssm_recon_loss = F.mse_loss(rssm_recon, bev_feats_cache)
                 if is_valid_mask is not None:
                     is_valid_mask_dev = is_valid_mask.to(bev_feats.device)
@@ -1126,16 +1143,35 @@ class R4Det(MVXFasterRCNN):
         # Always reset RSSM state at the start of each training step
         if self.temporal_fusion is not None:
             self.temporal_fusion.reset_state()
-        # Roll history frames (old→new) through RSSM with no_grad to advance
-        # the internal h/z state. Invalid samples keep the previous state
-        # (reset_for_samples skips the update for them).
+
         if self.temporal_fusion is not None:
-            for t in range(N - 1):
+            # Older frames serve as burn-in state without gradient.
+            history_steps = N - 1
+            if self.rssm_bptt_steps is None or self.rssm_bptt_steps < 0:
+                grad_steps = history_steps
+            else:
+                grad_steps = min(int(self.rssm_bptt_steps), history_steps)
+            burn_in = history_steps - grad_steps
+            for t in range(burn_in):
                 valid_t = frame_valid[t]
                 if valid_t.any():
                     with torch.no_grad():
                         self.extract_feat(frame_points[t], frame_img[t], frame_img_metas[t],
                                           is_valid_mask=valid_t, feat_or_dict=0)
+                if (~valid_t).any():
+                    self.temporal_fusion.reset_for_samples(~valid_t)
+
+            history_rssm_losses = []
+            for t in range(burn_in, N - 1):
+                valid_t = frame_valid[t]
+                if valid_t.any():
+                    # Keep the recurrent h/z in the graph for this folded
+                    # window so detection reconstructions/backbone gradients
+                    # flow back through recent history.
+                    self.extract_feat(
+                        frame_points[t], frame_img[t], frame_img_metas[t],
+                        is_valid_mask=valid_t, feat_or_dict=0,
+                        rssm_detach_state=False, rssm_history_losses=history_rssm_losses)
                 if (~valid_t).any():
                     self.temporal_fusion.reset_for_samples(~valid_t)
 
@@ -1163,6 +1199,13 @@ class R4Det(MVXFasterRCNN):
         rssm_kl = feature_dict.get('rssm_kl')
         rssm_recon_loss = feature_dict.get('rssm_recon_loss')
         rssm_stats = feature_dict.get('rssm_stats')
+
+        if self.temporal_fusion is not None and rssm_kl is not None and history_rssm_losses:
+            rssm_kl = (sum(loss[1] for loss in history_rssm_losses) + rssm_kl) / (
+                len(history_rssm_losses) + 1)
+            rssm_recon_loss = (
+                sum(loss[0] for loss in history_rssm_losses) + rssm_recon_loss
+            ) / (len(history_rssm_losses) + 1)
         # compute for all losses
         losses = dict()
 

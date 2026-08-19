@@ -362,7 +362,8 @@ class BEVRSSMTemporalFusion(BaseModule):
         return kl_clamped.mean(), stats
 
     @auto_fp16(apply_to=['feat', 'velocity'])
-    def forward(self, feat, velocity=None, use_posterior=True, deterministic=True):
+    def forward(self, feat, velocity=None, use_posterior=True,
+                deterministic=True, detach_state=True):
         """Process ONE frame through the RSSM.
 
         Uses internal h_{t-1}, z_{t-1} from the previous call.
@@ -375,6 +376,10 @@ class BEVRSSMTemporalFusion(BaseModule):
                 If False, use p(z|h). Default: True (filtering mode).
             deterministic (bool): If True, use the distribution mean (mu).
                 If False, sample with noise. Default: True.
+            detach_state (bool): If True, detach h/z before storing as the
+                internal state for the next call. Set False only inside a
+                code span that will fold the sequence, then reset the state
+                or detach it at the fold boundary.
 
         Returns:
             output: Fused BEV feature (B, out_channels, H, W).
@@ -474,10 +479,15 @@ class BEVRSSMTemporalFusion(BaseModule):
         output = output + feat  # residual: preserves original BEV features
 
         ################################################
-        # 9. Store state for next frame (detach — no grad across timesteps)
+        # 9. Store state for next frame. By default detach, otherwise the
+        # state is kept in the graph for a bounded BPTT window.
         ################################################
-        self.h_state = h_t.detach()
-        self.z_state = z_t.detach()
+        if detach_state:
+            self.h_state = h_t.detach()
+            self.z_state = z_t.detach()
+        else:
+            self.h_state = h_t
+            self.z_state = z_t
 
         return output, reconstruction, kl * self.kl_scale, h_t, z_t, stats
 
@@ -626,7 +636,8 @@ class MotionAlignedRSSMFusion(BEVRSSMTemporalFusion):
         return deform_conv(state, offset, mask)
 
     @auto_fp16(apply_to=['feat', 'velocity'])
-    def forward(self, feat, velocity=None, use_posterior=True, deterministic=True):
+    def forward(self, feat, velocity=None, use_posterior=True,
+                deterministic=True, detach_state=True):
         """Process ONE frame through the motion-aligned RSSM.
 
         Same interface as BEVRSSMTemporalFusion.forward().
@@ -698,8 +709,12 @@ class MotionAlignedRSSMFusion(BEVRSSMTemporalFusion):
         output = self.output_proj(z_t)
         output = output + feat
 
-        # ---- 9. Store state for next frame (detach) ---------------------
-        self.h_state = h_t.detach()
-        self.z_state = z_t.detach()
+        # ---- 9. Store state for next frame -------------------------------
+        if detach_state:
+            self.h_state = h_t.detach()
+            self.z_state = z_t.detach()
+        else:
+            self.h_state = h_t
+            self.z_state = z_t
 
         return output, reconstruction, kl * self.kl_scale, h_t, z_t, stats
