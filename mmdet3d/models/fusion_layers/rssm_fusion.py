@@ -303,8 +303,13 @@ class BEVRSSMTemporalFusion(BaseModule):
             mask: (B,) bool tensor, True = samples to reset.
         """
         if self.h_state is not None and mask.any():
-            self.h_state[mask] = 0.0
-            self.z_state[mask] = 0.0
+            keep = ~mask
+            self.h_state = torch.where(
+                keep[:, None, None, None], self.h_state,
+                torch.zeros_like(self.h_state))
+            self.z_state = torch.where(
+                keep[:, None, None, None], self.z_state,
+                torch.zeros_like(self.z_state))
 
     def sample(self, mu, logstd):
         """Sample from distribution with smooth minimum std constraint."""
