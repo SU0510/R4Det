@@ -737,7 +737,7 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 - anchor 床铺已经加到 Ped×3/Cyc×1/Car×2/Truck×3，继续加 anchor 预计收益会更低。下一步应转向解决共享 head 的 Car–Truck 争夺：优先验证仓库中已备好的 `confusion_pairs=[[2,3]]` 抑制 loss 配置（`_head_confuse.py`），或拆分 Car/Truck 专属分支。
 - 另一个未落入 Run 12 的改变是 Doppler static/dynamic mask（`_head_dynmask.py`），应在不混入 anchor 变量的前提下单独跑消融。
 
-## 13. Doppler 动静 mask 设计注记（未训练，待单变量消融）
+## 13. Doppler 动静 mask 设计注记 + 训练结果（Run 13）
 
 > Branch: `radar_static_dynamic`。基于 Run 10 最优配置（head-v2，无 anchor 变量），新增 `RadarStaticDynamicScore` 点云变换 + `RadarPillarFeatureNet` 的 soft-mask 门控，利用 4D 雷达自带的径向多普勒速度做「动/静」显式建模。config 为
 > `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_dynmask.py`。
@@ -772,7 +772,87 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
    - 结论：保持 `in_channels=6`。改成 5 会在将来启用 voxelpainting/`use_sa_radarnet` 时把 `pts_dim` 算错。
 6. **稀疏帧 fallback 已修**：`n < min_points(10)` 时原返回 `score=0.5`（整帧 velocity 被统一 ×1.25），改为 `score=0.0`（`gating=1`，identity）——「分不清动/静」应退回 baseline 而不是施加偏置，与 velocity-only 的保守原则一致。
 
-### 13.3 待做
+### 13.3 训练结果（Run 13）
 
-- 单变量消融：本 config vs 同 config 但 `dynamic_weight=0.0`（即回到纯 Run 10 数据流）；对比 Overall、Car/Truck 混淆、Pedestrian 是否退化。
-- 后续可把 ego-velocity（拟合出的 `v_ego`）接入 RSSM `action_dim`，与 Doppler 点级 mask 正交。
+- config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_dynmask.py`
+- work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head_dynmask`
+- **BEST Overall: ep8 = 36.21（✅ 已存，interval=1）**
+- **LAST: ep24 = 35.10**
+- Car strict BEST: 50.26 @ep8
+- Cyclist strict BEST: 25.32 @ep7
+- Truck strict BEST: 29.07 @ep18
+- Pedestrian strict BEST: 0.38 @ep10（噪声带内）
+
+### 13.4 Epoch curve: Overall 3D_moderate
+
+| ep | mod | ep | mod | ep | mod |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 15.31 | 9 | 31.72 | 17 | 35.51 |
+| 2 | 18.46 | 10 | 35.88 | 18 | 35.80 |
+| 3 | 26.02 | 11 | 35.11 | 19 | 34.65 |
+| 4 | 29.45 | 12 | 35.70 | 20 | 35.90 |
+| 5 | 29.89 | 13 | 35.42 | 21 | 34.77 |
+| 6 | 32.58 | 14 | 33.98 | 22 | 34.68 |
+| 7 | 35.30 | 15 | 34.81 | 23 | 35.34 |
+| 8 | **36.21** | 16 | 34.40 | 24 | 35.10 |
+
+- 起点偏低（ep1=15.31，低于 Run 10 的 17.11），ep4 追到 29.45 后增速放缓。
+- **峰值在 ep8（36.21），之后 ep9 暴跌到 31.72，再未恢复到 36+**。ep10–24 在 34–36 区间窄幅震荡，整体呈「早峰后稳态下降」。
+- 与 Run 10 的 ep11=40.60 / ep14=39.65 相比，**峰值低 3.44–4.39 点，是迄今最大单次回退**。
+
+### 13.5 BEST vs LAST
+
+| Metric | BEST (ep8) | LAST (ep24) |
+|---|---:|---:|
+| Overall 3D_moderate | **36.21** | 35.10 |
+| Overall 3D_easy | 38.43 | 36.52 |
+| Overall 3D_hard | 35.04 | 33.83 |
+| Overall BEV_moderate | 43.68 | 42.38 |
+| Car 3D_mod_strict | 50.26 | 43.54 |
+| Cyclist 3D_mod_strict | 19.50 | 21.05 |
+| Pedestrian 3D_mod_strict | 0.06 | 0.05 |
+| Truck 3D_mod_strict | 21.08 | 26.74 |
+
+### 13.6 vs Run 10（同 base，唯一差异=Doppler 动静 mask）
+
+| Metric | Run 10 BEST | Run 13 BEST | Delta |
+|---|---:|---:|---:|
+| Overall 3D_moderate | **40.60** (ep11) / 39.65 已存 (ep14) | 36.21 (ep8) | **−4.39 / −3.44** ❌❌ |
+| Overall 3D_easy | 42.49 (ep15) | 38.43 | −4.06 |
+| Overall 3D_hard | 39.06 (ep11) | 35.04 | −4.02 |
+| Overall BEV_moderate | 48.70 (ep13) | 43.68 | −5.02 |
+| Car 3D_mod_strict | **53.04** (ep20) | 50.26 (ep8) | **−2.78** |
+| Car 3D_mod_loose | **73.96** (ep12) | 70.99 (ep11) | −2.97 |
+| Cyclist 3D_mod_strict | 25.41 (ep8) | 25.32 (ep7) | −0.09 |
+| Cyclist 3D_mod_loose | **52.75** (ep12) | 46.64 (ep8) | **−6.11** |
+| Pedestrian 3D_mod_strict | 0.42 (ep2) | 0.38 (ep10) | 噪声级 |
+| Pedestrian 3D_mod_loose | 28.74 (ep10) | 31.48 (ep10) | **+2.74** |
+| Truck 3D_mod_strict | 33.23 (ep11) | 29.07 (ep18) | **−4.16** |
+| Truck 3D_mod_loose | 53.16 (ep18) | 52.44 (ep11) | −0.72 |
+
+### 13.7 Per-class loose @ BEST epoch (ep8)
+
+| Class | Run 10 BEST | Run 13 @ep8 | Delta |
+|---|---:|---:|---:|
+| Car | **73.96** | 67.57 | −6.39 |
+| Cyclist | **52.75** | 46.64 | −6.11 |
+| Pedestrian | 28.74 | 26.84 | −1.90 |
+| Truck | **53.16** | 45.23 | −7.93 |
+
+### 13.8 Key findings
+
+1. **Doppler 动静 mask 是显著负收益**：Overall 36.21 vs Run 10 已存 39.65，**−3.44**。这是所有 run 中最大的单次回退（此前最差为 Run 11 Truck-anchor 的 −1.20）。
+2. **全线溃退，非零和**：与 anchor 实验不同，本轮不是「拆东墙补西墙」，而是 **BEV −5.02、Car strict −2.78、Cyc loose −6.11、Trk strict −4.16** 同时下降。唯一亮点是 Ped loose +2.74（但 strict 仍 ≈ 0）。
+3. **峰值在 ep8 后再未恢复**：ep9 暴跌 4.5 点（36.21→31.72），此后 ep10–24 稳定在 34–36 但始终低于峰值。说明 mask 不是噪声抖动，而是系统性地压低了模型上限。
+4. **根因推测**：velocity-only soft-mask（`gating = 1 + 0.5·score`）放大了动态点的速度维。但预训练权重的 PFN 是在原始速度分布上标定的，**velocity distortion 破坏了 pretrained backbone → BEV encoder 的特征对齐**。这解释了为什么 BEV_mod 跌得最狠（−5.02）——BEV 特征质量本身被拉低。
+5. **Ped loose 微涨是唯一正面信号**：行人点 85% 是静态（score≈0），velocity 基本不变，但 score 拟合过程可能间接帮助了行人–背景分离（ego-velocity 估计剔除了静态杂波）。但这不足以补偿其他类的损失。
+6. ✅ `checkpoint_interval=1` 生效，ep1–24 全部落盘。
+
+### 13.9 Conclusions / Next
+
+- **Doppler 动静 mask 当前版本不应采用**。主模型仍为 **Run 10 head-v2 ep14（39.65）**。
+- 预训练 + velocity distortion 不兼容是核心矛盾。若要继续探索 Doppler, 建议：
+  1. **`dynamic_weight=0.0`**：score 通道仍在（in_channels=6），但不对 velocity 做任何缩放——纯信息注入，不改变预训练对齐；
+  2. **从头训练（不用 pretrained）**：让 PFN/BEV encoder 从零适应 velocity distortion，但会损失 pretrain 的 +3.23 基础增益；
+  3. **ego-velocity 接入 RSSM `action_dim`**：不修改点云特征，而是把 `v_ego` 作为 RSSM transition 的 action 输入，与点级 mask 正交。
+- 单变量消融（`dynamic_weight=0.0` vs `0.5`）仍是确认根因的必要实验。
