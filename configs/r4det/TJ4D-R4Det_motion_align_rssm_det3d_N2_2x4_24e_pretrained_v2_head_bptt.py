@@ -386,7 +386,7 @@ eval_pipeline = test_pipeline
 
 # dataset settings
 data = dict(
-    samples_per_gpu=4,
+    samples_per_gpu=2,
     workers_per_gpu=2,
     train=dict(
         type='RepeatDataset',
@@ -433,7 +433,9 @@ lr = 0.00015
 max_epochs = 24
 optimizer = dict(type='AdamW', lr=lr, betas=(0.95, 0.99), weight_decay=0.01)
 optimizer_config = dict(
-    grad_clip=dict(max_norm=35, norm_type=2))
+    type='GradientCumulativeOptimizerHook',
+    grad_clip=dict(max_norm=35, norm_type=2),
+    cumulative_iters=2)
 runner = dict(type='EpochBasedRunner', max_epochs=max_epochs)
 lr_config = dict(
     policy='CosineAnnealing',
