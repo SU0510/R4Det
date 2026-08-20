@@ -855,4 +855,99 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
   1. **`dynamic_weight=0.0`**：score 通道仍在（in_channels=6），但不对 velocity 做任何缩放——纯信息注入，不改变预训练对齐；
   2. **从头训练（不用 pretrained）**：让 PFN/BEV encoder 从零适应 velocity distortion，但会损失 pretrain 的 +3.23 基础增益；
   3. **ego-velocity 接入 RSSM `action_dim`**：不修改点云特征，而是把 `v_ego` 作为 RSSM transition 的 action 输入，与点级 mask 正交。
-- 单变量消融（`dynamic_weight=0.0` vs `0.5`）仍是确认根因的必要实验。
+-- 单变量消融（`dynamic_weight=0.0` vs `0.5`）仍是确认根因的必要实验。
+
+## 14. N=4 Pretrained RSSM + head-v2 + truncated BPTT (24e)
+
+> Branch: `radar_static_dynamic`。基于 Run 10 的最优配置（N=4, hdim=128, pretrained, 24e），
+> 唯一改动是把 RSSM 的随机状态接回计算图，以 `rssm_bptt_steps=1` 做 truncated BPTT。
+> 为适配 3 卡显存，`samples_per_gpu=2`，并用 `cumulative_iters=2` 恢复有效 batch；
+> 训练前还修了 `reset_for_samples` 的 in-place 操作，避免切断新序列首帧的 autograd。
+> `checkpoint_interval=1`，epoch 1–24 全部落盘。
+
+### Run 14: N=4 Pretrained RSSM + head-v2 + BPTT
+
+- config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_bptt.py`
+- work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head_bptt`
+- **BEST Overall: ep14 = 37.84（✅ 已存）**
+- **LAST: ep24 = 34.90**
+- Car strict BEST: 49.09 @ep10
+- Ped loose BEST: 31.49 @ep14（历史最高）
+- Truck strict BEST: 33.82 @ep14
+
+### 14.1 Epoch curve: Overall 3D_moderate
+
+| ep | mod | ep | mod | ep | mod |
+|---:|---:|---:|---:|---:|---:|
+| 1  | 16.04 | 9  | 31.56 | 17 | 36.52 |
+| 2  | 22.97 | 10 | 36.73 | 18 | 36.80 |
+| 3  | 28.95 | 11 | 34.13 | 19 | 35.60 |
+| 4  | 30.64 | 12 | 34.63 | 20 | 35.35 |
+| 5  | 31.55 | 13 | 36.43 | 21 | 36.00 |
+| 6  | 30.92 | 14 | **37.84** | 22 | 35.63 |
+| 7  | 34.27 | 15 | 35.43 | 23 | 35.15 |
+| 8  | 33.45 | 16 | 36.43 | 24 | 34.90 |
+
+- 起点明显低于 Run 10（ep1=16.04 vs 17.11），但 ep3 后追近并长期在 34–37 震荡。
+- 峰值出现在 **ep14=37.84**，之后没有继续抬升，ep19–24 在 35.0–36.0 的平台收束。
+- 最后 5 个 epoch 没有出现 Run 10 那样的高位恢复，终点反而下探到 34.90。
+
+### 14.2 BEST vs LAST
+
+| Metric | BEST (ep) | LAST (ep24) |
+|---|---:|---:|
+| Overall 3D_moderate | **37.84** (14) | 34.90 |
+| Overall 3D_easy | 40.05 (14) | 37.53 |
+| Overall 3D_hard | 36.30 (14) | 33.50 |
+| Overall BEV_moderate | 45.84 (16) | 43.40 |
+| Car 3D_mod_strict | 49.09 (10) | 40.48 |
+| Cyclist 3D_mod_strict | 22.25 (15) | 19.96 |
+| Pedestrian 3D_mod_strict | 0.97 (12) | 0.14 |
+| Truck 3D_mod_strict | 33.82 (14) | 31.09 |
+| Pedestrian 3D_mod_loose | 31.49 (14) | 28.70 |
+| Truck 3D_mod_loose | 48.08 (20) | 45.70 |
+
+### 14.3 vs Run 10（同 base，唯一差异=truncated BPTT）
+
+| Metric | Run 10 BEST | Run 14 BEST | Δ |
+|---|---:|---:|---:|
+| Overall 3D_moderate | **39.65** (ep14) / 峰值 40.60 (ep11) | 37.84 (ep14) | **−1.81 / −2.76** ❌ |
+| Overall 3D_easy | **42.49** (ep15) | 40.05 (ep14) | −2.44 |
+| Overall 3D_hard | **39.06** (ep11) | 36.30 (ep14) | −2.76 |
+| Overall BEV_moderate | **48.70** (ep13) | 45.84 (ep16) | −2.86 |
+| Car 3D_mod_strict | **53.04** (ep20) | 49.09 (ep10) | −3.95 |
+| Car 3D_mod_loose | **73.96** (ep12) | 73.27 (ep10) | −0.69 |
+| Cyclist 3D_mod_strict | **25.41** (ep8) | 22.25 (ep15) | −3.16 |
+| Cyclist 3D_mod_loose | **52.75** (ep12) | 46.82 (ep7) | −5.93 |
+| Pedestrian 3D_mod_strict | 0.42 (ep2) | 0.97 (ep12) | 噪声级 |
+| Pedestrian 3D_mod_loose | 28.74 (ep10) | **31.49** (ep14) | **+2.75** ✅ |
+| Truck 3D_mod_strict | 33.23 (ep11) | **33.82** (ep14) | +0.59 ✅ |
+| Truck 3D_mod_loose | **53.16** (ep18) | 48.08 (ep20) | −5.08 |
+
+### 14.4 RSSM dynamics（节选）
+
+| ep | kl_loss | recon_loss | clamped_ratio | post_std | prior_std |
+|---:|---:|---:|---:|---:|---:|
+| 1  | 0.00   | 0.0821 | 61.7% | 0.137 | 0.200 |
+| 5  | 0.4124 | 0.0060 | 99.2% | 0.130 | 0.335 |
+| 10 | 0.9092 | 0.0045 | 99.6% | 0.134 | 0.344 |
+| 14 | 1.0036 | 0.0033 | 99.8% | 0.124 | 0.321 |
+| 20 | 1.0006 | 0.0025 | 99.8% | 0.118 | 0.311 |
+| 24 | 1.0004 | 0.0024 | 99.8% | 0.117 | 0.309 |
+
+### 14.5 Key findings
+
+1. **BPTT 当前设置没有带来提升**。Overall 最优 37.84（ep14），比 Run 10 已存最优 39.65 低 **1.81**，比 Run 10 峰值的 40.60 低 **2.76**；Run 14 的 LAST 34.90 更比 Run 10 LAST 38.76 低 **3.86**。
+2. **主要输在 Car、Cyclist、BEV**：Car strict −3.95、Cyclist strict −3.16、Cyclist loose −5.93、BEV_mod −2.86，和前面几轮 anchor/mask 实验不同，不是「某一类换另一类」，而是核心类别整体低一档。
+3. **最晚 5 个 epoch 趋势不乐观**：从 ep14 峰值后回落到 35 平台，低学习率阶段也没有再回到 38+，说明这不是早期抖动，而是本配置的上限大约就在 37.8 附近。
+4. **BPTT 没有破坏训练稳定性**：`loss` 从 ep1 的 ~1.79 平稳降到 ep24 的 ~1.27，`grad_norm` 从 15 收敛到 ~4.0，没有 NaN 或梯度爆炸。
+5. **posterior collapse 依旧存在**：clamp 在 ep12 后稳定在 99.8%，`post_std` 和 `prior_std` 基本重合，随机状态贡献仍接近 0。`rssm_bptt_steps=1` 的一步 truncated BPTT 不足以改变这一结果。
+6. **仅有的正面信号是 Ped loose 31.49**（Run 10 28.74，+2.75，历史最高）以及 Truck strict 33.82（与 Run 10 33.23 基本持平但低于 Run 11 的 35.03）。Ped strict 12 个 epoch 的 0.4 / 0.97 只是噪声，不是实质改善。
+7. **结论**：以 Overall 3D_moderate 为口径，Run 14 / BPTT 是 **负收益**，不应替代当前主模型。主模型仍回退到 **Run 10 head-v2 ep14（39.65）**。
+
+### 14.6 Conclusions / Next
+
+- 当前版本的 single-step truncated BPTT 对 RSSM 随机状态的训练没有带来有效增益，且核心类别与 Overall 均弱于 Run 10。
+- 如果继续沿 BPTT 方向实验，建议优先改变的是「窗口长度」而不是数据 pipeline：`rssm_bptt_steps=1` 的序列梯度窗口太小，可尝试 2–4 步；同时需要单独监控 posterior/prior 距离，避免把结论只建立在最终 AP 上。
+- 另一个未验证且与 BPTT 正交的方向是**`dynamic_weight=0.0`** 的纯 Doppler 信息注入（不缩放 velocity），以及**ego-velocity 接入 RSSM `action_dim`**；这两者应在不混入 BPTT 变量的前提下单独跑。
+- 本轮 peak `epoch_14.pth` 已保存，若后续继续 resume，应从这个 37.84 峰值点继续，而不是 LAST。
