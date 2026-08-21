@@ -376,6 +376,7 @@ resume_from:     None -> v1 latest.pth   (续训 v1)
 
 - config: configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_30e_pretrained.py
 - work_dir: work_dirs/rssm_N4_2x4_30e_pretrained
+- **频率加权 Overall（平台，last-5）**: **40.07 ± 0.47**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
 - diff: load_from only, else identical to Run 7 (N4 30e no-pretrain)
 - BEST: ep19 37.94 🔥 (ALL-TIME RECORD)
 - LAST: ep30 35.63
@@ -498,6 +499,7 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 
 - config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head.py`
 - work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head`
+- **频率加权 Overall（平台，last-5）**: **43.51 ± 0.51**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
 - **BEST overall: ep11 = 40.60** ⚠️ 未存（奇数 epoch，interval=2）
 - **BEST SAVED overall: ep14 = 39.65**
 - **Car strict BEST: ep20 = 53.04（已存）**
@@ -603,6 +605,7 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 
 - config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_truck.py`
 - work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head_truck`
+- **频率加权 Overall（平台，last-5）**: **39.88 ± 0.78**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
 - **BEST Overall: ep11 = 38.45（✅ 已存，interval=1 生效）**
 - **LAST: ep24 = 37.20**
 - Truck strict BEST: **35.03 @ep11（历史最高）**
@@ -685,6 +688,7 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 
 - config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_truck_car2.py`
 - work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head_truck_car2`
+- **频率加权 Overall（平台，last-5）**: **40.23 ± 0.65**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
 - **BEST Overall: ep14 = 38.11（✅ 已存）**
 - **LAST: ep24 = 35.73**
 - Car strict BEST: **53.77 @ep14（历史最高）**
@@ -794,6 +798,7 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 
 - config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_dynmask.py`
 - work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head_dynmask`
+- **频率加权 Overall（平台，last-5）**: **38.62 ± 1.15**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
 - **BEST Overall: ep8 = 36.21（✅ 已存，interval=1）**
 - **LAST: ep24 = 35.10**
 - Car strict BEST: 50.26 @ep8
@@ -887,6 +892,7 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 
 - config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_bptt.py`
 - work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head_bptt`
+- **频率加权 Overall（平台，last-5）**: **38.15 ± 0.68**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
 - **BEST Overall: ep14 = 37.84（✅ 已存）**
 - **LAST: ep24 = 34.90**
 - Car strict BEST: 49.09 @ep10
@@ -984,6 +990,7 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 
 - config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N2_2x4_24e_pretrained_v2_head_bptt.py`
 - work_dir: `work_dirs/rssm_N2_2x4_24e_pretrained_v2_head_bptt`
+- **频率加权 Overall（平台，last-5）**: **39.87 ± 0.45**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
 - **BEST Overall: ep14 = 38.08**（已存）
 - **LAST: ep24 = 37.08**
 - Car strict BEST: 46.22 @ep12
@@ -1076,3 +1083,53 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 - 但 N2 相对 N4 的 BPTT 消融给出明确信号：在 truncated BPTT 下，`seq_len=2 + hidden_dim=64` 的轻配置不输甚至略好于 `seq_len=4 + hidden_dim=128`，且 Cyclist 明显占优。若继续沿 BPTT 方向，轻量 N2 配置是更经济也更稳的起点。
 - 与 Run 14 相同的未验证正交方向仍适用：`rssm_bptt_steps=2–4` 的更长 BPTT 窗口；`dynamic_weight=0.0` 纯 Doppler 信息注入；ego-velocity 接入 `action_dim`。
 - 本轮 peak `epoch_14.pth` 已保存（38.08），latest 为 ep24（37.08）。
+
+---
+
+## 16. 频率加权 Overall 对比：重新排名的结果
+
+> 前面的 `Overall_3D_moderate` 是**等权 1/4**（`kitti_utils/eval.py` 的默认聚合）。本节按训练集真实类别频率重新加权，权重（四类归一、排除 0.5% Other）：
+> Car 48.37% / Cyclist 21.64% / Truck 16.46% / Pedestrian 13.53%。
+> 即 `Overall_freq = 0.4837·Car_s + 0.2164·Cyc_l + 0.1646·Truck_s + 0.1353·Ped_l`（沿用同类「Car/Truck strict、Ped/Cyc loose」混合口径）。
+> 工具：`python3 tools/summarize_run.py <work_dir> --weighted --tail 5`。
+
+### 16.1 两种口径的平台（last-5）对比
+
+| Run | 等权 mean±std | 频率加权 mean±std | 等权 BEST | 频率加权 BEST |
+|---|---:|---:|---:|---:|
+| Run 10 (head-v2) | 38.50 ± 0.27 | **43.51 ± 0.51** | 40.59 | **45.15** |
+| Run 12 (Car-large) | 35.68 ± 0.34 | 40.23 ± 0.65 | 38.11 | 43.73 |
+| Run 9 (pretrained 30e) | 35.98 ± 0.29 | 40.07 ± 0.47 | 37.94 | 41.93 |
+| Run 11 (Truck×3) | 36.47 ± 0.81 | 39.88 ± 0.78 | 38.45 | 41.89 |
+| Run 15 (N2 BPTT) | 37.17 ± 0.52 | 39.87 ± 0.45 | 38.08 | 40.96 |
+| Run 13 (dynmask) | 35.16 ± 0.49 | 38.62 ± 1.15 | 36.21 | 41.51 |
+| Run 14 (N4 BPTT) | 35.41 ± 0.43 | 38.15 ± 0.68 | 37.84 | 41.25 |
+| N4 30e（无 pretrain） | 33.67 ± 0.35 | 34.14 ± 0.61 | 34.71 | 36.04 |
+| N4 30e lr2e4 | 28.30 ± 1.22 | 30.28 ± 0.97 | 30.08 | 31.36 |
+
+（均取 last-5 平台；Run 9/N4 系列为 30e 训练，其余 24e。）
+
+### 16.2 新结论
+
+1. **排序会因口径改变，这是最关键的发现**：
+   - 等权（1/4）：Run 10 > Run 15(N2) > Run 11 > Run 9 > Run 12 > Run 14 > Run 13。
+   - 频率加权：Run 10 >> Run 12 > Run 9 > Run 11 ≈ Run 15(N2) > Run 13 > Run 14。
+   - **Run 12（Car-large anchor）从第 5 名跳到第 2 名；Run 15（N2 BPTT）从第 2 名掉到第 5 名。** 原因纯粹是权重变化：Car 权重 25%→48.4%，谁的 Car strict 强谁就跃升。
+
+2. **Run 10 在两种口径下都是第 1，但领先幅度含义不同**：等权下领先第 2（N2）约 0.9 个点；频率加权下领先第 2（Run 12）约 **3.3 个点**。Run 10 的 Car strict（约 52）碾压其它 run（43~46），所以频率加权把它跟第二名的差距拉得更大。
+
+3. **Run 12（Car-large anchor）被严重低估了**：等权下它只有 35.68（第 5），会让人误判「Car-large anchor 没用」；频率加权下它是 40.23（第 2）。文档 12.6 原本判它「本轮仍是负收益」，这个结论在等权口径下成立，但在「Car 主导的实际部署场景」口径下是**错的方向**——如果你想优化 Car 召回/严格 AP，Run 12 的 Car-large anchor 才是正确选择。
+
+4. **N2 BPTT 的「略优于 N4 BPTT」结论需要弱化**：等权下 N2 37.17 > N4 35.41（+1.76）；但频率加权下两者只差 1.72 且都被 Run 12 / Run 9 / Run 11 反超。N2 的「小目标友好」优势在 Cyclist/Ped 权重被压低后基本消失。
+
+5. **幅度整体抬升 ~4~5 点是口径效应，不是真实性能变化**：频率加权后所有 run 的 Overall 都涨了约 4~5 点（因为 Car 权重翻倍，Car strict 是所有类里最高的）。这个抬升对任何 run 都一样，**不改变「谁比谁好」除了权重结构带来的重排**。不要把这个抬升误读成「频率加权让模型变强了」。
+
+6. **决策建议**：先明确「你优化的是哪个目标」：
+   - 平衡多类（发论文通用口径）：继续用等权 1/4，Run 10 第一。
+   - Car 主导的部署场景：换频率加权，Run 12（Car-large anchor）值得重新评估，Run 10 仍最强但 Run 12 紧跟。
+   - 无论哪种，都别再拿单点 BEST 比，用上表 last-5 平台均值。
+
+### 16.3 落地
+
+- 工具已支持 `--weighted`，以后每个新 run 跑完跑一条 `--weighted` 即得频率加权口径。
+- 权重写死在 `tools/summarize_run.py` 的 `CLASS_PRIORS`，若数据集（train/val）类别分布变化需同步更新。
