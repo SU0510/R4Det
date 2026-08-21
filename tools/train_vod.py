@@ -125,8 +125,13 @@ def load_pretrained_model(model, check_point_path, mapping_list):
 
 def main():
     args = parse_args()
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = True
+    if args.deterministic:
+        # Deterministic mode is needed when the reported BEST should be
+        # reproducible seed-to-seed. It deliberately disables cudnn benchmark.
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    else:
+        torch.backends.cudnn.benchmark = True
     cfg = Config.fromfile(args.config)
     # wandb init after runner set up main process  
     project = args.config.split('/')[-1].split('.')[0]
