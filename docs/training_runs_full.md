@@ -2,6 +2,7 @@
 
 > 数据来源：各 `work_dirs/<run>/*.log.json` 的 `mode=val` 记录（每 epoch 取该 run 最后一次 val，避免中途重启污染）+ 各 run 目录下 `*.py` 配置快照 + git log（branch `motionalignrssm`）。
 > 评估口径：KITTI 3D detection AP。主指标 **Overall 3D moderate**（`pts_bbox/KITTI/Overall_3D_moderate`）。`_loose` 为松评估 per-class。
+> **Overall 口径说明**：`Overall_3D_moderate` = `(Car_strict + Truck_strict + Pedestrian_loose + Cyclist_loose) / 4`。即「Car/Truck 看 strict、Ped/Cyc 看 loose」的混合口径，不是四类全 strict（详见 `kitti_utils/eval.py` 的 Overall 聚合）。读任何 Overall 数字时请按此四项理解，否则会用错驱动变量。
 > 所有 run 训练 18 epoch（`baseline_temporal` 日志从 ep6 起，ep1-5 无记录）。
 > 配套诊断见 [rssm_diagnosis.md](rssm_diagnosis.md)。
 
@@ -572,6 +573,23 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
   2. `checkpoint_interval=1` 必修，避免再丢峰值；
   3. Pedestrian 需跳出 anchor 层——BEV 分辨率 / 点云稠密化 / point-based 头，才是真正杠杆；
   4. Cyclist：loose 已大涨，strict 未跟上，可考虑骑行者专属 size/增强。
+
+### 10.7 复现性评估：Run 10 的 39.65 是「平台顶」，不是「典型值」
+
+- **40.60 从未成为可用 checkpoint**：Run 10 `checkpoint_interval=2`，奇数 epoch 不落盘，ep11=40.60（实际日志 40.59）只存在于日志。可用最优是 **ep14=39.65**。
+- 拆开 ep11 看，40.59 是一次性脉冲：Truck strict 22.77→33.23 单类跳涨，下一轮跌回 27.49；Car 只是维持高位。它不可复现。
+- **稳定平台 ep12–24 的 Overall = 38.56 ± 0.97**（区间 35.64～39.65）。39.65 是这个平台的上沿，重跑一次大概率落在 38.5～39.5。
+- **真正的漂移源不是 Car，而是 Cyclist loose 和 Truck strict**：
+
+| 构成项 | ep2–24 均值 | 波动范围 |
+|---|---:|---:|
+| Car strict | 49.12 | 38.6～53.0 |
+| Truck strict | 25.83 | 14.0～33.2 |
+| Ped loose | 25.94 | 19.8～28.7 |
+| Cyclist loose | 45.49 | 20.8～52.7 |
+
+- Cyclist loose ±7.77 是最大漂移项（其余几个都在 ±2～4.5），它占 Overall 1/4 权重，会直接带着 Overall 上下漂近 2 点。
+- **结论**：Run 10 的复现性应由「平台均值 38.56」或固定末 N 个 epoch 均值来衡量，不要拿单点 BEST（39.65 或 40.60）当作可复现水平；后续与 N2/N4/BPTT 对比时同理，比平台均值而非单点峰值。
 
 ---
 
