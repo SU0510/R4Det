@@ -14,18 +14,15 @@ GPUS=$2
 DETERMINISTIC=${DETERMINISTIC:-1}
 SEEDS=${SEEDS:-"0 1 2"}
 BASE_DIR=${BASE_DIR:?Set BASE_DIR to the multiseed output dir}
+CFG_OPTIONS=${CFG_OPTIONS:-""}
 
-if [[ "$DETERMINISTIC" == "1" ]]; then
-  EXTRA="--deterministic"
-else
-  EXTRA=""
-fi
+extra_args=()
+[[ "$DETERMINISTIC" == "1" ]] && extra_args+=(--deterministic)
+[[ -n "$CFG_OPTIONS" ]] && extra_args+=(--cfg-options $CFG_OPTIONS)
 
 for seed in $SEEDS; do
   work_dir="${BASE_DIR}/seed_${seed}"
   echo "=== seed=$seed work_dir=$work_dir ==="
   bash tools/dist_train.sh "$CONFIG" "$GPUS" \
-    --seed "$seed" \
-    --work-dir "$work_dir" \
-    $EXTRA
+    --seed "$seed" --work-dir "$work_dir" "${extra_args[@]}"
 done
