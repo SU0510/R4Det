@@ -951,3 +951,110 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 - 如果继续沿 BPTT 方向实验，建议优先改变的是「窗口长度」而不是数据 pipeline：`rssm_bptt_steps=1` 的序列梯度窗口太小，可尝试 2–4 步；同时需要单独监控 posterior/prior 距离，避免把结论只建立在最终 AP 上。
 - 另一个未验证且与 BPTT 正交的方向是**`dynamic_weight=0.0`** 的纯 Doppler 信息注入（不缩放 velocity），以及**ego-velocity 接入 RSSM `action_dim`**；这两者应在不混入 BPTT 变量的前提下单独跑。
 - 本轮 peak `epoch_14.pth` 已保存，若后续继续 resume，应从这个 37.84 峰值点继续，而不是 LAST。
+
+---
+
+## 15. N2 Pretrained RSSM + head-v2 + truncated BPTT (24e)
+
+> Branch: `radar_static_dynamic`。基于 Run 10 最优配置（head-v2，pretrained，24e），
+> 引入 truncated BPTT（`rssm_bptt_steps=1`），并把时序长度从 N4 收窄到 N2、`hidden_dim` 从 128 降到 64。
+> 这是 Run 14（N4 BPTT）的姊妹消融：对比 N4+hdim128 与 N2+hdim64 在相同 BPTT 设置下的表现，
+> 用来隔离「是否值得为 BPTT 保留更深/更长的 RSSM」。其余配置与 Run 14 完全一致：
+> `samples_per_gpu=2` 与 `cumulative_iters=2` 恢复有效 batch，`lr=1.5e-4`，`checkpoint_interval=1`，ep1–24 全部落盘。
+
+### Run 15: N2 (seq_len=2, hdim=64) Pretrained RSSM + head-v2 + BPTT
+
+- config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N2_2x4_24e_pretrained_v2_head_bptt.py`
+- work_dir: `work_dirs/rssm_N2_2x4_24e_pretrained_v2_head_bptt`
+- **BEST Overall: ep14 = 38.08**（已存）
+- **LAST: ep24 = 37.08**
+- Car strict BEST: 46.22 @ep12
+- Cyclist strict BEST: 25.02 @ep10
+- Truck strict BEST: 32.65 @ep21
+- Pedestrian strict BEST: 2.70 @ep24
+
+### 15.1 Epoch curve: Overall 3D_moderate
+
+| ep | mod | ep | mod | ep | mod |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 13.95 | 9 | 36.28 | 17 | 35.17 |
+| 2 | 24.83 | 10 | 33.89 | 18 | 37.58 |
+| 3 | 29.13 | 11 | 34.29 | 19 | 36.88 |
+| 4 | 31.24 | 12 | 37.42 | 20 | 36.54 |
+| 5 | 33.76 | 13 | 35.68 | 21 | 37.97 |
+| 6 | 32.00 | 14 | **38.08** | 22 | 37.21 |
+| 7 | 35.97 | 15 | 31.15 | 23 | 37.04 |
+| 8 | 32.74 | 16 | 37.36 | 24 | 37.08 |
+
+- 起步明显偏低（ep1=13.95，低于 Run 10 的 17.11 和 Run 14 的 16.04），但 ep2 快速追到 24.83，ep3 后基本与 Run 14 同轨。
+- 峰值在 ep14（38.08），ep15 突降 6.9 点（31.15），随后 ep16–24 在 35–38 区间震荡，没有再突破峰值。
+- 尾部 8 个 epoch 波动明显大于 Run 14，但最终 LAST（37.08）显著高于 Run 14 的 34.90。
+
+### 15.2 BEST vs LAST
+
+| Metric | BEST | epoch | LAST (ep24) |
+|---|---:|---:|---:|
+| Overall 3D_moderate | **38.08** | 14 | 37.08 |
+| Overall 3D_easy | 40.33 | 14 | 39.45 |
+| Overall 3D_hard | 36.67 | 14 | 35.59 |
+| Overall BEV_moderate | 45.84 | 14 | 44.81 |
+| Car 3D_mod_strict | 46.22 | 12 | 43.89 |
+| Cyclist 3D_mod_strict | 25.02 | 10 | 23.26 |
+| Pedestrian 3D_mod_strict | 2.70 | 24 | 2.70 |
+| Truck 3D_mod_strict | 32.65 | 21 | 31.73 |
+
+### 15.3 vs Run 14（N4 BPTT，同 base，同 BPTT，唯一差异=N/hdim）
+
+| Metric | N4 BPTT BEST | N2 BPTT BEST | Delta |
+|---|---:|---:|---:|
+| Overall 3D_moderate | 37.84 (ep14) | **38.08** (ep14) | **+0.24** ✅ |
+| Overall 3D_easy | 40.05 (ep14) | 40.33 (ep14) | +0.28 |
+| Overall 3D_hard | 36.30 (ep14) | 36.67 (ep14) | +0.37 |
+| Overall BEV_moderate | 45.84 (ep16) | 45.84 (ep14) | 持平 |
+| Car 3D_mod_strict | **49.09** (ep10) | 46.22 (ep12) | −2.87 ❌ |
+| Car 3D_mod_loose | 73.27 (ep10) | 69.47 (ep22) | −3.80 ❌ |
+| Cyclist 3D_mod_strict | 22.25 (ep15) | 25.02 (ep10) | +2.77 ✅ |
+| Cyclist 3D_mod_loose | 46.82 (ep7) | 49.15 (ep6) | +2.33 ✅ |
+| Pedestrian 3D_mod_strict | 0.97 (ep12) | 2.70 (ep24) | +1.73 |
+| Pedestrian 3D_mod_loose | 31.49 (ep14) | 31.38 (ep14) | −0.11 |
+| Truck 3D_mod_strict | **33.82** (ep14) | 32.65 (ep21) | −1.17 ❌ |
+| Truck 3D_mod_loose | 48.08 (ep20) | 49.09 (ep13) | +1.01 ✅ |
+
+### 15.4 vs Run 10（head-v2，无 BPTT，主模型基线）
+
+| Metric | Run 10 BEST | N2 BPTT BEST | Delta |
+|---|---:|---:|---:|
+| Overall 3D_moderate | **39.65** (ep14) / 峰值 40.60 (ep11) | 38.08 (ep14) | **−1.57 / −2.52** ❌ |
+| Car 3D_mod_strict | **53.04** (ep20) | 46.22 (ep12) | −6.82 ❌ |
+| Cyclist 3D_mod_strict | 25.41 (ep8) | 25.02 (ep10) | −0.39 |
+| Pedestrian 3D_mod_loose | 28.74 (ep10) | 31.38 (ep14) | +2.64 ✅ |
+| Truck 3D_mod_strict | 33.23 (ep11) | 32.65 (ep21) | −0.58 |
+
+### 15.5 RSSM dynamics（节选，ep 末 iter）
+
+| ep | kl_loss | recon_loss | post_std | prior_std | mu_diff² |
+|---:|---:|---:|---:|---:|---:|
+| 1  | 0.0000 | 0.0951 | 0.134 | 0.201 | 1.294 |
+| 4  | 0.3291 | 0.0072 | 0.131 | 0.326 | 0.187 |
+| 8  | 0.7140 | 0.0050 | 0.141 | 0.345 | 0.046 |
+| 12 | 1.0098 | 0.0038 | 0.146 | 0.339 | 0.027 |
+| 14 | 1.0054 | 0.0033 | 0.142 | 0.334 | 0.017 |
+| 20 | 1.0015 | 0.0026 | 0.136 | 0.328 | 0.009 |
+| 24 | 1.0010 | 0.0024 | 0.134 | 0.327 | 0.008 |
+
+### 15.6 Key findings
+
+1. **N2 BPTT 略优于 N4 BPTT**：Overall 38.08 vs 37.84（+0.24），且 LAST 37.08 远高于 N4 的 34.90，尾部更稳。就 BPTT 这条线而言，收窄到 N2+hdim64 无害反有小幅增益。
+2. **但仍跑不过无 BPTT 的 Run 10**：比已存 39.65 低 1.57，比峰值 40.60 低 2.52；Car strict −6.82 是最大拖累，符合「BPTT 负收益」的整体结论。
+3. **N2 与 N4 不是零和**：Cyclist strict +2.77 / loose +2.33，N2 明显更擅长小目标/自行车，而 N4 在 Car strict 更强（49.09 vs 46.22）。这与第 8 节「hdim128 需要 N4 解锁、N3 配 hdim64 更优」的容量-帧数匹配规律一致：低容量短序列对小目标/稀疏数据更友好。
+4. **Ped loose 保持高位**：N2 31.38 与 N4 31.49 几乎持平，都是 Run 10（28.74）之上的历史高位，属于 BPTT 这条线的一贯表现，而不是 N/hdim 变量的贡献。
+5. **posterior collapse 依旧存在**：`post_std` 与 `prior_std` 基本重合，`mu_diff²` 从 ep1 的 1.29 单调收敛到 ep24 的 0.008，随机状态逐步坍缩，`rssm_bptt_steps=1` 没有改变这一趋势。
+6. ✅ `checkpoint_interval=1` 生效，ep1–24 权重全部落盘，latest 指向 ep24，峰值 ep14 已保存。
+7. **Ped strict 尾段异动值得留意**：ep1–20 的 Ped 3D strict 基本在 0.03–0.87 的噪声带内，但 ep21=2.58、ep24=2.70 明显抬升，是历次 run 里第一次在训练末期出现非噪声级的行人 strict 信号（此前所有 run 均 ≤0.4）。仍需更多 epoch 确认，不能排除验证集抖动。
+
+### 15.7 Conclusions / Next
+
+- N2 BPTT 定性仍是负收益：综合 Overall 与核心 Car 均弱于 Run 10，不能替代当前主模型（Run 10 head-v2 ep14=39.65）。
+- 但 N2 相对 N4 的 BPTT 消融给出明确信号：在 truncated BPTT 下，`seq_len=2 + hidden_dim=64` 的轻配置不输甚至略好于 `seq_len=4 + hidden_dim=128`，且 Cyclist 明显占优。若继续沿 BPTT 方向，轻量 N2 配置是更经济也更稳的起点。
+- 与 Run 14 相同的未验证正交方向仍适用：`rssm_bptt_steps=2–4` 的更长 BPTT 窗口；`dynamic_weight=0.0` 纯 Doppler 信息注入；ego-velocity 接入 `action_dim`。
+- 本轮 peak `epoch_14.pth` 已保存（38.08），latest 为 ep24（37.08）。
