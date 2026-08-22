@@ -1,14 +1,14 @@
-# 五次训练完整记录（效果 / 配置 / 模块改动）
+# R4Det 训练完整记录（效果 / 配置 / 模块改动）
 
-> 数据来源：各 `work_dirs/<run>/*.log.json` 的 `mode=val` 记录（每 epoch 取该 run 最后一次 val，避免中途重启污染）+ 各 run 目录下 `*.py` 配置快照 + git log（branch `motionalignrssm`）。
+> 数据来源：各 `work_dirs/<run>/*.log.json` 的 `mode=val` 记录（每 epoch 取该 run 最后一次 val，避免中途重启污染）+ 各 run 目录下 `*.py` 配置快照 + git log（branches: `motionalignrssm` → `Nframerssm` → `detection_head_v2` → `radar_static_dynamic`）。
 > 评估口径：KITTI 3D detection AP。主指标 **Overall 3D moderate**（`pts_bbox/KITTI/Overall_3D_moderate`）。`_loose` 为松评估 per-class。
 > **Overall 口径说明**：`Overall_3D_moderate` = `(Car_strict + Truck_strict + Pedestrian_loose + Cyclist_loose) / 4`。即「Car/Truck 看 strict、Ped/Cyc 看 loose」的混合口径，不是四类全 strict（详见 `kitti_utils/eval.py` 的 Overall 聚合）。读任何 Overall 数字时请按此四项理解，否则会用错驱动变量。
-> 所有 run 训练 18 epoch（`baseline_temporal` 日志从 ep6 起，ep1-5 无记录）。
+> 训练时长按阶段：Run 1–8 为 18 epoch；Run 9 为 30 epoch；Run 10–15 为 24 epoch（`baseline_temporal` 日志从 ep6 起，ep1-5 无记录）。
 > 配套诊断见 [rssm_diagnosis.md](rssm_diagnosis.md)。
 
 ---
 
-## 0. 五次 run 一览
+## 0. 早期五次 run 一览（Run 1–5，仅时序融合模块对比）
 
 | # | run 目录 | 时序融合模块 | BEST 3D_mod @ep | 起点 | 一句话定位 |
 |---|---|---|---:|---|---|
@@ -17,6 +17,8 @@
 | 3 | `motion_align_rssm` (v1) | `MotionAlignedRSSMFusion` | 30.89 @ep10 | from scratch | 对齐层 + RSSM，KL 仍压死，踩坑跑 |
 | 4 | `motion_align_rssm2` (v2) | `MotionAlignedRSSMFusion` | 34.01 @ep14 | resume v1 latest | 修 KL 超参，追平 baseline |
 | 5 | `motion_align_rssm3` (v3) | `MotionAlignedRSSMFusion` | 33.77 @ep11 | from scratch | 同 v2 配置 + logstd 防爆炸，从头训 |
+
+> 后续 Run 6–15 见第 7–15 节；本节只覆盖最初五次时序融合模块对比。
 
 **BEST 3D_moderate 排名**：`baseline_temporal` 34.50 > `motion_align_rssm2` 34.01 > `motion_align_rssm3` 33.77 > `baseline_rssm` 33.54 > `motion_align_rssm(v1)` 30.89。
 
@@ -379,6 +381,7 @@ resume_from:     None -> v1 latest.pth   (续训 v1)
 - **频率加权 Overall（平台，last-5）**: **40.07 ± 0.47**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
 - diff: load_from only, else identical to Run 7 (N4 30e no-pretrain)
 - BEST: ep19 37.94 🔥 (ALL-TIME RECORD)
+- ⚠️ 盘点注：ep19 权重已不在盘中，当前落盘为 ep20=36.94，见 17.2 节。
 - LAST: ep30 35.63
 
 ### 9.1 Epoch curve: Overall 3D_moderate
@@ -502,6 +505,7 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 - **频率加权 Overall（平台，last-5）**: **43.51 ± 0.51**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
 - **BEST overall: ep11 = 40.60** ⚠️ 未存（奇数 epoch，interval=2）
 - **BEST SAVED overall: ep14 = 39.65**
+- **⚠️ 盘点注：ep14 权重已不在盘中，当前落盘为 ep12=39.26，见 17.2 节**
 - **Car strict BEST: ep20 = 53.04（已存）**
 - LAST: ep24 = 38.76
 
@@ -1171,3 +1175,15 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 - 确认每个 run 的 `best_history` 与 `last` 均已写入本文件，并能从日志重新获得精确 val。
 - 用 `python3 tools/summarize_run.py <work_dir> --tail 5` 再核一遍 best/last。
 - 本次清理未执行删除，因为实际候选删除文件已为 0；后续清理由脚本 dry-run 后人工触发。
+
+---
+
+## 18. 论文最终报告口径（定稿）
+
+> 写于 2026-08-22，用于把「对外报什么、对内记什么」钉死，避免与会话中多次口头约定不一致。
+
+- 论文主表：报告每个代表性 run 的单点 `BEST` Overall（等权 1/4 口径，`pts_bbox/KITTI/Overall_3D_moderate`），这是对外可比的标准口径。
+- 补充材料 / appendix：报告 deterministic 多 seed 的 `mean ± std`，以及 BEST 所属 epoch 的平台区间。用于回应「BEST 是否 cherry-pick」的审稿追问。
+- 最终多 seed 一律以 `--deterministic` 运行为准；非 deterministic 的历史 run 只作为先导数据，不进入最终口径表中。
+- `latest.pth` 保留指向 last epoch；每个 run 最终只保留 `best epoch` + `last epoch` 两个权重和 `latest.pth` 符号链接（见第 17 节）。
+- 当前主方法 Baseline/Reference 记为 Run 10 head-v2；后续若多 seed 产生新的 best，再以新 best 更新第 10 节和本节。
