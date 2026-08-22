@@ -1133,3 +1133,41 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 
 - 工具已支持 `--weighted`，以后每个新 run 跑完跑一条 `--weighted` 即得频率加权口径。
 - 权重写死在 `tools/summarize_run.py` 的 `CLASS_PRIORS`，若数据集（train/val）类别分布变化需同步更新。
+
+---
+
+## 17. Checkpoint 保留规则与当前盘点
+
+> 写于 2026-08-22，追加在文档末尾，便于每次实验后照着做。
+
+### 17.1 保留规则（此后所有 run 统一执行）
+
+- 每个 run 只保留 `best epoch` + `last epoch` 两个真实 `.pth` 文件，外加 `latest.pth` 符号链接。
+- `best` 是 val `Overall_3D_moderate`（或指定主指标）最高的已保存 epoch。
+- 若最优 epoch 未落盘，回退为 val 最接近该最优值的已保存 epoch（例如 Run 10 head-v2 保留 `epoch_12`）。
+- `latest.pth` 必须指向 `last.pth`；删除中间 epoch 时**不得删除** `epoch_best`、`epoch_last`、`latest.pth`。
+- 清理删除是破坏性操作，只 dry-run 确认无误后执行，default 不自动删。
+
+### 17.2 当前盘点（2026/08/22）
+
+已存在的 9 个历史 run 均已符合上述规则：每个目录只有 2 个 epoch checkpoint，`latest.pth` 均正常指向 last，无悬挂链接、无散落的 `.pth`。
+
+其中两个历史 run 的最优 epoch 已不可恢复：
+
+| Run | 原最优（丢失） | 当前保留 best | 备注 |
+|---|---:|---:|---|
+| Run 10 head-v2（`rssm_N4_2x4_24e_pretrained_v2_head`） | ep14 39.65 | ep12 39.26 | 当前最接近的已保存权重 |
+| Run 9 pretrained 30e（`rssm_N4_2x4_30e_pretrained`） | ep19 37.94 | ep20 36.94 | 当前保留的是 30e best |
+
+这两个丢失项会在多 seed 结束后重新确定新的 best 并补上记录。
+
+### 17.3 不做删除的部分
+
+- `checkpoints/pretrained_tj4d.pth`：所有 pretrained 训练的 `load_from` 输入，不可删。
+- `work_dirs/run10_headv2_multiseed`：当前多 seed 实验在跑，中间的 epoch 实时保存，不在清理范围。
+
+### 17.4 删除前的检查点
+
+- 确认每个 run 的 `best_history` 与 `last` 均已写入本文件，并能从日志重新获得精确 val。
+- 用 `python3 tools/summarize_run.py <work_dir> --tail 5` 再核一遍 best/last。
+- 本次清理未执行删除，因为实际候选删除文件已为 0；后续清理由脚本 dry-run 后人工触发。
