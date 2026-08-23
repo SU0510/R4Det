@@ -455,7 +455,7 @@ custom_hooks = [
 
 # log checkpoint & evaluation
 evaluation = dict(interval=1, pipeline=eval_pipeline)
-checkpoint_config = dict(interval=2)
+checkpoint_config = dict(interval=1)
 log_config = dict(
     interval=50,
     hooks=[
