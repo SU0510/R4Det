@@ -1334,3 +1334,65 @@ seed_0 与原 Run 10 用的是同一 default seed（0），但 3 卡 vs 4 卡导
 - 补充材料：附三 seed 逐 epoch 曲线（19.1 节）和逐类别 mean +/- std（19.3 节）。
 - 最佳单点：seed_2 ep14 = 40.88（已存），作为 released checkpoint 候选。
 - BEST epoch 选择：ep12-16 是稳定高原区，报告时取各 seed 自身 BEST（而非固定 epoch），避免低估。
+
+---
+
+## 20. No-Temporal Baseline（N4, 24e, seed_0）
+
+### 20.0 实验设置
+
+- 目的：回答「时序融合模块到底贡献多少」，把当前最大因果缺口从检测头拆出来。
+- 配置：在 Run 10 head-v2 的 24e 配置上只改一项：`temporal_fusion=None`。
+- 保持固定不变的变量：`seq_len=4`、数据 pipeline、head-v2 检测头、`samples_per_gpu=2`、`GradientCumulativeOptimizerHook(cumulative_iters=2)`、`max_epochs=24`、`checkpoint_interval=1`、pretrained checkpoint。
+- 运行设置：`seed=0`、`--deterministic`、3 进程，物理 GPU 5/6/7。
+- 工作目录：`work_dirs/no_temporal_N4_2x4_24e_seed0`
+- 日志：`20260824_160710.log(.json)`
+- 配置文件：`configs/r4det/TJ4D-R4Det_no_temporal_N4_2x4_24e_pretrained_v2.py`
+- 已提交：`ffb4ac7 feat: add no-temporal N4 baseline config`
+
+### 20.1 Overall 3D_moderate 逐 epoch 曲线
+
+| epoch | 3D_mod | epoch | 3D_mod | epoch | 3D_mod |
+|---|---:|---|---:|---|---:|
+| 1  | 15.1347 | 9  | 33.6811 | 17 | 34.8725 |
+| 2  | 24.6563 | 10 | 33.6988 | 18 | 34.8152 |
+| 3  | 29.2675 | 11 | 34.1612 | 19 | 34.5336 |
+| 4  | 29.1228 | 12 | 33.5923 | 20 | **35.5903** |
+| 5  | 30.4197 | 13 | 34.9294 | 21 | 35.4497 |
+| 6  | 33.6661 | 14 | **35.2701** | 22 | 34.5837 |
+| 7  | 32.0290 | 15 | 34.3506 | 23 | 34.8232 |
+| 8  | 30.0681 | 16 | 35.1058 | 24 | 34.3664 |
+
+### 20.2 ep12-16 逐类别均值
+
+Overall 口径为 Car/Truck strict + Ped/Cyc loose 等权。ep12-16 的均值如下：
+
+| Metric | mean | min | max |
+|---|---:|---:|---:|
+| Overall 3D_moderate | 34.6496 | 33.5923 | 35.2701 |
+| Overall 3D_easy | 37.1762 | 35.7064 | 37.8647 |
+| Overall 3D_hard | 33.3940 | 32.5231 | 33.9370 |
+| Overall BEV_moderate | 41.6243 | 41.2711 | 41.8689 |
+| Car 3D_mod_strict | 46.1617 | 43.0093 | 49.4200 |
+| Cyclist 3D_mod_loose | 42.2829 | 40.8932 | 43.6719 |
+| Pedestrian 3D_mod_loose | 26.6721 | 25.4214 | 27.9513 |
+| Truck 3D_mod_strict | 23.4818 | 20.5529 | 24.9948 |
+
+### 20.3 对比 Run 10 RSSM seed_0
+
+Run 10 seed_0 基线数据采用用户给定的同 seed 口径：
+
+| 口径 | No-Temporal | RSSM seed_0 | Δ RSSM - NoTemporal |
+|---|---:|---:|---:|
+| ep12-16 mean | 34.6496 | 38.39 | **+3.7404** |
+| BEST | 35.5903 @ ep20 | 39.88 @ ep16 | **+4.2897** |
+| last-5 mean | 34.9627 (ep20-24) | 37.61 | **+2.6473** |
+
+### 20.4 结论
+
+No-Temporal ep12-16 落在 `< 37.4` 分支：RSSM 带来稳定超过 3 点的 ep12-16 收益，不是噪声，也不是检测头单点差异。当前因果结论明确：
+
+1. 时序融合模块是 head-v2 主线中真实、稳定的增益来源。
+2. BEST 口径下 RSSM 高出 4.29 点，说明时序先验对收敛上限的贡献同样存在。
+3. 显存也从 RSSM 的约 24 GB/卡降到 No-Temporal 约 6 GB/卡，进一步说明 RSSM 的运动对齐状态与 BPTT 窗口是主要显存成本。
+4. 下一步遵循原判定规则：实现 deterministic motion-aligned GRU，而不是先改检测头。No-Temporal 的富余显存留到后续批次/分辨率扩张再使用。
