@@ -1200,23 +1200,24 @@ class R4Det(MVXFasterRCNN):
         rssm_recon_loss = feature_dict.get('rssm_recon_loss')
         rssm_stats = feature_dict.get('rssm_stats')
 
-        if self.temporal_fusion is not None and rssm_kl is not None and history_rssm_losses:
-            rssm_kl = (sum(loss[1] for loss in history_rssm_losses) + rssm_kl) / (
-                len(history_rssm_losses) + 1)
-            rssm_recon_loss = (
-                sum(loss[0] for loss in history_rssm_losses) + rssm_recon_loss
-            ) / (len(history_rssm_losses) + 1)
-        # compute for all losses
+        # compute all losses
         losses = dict()
 
-        # RSSM losses
-        if self.temporal_fusion is not None and rssm_kl is not None:
-            losses['loss_rssm_kl'] = rssm_kl
+        if self.temporal_fusion is not None and rssm_recon_loss is not None:
+            if history_rssm_losses:
+                rssm_recon_loss = (
+                    sum(loss[0] for loss in history_rssm_losses) + rssm_recon_loss
+                ) / (len(history_rssm_losses) + 1)
+                if rssm_kl is not None:
+                    rssm_kl = (
+                        sum(loss[1] for loss in history_rssm_losses) + rssm_kl
+                    ) / (len(history_rssm_losses) + 1)
+            if rssm_kl is not None:
+                losses['loss_rssm_kl'] = rssm_kl
             losses['loss_rssm_recon'] = rssm_recon_loss
             if rssm_stats is not None:
                 # stat_* keys: logged by logger but not summed into total loss
                 losses.update(rssm_stats)
-
         # img_feats = feature_dict.get('img_feats')
         instance_features = None
 

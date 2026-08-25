@@ -498,6 +498,110 @@ class BEVRSSMTemporalFusion(BaseModule):
 
 
 @FUSION_LAYERS.register_module()
+class DeterministicMotionAlignedLatentFusion(MotionAlignedRSSMFusion):
+    """Motion-aligned recurrent fusion with a deterministic latent state.
+
+    Keeps the same recurrent backbone as MotionAlignedRSSMFusion (h/z state,
+    deformable h/z alignment, encoder, ConvGRU transition, posterior_mu,
+    decoder/reconstruction branch, and output_proj + residual feat).
+    Removes the stochastic components: prior_mu, prior_logstd,
+    posterior_logstd, sampling, and the KL loss. Training and inference always
+    use z_t = posterior_mu([h_t, e_t]).
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size=3,
+        latent_dim=None,
+        hidden_dim=128,
+        action_dim=0,
+        norm_cfg=dict(type='BN', requires_grad=True),
+        act_cfg=dict(type='ReLU', inplace=True),
+        align_kernel_size=3,
+        align_deform_groups=1,
+        align_z_state=True,
+        init_cfg=None
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            latent_dim=latent_dim,
+            hidden_dim=hidden_dim,
+            action_dim=action_dim,
+            kl_scale=1.0,
+            free_nats=0.0,
+            min_std=0.1,
+            init_std=0.2,
+            norm_cfg=norm_cfg,
+            act_cfg=act_cfg,
+            align_kernel_size=align_kernel_size,
+            align_deform_groups=align_deform_groups,
+            align_z_state=align_z_state,
+            init_cfg=init_cfg
+        )
+
+        # Unregister the stochastic branches. The parent constructor created
+        # them in the standard RSSM layout; this class never touches them.
+        self.prior_mu = None
+        self.prior_logstd = None
+        self.posterior_logstd = None
+
+    @auto_fp16(apply_to=['feat', 'velocity'])
+    def forward(self, feat, velocity=None, use_posterior=True,
+                deterministic=True, detach_state=True):
+        B, C, H, W = feat.shape
+
+        if self.use_action:
+            if velocity is None:
+                velocity = torch.zeros(B, self.action_dim, device=feat.device)
+            velocity_map = velocity[:, :, None, None].expand(
+                B, self.action_dim, H, W)
+        else:
+            velocity_map = None
+
+        if self.h_state is None or self.h_state.shape[0] != B:
+            self.h_state = torch.zeros(
+                B, self.channels, H, W, device=feat.device, dtype=feat.dtype)
+            self.z_state = torch.zeros(
+                B, self.latent_dim, H, W, device=feat.device, dtype=feat.dtype)
+
+        h_aligned = self._deform_align(
+            self.h_state, feat,
+            self.align_h_offset_mask, self.align_h_deform_conv)
+        if self.align_z_state:
+            z_aligned = self._deform_align(
+                self.z_state, feat,
+                self.align_z_offset_mask, self.align_z_deform_conv)
+        else:
+            z_aligned = self.z_state
+
+        if self.use_action:
+            x = torch.cat([z_aligned, velocity_map], dim=1)
+        else:
+            x = z_aligned
+        h_t = self.transition(x, h_aligned)
+
+        e_t = self.encoder(feat)
+        z_t = self.posterior_mu(torch.cat([h_t, e_t], dim=1))
+
+        reconstruction = self.decoder(torch.cat([h_t, z_t], dim=1))
+        output = self.output_proj(z_t)
+        output = output + feat
+
+        if detach_state:
+            self.h_state = h_t.detach()
+            self.z_state = z_t.detach()
+        else:
+            self.h_state = h_t
+            self.z_state = z_t
+
+        return output, reconstruction, None, h_t, z_t, None
+
+
+@FUSION_LAYERS.register_module()
 class MotionAlignedRSSMFusion(BEVRSSMTemporalFusion):
     """RSSM with motion-aware deformable alignment of historical states.
 
