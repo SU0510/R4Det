@@ -1396,3 +1396,62 @@ No-Temporal ep12-16 落在 `< 37.4` 分支：RSSM 带来稳定超过 3 点的 ep
 2. BEST 口径下 RSSM 高出 4.29 点，说明时序先验对收敛上限的贡献同样存在。
 3. 显存也从 RSSM 的约 24 GB/卡降到 No-Temporal 约 6 GB/卡，进一步说明 RSSM 的运动对齐状态与 BPTT 窗口是主要显存成本。
 4. 下一步遵循原判定规则：实现 deterministic motion-aligned GRU，而不是先改检测头。No-Temporal 的富余显存留到后续批次/分辨率扩张再使用。
+
+---
+
+## 21. Deterministic Latent Fusion（motion-align deterministic latent, N4, 2x4, 24e, seed_0）
+
+### 21.0 实验设置
+
+- 目的：拆解第 20 节得到的约 3.7 点时序收益，判断它来自确定性状态传播（h/z 双状态、deform alignment、encoder、ConvGRU transition、decoder/reconstruction、output_proj + feat）还是 RSSM 随机建模（prior/KL/sampling）。
+- 配置：在保留 h/z 双状态、deform alignment、encoder、ConvGRU transition、posterior_mu、decoder/reconstruction、output_proj + residual feat、N4、BPTT1、head-v2、pretrain、batch、schedule 的前提下，删除 prior_logstd/posterior_logstd/sampling/KL。训练和推理固定 `z_t = posterior_mu(torch.cat([h_t, e_t], dim=1))`。
+- 保持固定不变的变量：`seq_len=4`、数据 pipeline、head-v2 检测头、`samples_per_gpu=2`、`workers_per_gpu=2`、`cumulative_iters=2`、`max_epochs=24`、`checkpoint_interval=1`、pretrained checkpoint。
+- 运行设置：`seed=0`、`--deterministic`、`CUDA_VISIBLE_DEVICES=5,6,7`、3 进程。
+- 工作目录：`work_dirs/deterministic_latent_N4_2x4_24e_seed0`
+- 日志：`20260825_045915.log(.json)`
+- 配置文件：`configs/r4det/TJ4D-R4Det_motion_align_deterministic_latent_N4_2x4_24e_pretrained_v2_head.py`
+- 相关提交：`7643a5b feat: add deterministic motion-aligned latent fusion`、`99c74ff fix: move deterministic latent class after stochastic parent`
+
+### 21.1 Overall 3D_moderate 逐 epoch 曲线
+
+| epoch | 3D_mod | epoch | 3D_mod | epoch | 3D_mod |
+|---|---:|---|---:|---|---:|
+| 1  | 16.0119 | 9  | 36.5710 | 17 | 35.8816 |
+| 2  | 22.6346 | 10 | 37.7363 | 18 | 36.6017 |
+| 3  | 29.9400 | 11 | 36.0891 | 19 | 36.3157 |
+| 4  | 33.6664 | 12 | 36.5496 | 20 | 37.3297 |
+| 5  | 32.0928 | 13 | **38.4411** | 21 | 38.1950 |
+| 6  | 34.4483 | 14 | 35.4515 | 22 | 37.4452 |
+| 7  | 37.2020 | 15 | 36.9424 | 23 | 36.6420 |
+| 8  | 37.6450 | 16 | 38.0183 | 24 | 37.0749 |
+
+### 21.2 ep12-16 逐指标均值
+
+| Metric | mean | min | max |
+|---|---:|---:|---:|
+| Overall 3D_moderate | 37.0806 | 35.4515 | 38.4411 |
+| Overall 3D_easy | 39.1113 | 37.5349 | 40.7642 |
+| Overall 3D_hard | 35.6477 | 34.1496 | 36.8898 |
+| Overall BEV_moderate | 45.5314 | 43.7859 | 47.2859 |
+| Overall 2D_moderate | 45.0461 | 42.2836 | 46.5694 |
+| Car 3D_mod_strict | 44.6349 | 42.0855 | 47.7723 |
+| Cyclist 3D_mod_loose | 44.9337 | 42.0461 | 47.6161 |
+| Pedestrian 3D_mod_loose | 28.3171 | 25.6201 | 30.5342 |
+| Truck 3D_mod_strict | 30.4367 | 26.2493 | 33.2016 |
+
+### 21.3 与 No-Temporal / RSSM seed_0 对比
+
+| 口径 | No-Temporal | RSSM seed_0 | Deterministic | Δ Det - RSSM |
+|---|---:|---:|---:|---:|
+| ep12-16 mean | 34.6496 | 38.39 | 37.0806 | -1.3094 |
+| BEST | 35.5903 @ ep20 | 39.88 @ ep16 | 38.4411 @ ep13 | -1.4389 |
+| last-5 mean | 34.9627 (ep20-24) | 37.61 | 37.3374 (ep20-24) | -0.2726 |
+
+### 21.4 结论
+
+本 run ep12-16 mean = **37.0806 < 37.4**，落入原判定规则的「RSSM 随机训练贡献超过 1 点」分支：
+
+1. 保留确定性转变的 h/z + deform alignment + encoder + ConvGRU transition + decoder/reconstruction 仍然显著高于 No-Temporal（37.08 vs 34.65，+2.43），因此确定性时序传播本身是真实有效的一部分收益。
+2. 但相比完整 RSSM seed_0 还差 1.31 点（ep12-16 mean），说明 prior + KL + posterior 重参数采样这一套随机建模不是可删除的冗余复杂度，而是必需组件。
+3. 因此下一步不是压成单状态 motion-aligned GRU，而是保留 RSSM，并把工作重点转向重新设计 KL / free-bits 训练策略。
+4. 依据判定规则，本结果已直接落在 `< 37.4` 分支，不需要补 seed1/seed2 进入灰区。
