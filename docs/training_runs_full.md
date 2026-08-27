@@ -1455,3 +1455,88 @@ No-Temporal ep12-16 落在 `< 37.4` 分支：RSSM 带来稳定超过 3 点的 ep
 2. 但相比完整 RSSM seed_0 还差 1.31 点（ep12-16 mean），说明 prior + KL + posterior 重参数采样这一套随机建模不是可删除的冗余复杂度，而是必需组件。
 3. 因此下一步不是压成单状态 motion-aligned GRU，而是保留 RSSM，并把工作重点转向重新设计 KL / free-bits 训练策略。
 4. 依据判定规则，本结果已直接落在 `< 37.4` 分支，不需要补 seed1/seed2 进入灰区。
+
+---
+
+## 22. KL=0 消融（完整 RSSM，关闭 KL 梯度，seed0）
+
+### 22.0 实验设置
+
+- 目的：回答「完整 RSSM 的收益到底来自 KL/prior 约束，还是来自 posterior sampling 与确定性状态传播」，只把训练侧 `kl_scale` 置零，其余全部保持。
+- 配置：以 head-v2、N4、pretrained、batch12、24e 主模型为基础，删除 `KLScaleSchedulerHook`，设置 `kl_scale=0.0`、`rssm_bptt_steps=1`。
+- 保留不变：完整 `MotionAlignedRSSMFusion`、posterior sampling、`seq_len=4`、detection head-v2、`samples_per_gpu=2`、`workers_per_gpu=2`、`cumulative_iters=2`、`max_epochs=24`、`checkpoint_interval=1`、pretrained checkpoint。
+- 运行设置：`seed=0`、3 卡，有效 batch 12。
+- 工作目录：`work_dirs/rssm_kl0_N4_2x4_24e_seed0`
+- 日志：`20260826_043350.log(.json)`
+- 配置文件：`configs/r4det/TJ4D-R4Det_motion_align_rssm_N4_2x4_24e_pretrained_v2_head_kl0.py`
+- 相关提交：`4aff567` add KL=0 motion-align RSSM ablation config、`b0db033` fix: align KL=0 ablation batch setup
+
+### 22.1 Overall 3D_moderate 逐 epoch 曲线
+
+第三行为判定窗口 ep12-16；ep14 为窗口最高，ep22 为全 run 最高。
+
+| epoch | 3D_mod | epoch | 3D_mod | epoch | 3D_mod |
+|---|---:|---|---:|---|---:|
+| 1  | 16.7797 | 9  | 38.5991 | 17 | 37.1979 |
+| 2  | 23.9284 | 10 | 37.1948 | 18 | 38.8741 |
+| 3  | 30.3761 | 11 | 37.2744 | 19 | 37.3882 |
+| 4  | 29.5956 | 12 | 39.5836 | 20 | 39.1799 |
+| 5  | 31.5989 | 13 | 39.4934 | 21 | 38.8375 |
+| 6  | 34.5267 | 14 | **39.6240** | 22 | **40.3481** |
+| 7  | 35.9756 | 15 | 37.6445 | 23 | 38.8278 |
+| 8  | 35.2369 | 16 | 38.9717 | 24 | 37.9561 |
+
+### 22.2 ep12-16 逐指标 mean / min / max
+
+Overall 口径为 Car/Truck strict + Ped/Cyc loose 等权。
+
+| Metric | mean | min | max |
+|---|---:|---:|---:|
+| Overall 3D_moderate | 39.0634 | 37.6445 | 39.6240 |
+| Overall 3D_easy | 41.1325 | 39.0125 | 42.0542 |
+| Overall 3D_hard | 37.5560 | 36.2441 | 38.1224 |
+| Overall BEV_moderate | 46.9612 | 46.2096 | 47.8544 |
+| Overall 2D_moderate | 46.7393 | 46.0684 | 47.9641 |
+| Car 3D_moderate_strict | 48.0055 | 44.3523 | 50.2778 |
+| Cyclist 3D_moderate_loose | 49.3367 | 47.6233 | 50.1467 |
+| Pedestrian 3D_moderate_loose | 26.9333 | 24.6588 | 29.1242 |
+| Truck 3D_moderate_strict | 31.9781 | 29.7207 | 35.7743 |
+
+### 22.3 与完整 RSSM seed0 / Deterministic / No-Temporal 对比
+
+| 口径 | KL0 | RSSM seed0 | Deterministic | No-Temporal | Δ KL0 - RSSM |
+|---|---:|---:|---:|---:|---:|
+| ep12-16 mean | 39.0634 | 38.3902 | 37.0806 | 34.6496 | +0.6732 |
+| BEST | 40.3481 @ ep22 | 39.8802 @ ep16 | 38.4411 @ ep13 | 35.5903 @ ep20 | +0.4679 |
+| last-5 mean | 39.0299 | 37.6084 | 37.3374 | 34.9627 | +1.4215 |
+
+ep12-16 类别均值对比：
+
+| Metric | KL0 | RSSM seed0 | Δ KL0 - RSSM |
+|---|---:|---:|---:|
+| Overall 3D_moderate | 39.0634 | 38.3902 | +0.6732 |
+| Car 3D_moderate_strict | 48.0055 | 47.8027 | +0.2028 |
+| Cyclist 3D_moderate_loose | 49.3367 | 48.6271 | +0.7096 |
+| Pedestrian 3D_moderate_loose | 26.9333 | 28.9160 | -1.9827 |
+| Truck 3D_moderate_strict | 31.9781 | 28.2149 | +3.7632 |
+
+### 22.4 RSSM 动态检查
+
+KL 梯度确实被关闭，但 posterior 没有随 KL=0 被压死。
+
+| 指标 | ep24 训练末值 |
+|---|---:|
+| loss_rssm_kl | 0.0000 |
+| loss_rssm_recon | 0.0018 |
+| stat_kl_raw_mean | 21.5168 |
+| stat_kl_effective_mean | 21.6740 |
+| stat_mu_diff_sq | 1.7327 |
+| stat_posterior_std | 0.1035 |
+| stat_prior_std | 0.2062 |
+
+### 22.5 结论与下一步
+
+1. KL0 的 ep12-16 `Overall_3D_moderate` 均值为 **39.0634**，窗口最高为 **39.6240**，均通过 37.9 阈值。
+2. 因此按原判定规则，完整 RSSM 的主要收益来自 posterior sampling，而不是 KL/prior 梯度。
+3. 类别拆解不是单向普涨：Truck strict 提升明显（+3.76），Car、Cyclist 小幅提升，Pedestrian loose 反而低约 1.98 点。后续 posterior-only stochastic fusion 需要继续看 Car/Cyclist/Truck，同时单独盯住 Pedestrian。
+4. 下一步进入 posterior-only stochastic fusion 消融：保留 posterior sampling，删除 prior/KL，不做 deterministic seed1/2、单状态 GRU 压缩，也不重新调整 free-bits。
