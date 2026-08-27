@@ -337,5 +337,53 @@ class TestMotionAlignedRSSMFusion(unittest.TestCase):
         self.assertEqual(output.shape, (B, C, H, W))
 
 
+class TestFixedNoisePosteriorLatentFusion(unittest.TestCase):
+    """Test the fixed-noise posterior fusion behaviour."""
+
+    def setUp(self):
+        from mmdet3d.models.fusion_layers.rssm_fusion import FixedNoisePosteriorLatentFusion
+
+        self.fusion = FixedNoisePosteriorLatentFusion(
+            in_channels=256,
+            out_channels=256,
+            latent_dim=256,
+            hidden_dim=64,
+        )
+        self.fusion.eval()
+
+    def test_default_noise_std(self):
+        self.assertEqual(self.fusion.posterior_noise_std, 0.1)
+
+    def test_deterministic_ignores_noise(self):
+        B, C, H, W = 2, 256, 8, 8
+        feat = torch.randn(B, C, H, W)
+        outputs = []
+        for _ in range(2):
+            self.fusion.reset_state()
+            with torch.no_grad():
+                out, recon, kl, h, z, stats = self.fusion(
+                    feat, use_posterior=True, deterministic=True)
+            outputs.append(out)
+
+        self.assertTrue(torch.allclose(outputs[0], outputs[1], atol=1e-6))
+        self.assertIsNone(kl)
+        self.assertIsNone(stats)
+
+    def test_non_deterministic_injects_fixed_noise(self):
+        B, C, H, W = 2, 256, 8, 8
+        feat = torch.randn(B, C, H, W)
+        outputs = []
+        for _ in range(2):
+            self.fusion.reset_state()
+            with torch.no_grad():
+                out, recon, kl, h, z, stats = self.fusion(
+                    feat, use_posterior=True, deterministic=False)
+            outputs.append(out)
+
+        self.assertFalse(torch.allclose(outputs[0], outputs[1], atol=1e-3))
+        self.assertIsNone(kl)
+        self.assertIsNone(stats)
+
+
 if __name__ == '__main__':
     unittest.main()

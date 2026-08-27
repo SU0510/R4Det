@@ -742,6 +742,7 @@ class DeterministicMotionAlignedLatentFusion(MotionAlignedRSSMFusion):
         latent_dim=None,
         hidden_dim=128,
         action_dim=0,
+        posterior_noise_std=0.0,
         norm_cfg=dict(type='BN', requires_grad=True),
         act_cfg=dict(type='ReLU', inplace=True),
         align_kernel_size=3,
@@ -767,6 +768,7 @@ class DeterministicMotionAlignedLatentFusion(MotionAlignedRSSMFusion):
             align_z_state=align_z_state,
             init_cfg=init_cfg
         )
+        self.posterior_noise_std = posterior_noise_std
 
         # Unregister the stochastic branches. The parent constructor created
         # them in the standard RSSM layout; this class never touches them.
@@ -822,7 +824,11 @@ class DeterministicMotionAlignedLatentFusion(MotionAlignedRSSMFusion):
         h_t = self.transition(x, h_aligned)
 
         e_t = self.encoder(feat)
-        z_t = self.posterior_mu(torch.cat([h_t, e_t], dim=1))
+        z_mu = self.posterior_mu(torch.cat([h_t, e_t], dim=1))
+        if not deterministic and self.posterior_noise_std > 0:
+            z_t = z_mu + self.posterior_noise_std * torch.randn_like(z_mu)
+        else:
+            z_t = z_mu
 
         reconstruction = self.decoder(torch.cat([h_t, z_t], dim=1))
         output = self.output_proj(z_t)
@@ -836,3 +842,19 @@ class DeterministicMotionAlignedLatentFusion(MotionAlignedRSSMFusion):
             self.z_state = z_t
 
         return output, reconstruction, None, h_t, z_t, None
+
+
+@FUSION_LAYERS.register_module()
+class FixedNoisePosteriorLatentFusion(DeterministicMotionAlignedLatentFusion):
+    """Posterior fusion with fixed Gaussian noise during training.
+
+    Keeps the recurrent backbone (h/z state, deformable alignment, encoder,
+    ConvGRU transition, posterior_mu, decoder/reconstruction, and output_proj +
+    residual feat) and removes prior/prior_logstd/posterior_logstd/sampling/KL.
+    Training draws z_t = posterior_mu + posterior_noise_std * N(0, I);
+    inference uses z_t = posterior_mu.
+    """
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('posterior_noise_std', 0.1)
+        super().__init__(*args, **kwargs)
