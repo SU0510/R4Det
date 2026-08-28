@@ -1540,3 +1540,75 @@ KL 梯度确实被关闭，但 posterior 没有随 KL=0 被压死。
 2. 因此按原判定规则，完整 RSSM 的主要收益来自 posterior sampling，而不是 KL/prior 梯度。
 3. 类别拆解不是单向普涨：Truck strict 提升明显（+3.76），Car、Cyclist 小幅提升，Pedestrian loose 反而低约 1.98 点。后续 posterior-only stochastic fusion 需要继续看 Car/Cyclist/Truck，同时单独盯住 Pedestrian。
 4. 下一步进入 posterior-only stochastic fusion 消融：保留 posterior sampling，删除 prior/KL，不做 deterministic seed1/2、单状态 GRU 压缩，也不重新调整 free-bits。
+
+---
+
+## 23. FixedNoise Posterior Latent Fusion（固定后验噪声，N4, 2x4, 24e, seed_0）
+
+### 23.0 实验设置
+
+- 目的：承接第 22 节结论，验证「完整 RSSM 的增益来自 posterior sampling」是否只需在 posterior mean 上加入固定高斯噪声，而不需要可学习的 posterior std。
+- 配置：继承 Deterministic Latent Fusion 的 h/z 双状态、deform alignment、encoder、ConvGRU transition、posterior_mu、decoder/reconstruction、output_proj + residual feat；删除 prior/prior_logstd/posterior_logstd/KL。
+- training：`z_t = posterior_mu(x) + 0.1 * N(0, I)`；inference：`z_t = posterior_mu(x)`（确定性）。
+- 保持固定不变的变量：`seq_len=4`、head-v2、`samples_per_gpu=2`、`workers_per_gpu=2`、`cumulative_iters=2`、`max_epochs=24`、`checkpoint_interval=1`、`hidden_dim=128`、`rssm_bptt_steps=1`、`lr=0.00015`、pretrained checkpoint。
+- 运行设置：`seed=0`、3 卡、有效 batch 12。
+- 工作目录：`work_dirs/rssm_N4_fixednoise_posterior_seed0`
+- 日志：`20260827_052300.log(.json)`
+- 配置文件：`configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_bptt_fixednoise.py`
+- 相关提交：`01d6cb6 feat: add fixed-noise posterior fusion ablation`
+
+### 23.1 Overall 3D_moderate 逐 epoch 曲线
+
+第三行为判定窗口 ep12-16；ep16 为窗口最高，也是全 run BEST。
+
+| epoch | 3D_mod | epoch | 3D_mod | epoch | 3D_mod |
+|---|---:|---|---:|---|---:|
+| 1  | 19.4041 | 9  | 32.6978 | 17 | 36.4725 |
+| 2  | 25.1668 | 10 | 36.1395 | 18 | 37.6786 |
+| 3  | 28.2528 | 11 | 33.6568 | 19 | 38.3482 |
+| 4  | 31.8684 | 12 | 34.3371 | 20 | 36.3328 |
+| 5  | 31.4987 | 13 | 35.8474 | 21 | 36.9975 |
+| 6  | 34.1488 | 14 | 36.2377 | 22 | 37.3021 |
+| 7  | 35.3952 | 15 | 36.8997 | 23 | 37.1123 |
+| 8  | 36.2861 | 16 | **38.4151** | 24 | 36.9415 |
+
+### 23.2 ep12-16 逐指标 mean / min / max
+
+Overall 口径为 Car/Truck strict + Ped/Cyc loose 等权。
+
+| Metric | mean | min | max |
+|---|---:|---:|---:|
+| Overall 3D_moderate | 36.3474 | 34.3371 | 38.4151 |
+| Overall 3D_easy | 38.6484 | 36.0293 | 41.0250 |
+| Overall 3D_hard | 34.9808 | 33.1099 | 36.9788 |
+| Overall BEV_moderate | 44.9409 | 43.1088 | 47.3162 |
+| Overall 2D_moderate | 44.7150 | 42.9076 | 46.9505 |
+| Car 3D_moderate_strict | 48.4945 | 45.3705 | 53.7636 |
+| Cyclist 3D_moderate_loose | 42.9509 | 39.0300 | 45.6074 |
+| Pedestrian 3D_moderate_loose | 27.0083 | 25.0096 | 28.5263 |
+| Truck 3D_moderate_strict | 26.9359 | 24.4216 | 29.5687 |
+
+### 23.3 与 RSSM seed0 / KL0 / Deterministic / No-Temporal 对比
+
+| 口径 | FixedNoise | KL0 | RSSM seed0 | Deterministic | No-Temporal |
+|---|---:|---:|---:|---:|---:|
+| ep12-16 mean | 36.3474 | 39.0634 | 38.3902 | 37.0806 | 34.6496 |
+| BEST | 38.4151 @ ep16 | 40.3481 @ ep22 | 39.8802 @ ep16 | 38.4411 @ ep13 | 35.5903 @ ep20 |
+| last-5 mean | 36.9372 | 39.0299 | 37.6084 | 37.3374 | 34.9627 |
+
+ep12-16 类别均值对比：
+
+| Metric | FixedNoise | KL0 | RSSM seed0 | Δ FixedNoise - KL0 | Δ FixedNoise - RSSM |
+|---|---:|---:|---:|---:|---:|
+| Overall 3D_moderate | 36.3474 | 39.0634 | 38.3902 | -2.7160 | -2.0428 |
+| Car 3D_moderate_strict | 48.4945 | 48.0055 | 47.8027 | +0.4890 | +0.6918 |
+| Cyclist 3D_moderate_loose | 42.9509 | 49.3367 | 48.6271 | -6.3858 | -5.6762 |
+| Pedestrian 3D_moderate_loose | 27.0083 | 26.9333 | 28.9160 | +0.0750 | -1.9077 |
+| Truck 3D_moderate_strict | 26.9359 | 31.9781 | 28.2149 | -5.0422 | -1.2790 |
+
+### 23.4 结论与下一步
+
+1. 固定 `std=0.1` 的训练期噪声没有复现 KL0 / 完整 RSSM 的 posterior sampling 收益：ep12-16 `Overall_3D_moderate` 为 **36.3474**，比 KL0 低 **2.72**，比 RSSM seed0 低 **2.04**。
+2. 相比 Deterministic 的 37.0806 还低 **0.73**，说明「在 posterior mean 上套一个固定高斯噪声」不是 22 节所发现的因果组件；它甚至带来轻微反向正则。
+3. 类别变化不是均匀衰减：Car strict 略高于两个对照（窗口均值 48.49，ep16 best 53.76），但 Cyclist loose 比 KL0 低 6.39、Truck strict 比 KL0 低 5.04，主指标被 Cyclist/Truck 拉垮。
+4. 可学习的 `posterior_logstd`（KL0 中终值 0.1035）是有效的条件噪声幅度，固定 0.1 表面接近但缺少对输入的依赖；下一步保留 learnable posterior std，只删除 prior/KL，做 posterior-only learnable-std 消融，而不是继续用标量固定噪声。
