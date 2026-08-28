@@ -922,18 +922,30 @@ class PosteriorOnlyLearnableStdLatentFusion(MotionAlignedRSSMFusion):
         else:
             self._init_alignment_weights()
 
-    def _posterior_std_stats(self, logstd):
-        """Return detached posterior std summary for logging."""
-        std = torch.exp(self._constrained_logstd(logstd.float())).detach()
-        flat = std.flatten()
-        return dict(
-            stat_posterior_std=std.mean(),
-            stat_posterior_std_mean=std.mean(),
-            stat_posterior_std_std=std.std(),
-            stat_posterior_std_p10=torch.quantile(flat, 0.1),
-            stat_posterior_std_p50=torch.quantile(flat, 0.5),
-            stat_posterior_std_p90=torch.quantile(flat, 0.9),
-        )
+    def _posterior_std_stats(self, logstd, max_samples=65536):
+        """Estimate posterior std statistics from a deterministic subsample."""
+        with torch.no_grad():
+            flat = logstd.detach().flatten()
+
+            if flat.numel() > max_samples:
+                step = (flat.numel() + max_samples - 1) // max_samples
+                flat = flat[::step][:max_samples]
+
+            std = torch.exp(self._constrained_logstd(flat.float()))
+            quantiles = torch.quantile(
+                std,
+                std.new_tensor([0.1, 0.5, 0.9]),
+            )
+
+            std_mean = std.mean()
+            return dict(
+                stat_posterior_std=std_mean,
+                stat_posterior_std_mean=std_mean,
+                stat_posterior_std_std=std.std(),
+                stat_posterior_std_p10=quantiles[0],
+                stat_posterior_std_p50=quantiles[1],
+                stat_posterior_std_p90=quantiles[2],
+            )
 
     @auto_fp16(apply_to=['feat', 'velocity'])
     def forward(self, feat, velocity=None, use_posterior=True,

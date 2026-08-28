@@ -420,6 +420,26 @@ class TestPosteriorOnlyLearnableStdLatentFusion(unittest.TestCase):
             expected_bias, places=5,
         )
 
+    def test_posterior_std_stats_subsamples_and_is_deterministic(self):
+        logstd = torch.randn(2, 32, 216, 248)
+        stats_first = self.fusion._posterior_std_stats(logstd, max_samples=256)
+        stats_second = self.fusion._posterior_std_stats(logstd, max_samples=256)
+
+        for key, value in stats_first.items():
+            self.assertIsInstance(value, torch.Tensor)
+            self.assertEqual(value.ndim, 0)
+            self.assertFalse(value.requires_grad)
+            self.assertTrue(torch.equal(value, stats_second[key]))
+
+        self.assertLessEqual(
+            stats_first['stat_posterior_std_p10'],
+            stats_first['stat_posterior_std_p50'],
+        )
+        self.assertLessEqual(
+            stats_first['stat_posterior_std_p50'],
+            stats_first['stat_posterior_std_p90'],
+        )
+
     def test_deterministic_uses_posterior_mean_and_logs_std_stats(self):
         B, C, H, W = 2, 256, 8, 8
         feat = torch.randn(B, C, H, W)
