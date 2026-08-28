@@ -9,6 +9,7 @@ from .rssm_fusion import (
     MotionAlignedRSSMFusion,
     DeterministicMotionAlignedLatentFusion,
     FixedNoisePosteriorLatentFusion,
+    PosteriorOnlyLearnableStdLatentFusion,
 )
 from .concat_conv_fusion import ConcatConvFusion
 __all__ = [
@@ -16,5 +17,6 @@ __all__ = [
     'bbox_2d_transform', 'coord_2d_transform','InstanceBEVFusion','TemporalDeformableFusion',
     'BEVRSSMTemporalFusion', 'MotionAlignedRSSMFusion',
     'DeterministicMotionAlignedLatentFusion', 'FixedNoisePosteriorLatentFusion',
+    'PosteriorOnlyLearnableStdLatentFusion',
     'ConcatConvFusion'
 ]

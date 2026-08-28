@@ -385,5 +385,91 @@ class TestFixedNoisePosteriorLatentFusion(unittest.TestCase):
         self.assertIsNone(stats)
 
 
+class TestPosteriorOnlyLearnableStdLatentFusion(unittest.TestCase):
+    """Test posterior-only fusion with a learnable conditional std."""
+
+    def setUp(self):
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            PosteriorOnlyLearnableStdLatentFusion,
+        )
+
+        self.fusion = PosteriorOnlyLearnableStdLatentFusion(
+            in_channels=256,
+            out_channels=256,
+            latent_dim=256,
+            hidden_dim=64,
+        )
+        self.fusion.eval()
+
+    def test_prior_removed_posterior_learnable_std_kept(self):
+        self.assertIsNone(self.fusion.prior_mu)
+        self.assertIsNone(self.fusion.prior_logstd)
+        self.assertIsNotNone(self.fusion.posterior_mu)
+        self.assertIsNotNone(self.fusion.posterior_logstd)
+
+    def test_posterior_logstd_initial_bias_matches_parent_path(self):
+        """posterior_logstd gets the same parent init as Deterministic/FixedNoise."""
+        import math
+
+        expected_bias = (
+            math.log(self.fusion.min_std)
+            + math.log(self.fusion.init_std / self.fusion.min_std - 1.0)
+        )
+        self.assertAlmostEqual(
+            self.fusion.posterior_logstd.bias.mean().item(),
+            expected_bias, places=5,
+        )
+
+    def test_deterministic_uses_posterior_mean_and_logs_std_stats(self):
+        B, C, H, W = 2, 256, 8, 8
+        feat = torch.randn(B, C, H, W)
+
+        outputs = []
+        stats = None
+        for _ in range(2):
+            self.fusion.reset_state()
+            with torch.no_grad():
+                out, recon, kl, h, z, cur_stats = self.fusion(
+                    feat, use_posterior=True, deterministic=True)
+            outputs.append(out)
+            stats = cur_stats
+
+        self.assertTrue(torch.allclose(outputs[0], outputs[1], atol=1e-6))
+        self.assertIsNone(kl)
+        self.assertIsNotNone(stats)
+
+        expected_keys = [
+            'stat_posterior_std',
+            'stat_posterior_std_mean',
+            'stat_posterior_std_std',
+            'stat_posterior_std_p10',
+            'stat_posterior_std_p50',
+            'stat_posterior_std_p90',
+        ]
+        for key in expected_keys:
+            self.assertIn(key, stats)
+            self.assertIsInstance(stats[key], torch.Tensor)
+            self.assertEqual(stats[key].ndim, 0, f"{key} should be scalar")
+            self.assertFalse(stats[key].requires_grad, f"{key} should be detached")
+
+        self.assertLessEqual(stats['stat_posterior_std_p10'], stats['stat_posterior_std_p50'])
+        self.assertLessEqual(stats['stat_posterior_std_p50'], stats['stat_posterior_std_p90'])
+
+    def test_non_deterministic_samples_with_learnable_std(self):
+        B, C, H, W = 2, 256, 8, 8
+        feat = torch.randn(B, C, H, W)
+
+        outputs = []
+        for _ in range(2):
+            self.fusion.reset_state()
+            with torch.no_grad():
+                out, recon, kl, h, z, _ = self.fusion(
+                    feat, use_posterior=True, deterministic=False)
+            outputs.append(out)
+
+        self.assertFalse(torch.allclose(outputs[0], outputs[1], atol=1e-3))
+        self.assertIsNone(kl)
+
+
 if __name__ == '__main__':
     unittest.main()
