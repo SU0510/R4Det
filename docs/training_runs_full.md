@@ -1612,3 +1612,88 @@ ep12-16 类别均值对比：
 2. 相比 Deterministic 的 37.0806 还低 **0.73**，说明「在 posterior mean 上套一个固定高斯噪声」不是 22 节所发现的因果组件；它甚至带来轻微反向正则。
 3. 类别变化不是均匀衰减：Car strict 略高于两个对照（窗口均值 48.49，ep16 best 53.76），但 Cyclist loose 比 KL0 低 6.39、Truck strict 比 KL0 低 5.04，主指标被 Cyclist/Truck 拉垮。
 4. 可学习的 `posterior_logstd`（KL0 中终值 0.1035）是有效的条件噪声幅度，固定 0.1 表面接近但缺少对输入的依赖；下一步保留 learnable posterior std，只删除 prior/KL，做 posterior-only learnable-std 消融，而不是继续用标量固定噪声。
+
+---
+
+## 24. Posterior-Only Learnable-Std Fusion（N4, 2x4, 24e, seed_0）
+
+### 24.0 实验设置
+
+- 目的：承接第 23 节，判断 KL0 的高分是否来自可学习的 posterior std，而不是固定噪声。仅保留 posterior sampling，删除 prior/KL，检查其能否复现 KL0。
+- 配置：保留 Deterministic / FixedNoise 的 h/z 双状态、deform alignment、encoder、ConvGRU transition、posterior_mu、decoder/reconstruction、output_proj + residual feat；同时保留 `posterior_logstd`，删除 `prior_mu`、`prior_logstd`、KL。
+- training：`z_t = sample(posterior_mu(x), posterior_logstd(x))`；inference：`z_t = posterior_mu(x)`（确定性）。
+- 保持固定不变的变量：`seq_len=4`、head-v2、`samples_per_gpu=2`、`workers_per_gpu=2`、`cumulative_iters=2`、`max_epochs=24`、`checkpoint_interval=1`、`hidden_dim=128`、`rssm_bptt_steps=1`、`lr=0.00015`、`min_std=0.1`、`init_std=0.2`、pretrained checkpoint。
+- 运行设置：`seed=0`、`--deterministic`、3 卡（GPU 5/6/7，RTX 4090 D）、有效 batch 12；单卡训练显存约 13.5 GB。
+- 工作目录：`work_dirs/posterior_only_learnable_std_N4_2x4_24e_seed0`
+- 日志：`20260828_032831.log(.json)`
+- 配置文件：`configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_bptt_learnable_std.py`
+- 相关提交：`713dc7a feat: add posterior-only learnable-std fusion`、`c80dd42 fix: subsample posterior std stats`
+
+### 24.1 Overall 3D_moderate 逐 epoch 曲线
+
+第三行为判定窗口 ep12-16；全 run 最高点出现在 ep10，窗口最高为 ep16。
+
+| epoch | 3D_mod | epoch | 3D_mod | epoch | 3D_mod |
+|---|---:|---|---:|---|---:|
+| 1  | 16.1780 | 9  | 36.9184 | 17 | 36.4314 |
+| 2  | 26.7111 | 10 | **39.6564** | 18 | 37.5298 |
+| 3  | 23.8984 | 11 | 35.7326 | 19 | 37.5745 |
+| 4  | 27.1085 | 12 | 35.8906 | 20 | 37.9873 |
+| 5  | 29.7986 | 13 | 34.1280 | 21 | 39.0428 |
+| 6  | 34.9217 | 14 | 38.1596 | 22 | 37.9125 |
+| 7  | 32.8942 | 15 | 38.4768 | 23 | 37.7034 |
+| 8  | 36.3889 | 16 | 38.5491 | 24 | 37.0164 |
+
+### 24.2 ep12-16 逐指标 mean / min / max
+
+Overall 口径为 Car/Truck strict + Ped/Cyc loose 等权。
+
+| Metric | mean | min | max |
+|---|---:|---:|---:|
+| Overall 3D_moderate | 37.0408 | 34.1280 | 38.5491 |
+| Overall 3D_easy | 38.7021 | 36.0799 | 40.2280 |
+| Overall 3D_hard | 35.7036 | 32.9151 | 37.1552 |
+| Overall BEV_moderate | 44.1117 | 42.5789 | 45.7167 |
+| Overall 2D_moderate | 44.2855 | 43.0141 | 46.7505 |
+| Car 3D_moderate_strict | 45.6257 | 39.4319 | 48.2577 |
+| Cyclist 3D_moderate_loose | 47.4636 | 45.1747 | 49.4966 |
+| Pedestrian 3D_moderate_loose | 28.2974 | 26.3186 | 31.3549 |
+| Truck 3D_moderate_strict | 26.7765 | 23.6058 | 29.5485 |
+
+### 24.3 与 KL0 / RSSM seed0 / Deterministic / FixedNoise 对比
+
+| 口径 | LearnableStd | KL0 | RSSM seed0 | Deterministic | FixedNoise |
+|---|---:|---:|---:|---:|---:|
+| ep12-16 mean | 37.0408 | 39.0634 | 38.3902 | 37.0806 | 36.3474 |
+| BEST | 39.6564 @ ep10 | 40.3481 @ ep22 | 39.8802 @ ep16 | 38.4411 @ ep13 | 38.4151 @ ep16 |
+| last-5 mean | 37.9325 | 39.0299 | 37.6084 | 37.3374 | 36.9372 |
+
+ep12-16 类别均值对比：
+
+| Metric | LearnableStd | KL0 | RSSM seed0 | Δ LearnableStd - KL0 | Δ LearnableStd - RSSM |
+|---|---:|---:|---:|---:|---:|
+| Overall 3D_moderate | 37.0408 | 39.0634 | 38.3902 | -2.0226 | -1.3494 |
+| Car 3D_moderate_strict | 45.6257 | 48.0055 | 47.8027 | -2.3798 | -2.1770 |
+| Cyclist 3D_moderate_loose | 47.4636 | 49.3367 | 48.6271 | -1.8731 | -1.1635 |
+| Pedestrian 3D_moderate_loose | 28.2974 | 26.9333 | 28.9160 | +1.3641 | -0.6186 |
+| Truck 3D_moderate_strict | 26.7765 | 31.9781 | 28.2149 | -5.2016 | -1.4384 |
+
+### 24.4 Posterior std 动态检查
+
+`stat_posterior_std_std` 是每个 step 内部 spatial std 的均值，不是跨 seed std；P10/P50/P90 用于检查 learnable std 是否出现空间上的条件分布。
+
+| 指标 | ep1 it50 | ep6 it1900 | ep12 it1900 | ep24 it1900 |
+|---|---:|---:|---:|---:|
+| stat_posterior_std_mean | 0.2064 | 0.1040 | 0.1020 | 0.1019 |
+| stat_posterior_std_std | 0.0592 | 0.0296 | 0.0259 | 0.0249 |
+| stat_posterior_std_p10 | 0.1778 | 0.1007 | 0.1002 | 0.1000 |
+| stat_posterior_std_p50 | 0.1997 | 0.1020 | 0.1006 | 0.1003 |
+| stat_posterior_std_p90 | 0.2310 | 0.1059 | 0.1027 | 0.1026 |
+| loss_rssm_recon | 0.8902 | 0.0077 | 0.0020 | 0.0019 |
+
+### 24.5 结论与下一步
+
+1. ep12-16 `Overall_3D_moderate` 为 **37.0408 < 37.8**，落入「learnable std 无效，KL0 高分主要不来自 learned std」分支。
+2. 虽然 BEST 口径达到 **39.6564 @ ep10**，但从 ep6 开始 posterior std 已基本压到 `min_std` 附近；窗口期 P10/P50/P90 挤在 0.100–0.103，说明可学习 std 已提前退化，接近确定性状态。
+3. 与 Deterministic 相比几乎打平（37.0408 vs 37.0806，−0.04），说明保留一套 `squashed-to-0.1` 的可学习 std 并没有复现 KL0 的 2 点增益。
+4. 下一步停止 posterior 随机建模，回退 Deterministic，重点检查初始化路径差异；先不要把 4×1 无 accumulation 变体、single-state 压缩、free-bits 或检测头改动混入这条因果链。
