@@ -35,9 +35,27 @@ def bev_corners(b):
     return local @ R.T + np.array([x, y])
 
 
+def bev_iou(b1, b2):
+    p1 = Polygon(bev_corners(b1))
+    p2 = Polygon(bev_corners(b2))
+    if not p1.is_valid:
+        p1 = p1.buffer(0)
+    if not p2.is_valid:
+        p2 = p2.buffer(0)
+    inter = p1.intersection(p2).area
+    union = p1.area + p2.area - inter
+    return inter / (union + 1e-9)
+
+
 def _poly(c):
     p = Polygon(c)
     return p.buffer(0) if not p.is_valid else p
+
+
+def nearest_center_dists(gt_xy, pred_xy):
+    """Vectorized L2 dist from each GT center to each pred center -> (ngt, npred)."""
+    d = gt_xy[:, None, :] - pred_xy[None, :, :]
+    return np.sqrt((d ** 2).sum(-1))
 
 
 def oriented_3d_iou(b1, b2):
@@ -63,6 +81,37 @@ def oriented_3d_iou(b1, b2):
 def yaw_diff(a, b):
     d = (a - b + np.pi) % (2*np.pi) - np.pi
     return abs(d)
+
+
+def long_axis_heading(b):
+    """Canonical heading of the long axis (rad, mod pi). w/l convention robust."""
+    w, l, yaw = b[3], b[4], b[6]
+    if l >= w:
+        heading = yaw
+    else:
+        heading = yaw + np.pi / 2
+    return heading % np.pi
+
+
+def orientation_error(b1, b2):
+    """Minimal long-axis angular error in [0, pi/2], robust to w/l + 180deg."""
+    h1 = long_axis_heading(b1)
+    h2 = long_axis_heading(b2)
+    d = abs(h1 - h2)
+    d = min(d, np.pi - d)
+    return d
+
+
+def long_extent(b):
+    return float(max(b[3], b[4]))
+
+
+def short_extent(b):
+    return float(min(b[3], b[4]))
+
+
+def center_bev_err(b1, b2):
+    return float(np.hypot(b1[0] - b2[0], b1[1] - b2[1]))
 
 
 def greedy_match(gt_parts, pred_parts):
@@ -120,7 +169,7 @@ def main():
     strict_correct = np.zeros(4, dtype=np.int64)
     strict_denom = np.zeros(4, dtype=np.int64)
     # errors (correct class matches)
-    err = {'dx': [], 'dy': [], 'dz': [], 'dw': [], 'dl': [], 'dh': [], 'yaw': []}
+    err = {'center_bev': [], 'dz': [], 'long': [], 'short': [], 'orient': []}
     # recall buckets
     dbuck = [0, 20, 40, 60, 80, 100, 1e9]
     dbuck_name = ['0-20', '20-40', '40-60', '60-80', '80-100', '100+']
@@ -136,7 +185,7 @@ def main():
         return len(buckets) - 2
 
     # loose-strict decomposition
-    causes = {'center': 0, 'yaw': 0, 'size': 0, 'comb': 0}
+    causes = {'center': 0, 'orient': 0, 'size': 0, 'z': 0, 'comb': 0}
 
     for i in range(N):
         for d in dumps:
@@ -150,14 +199,22 @@ def main():
             ngt = len(gt_lab)
             npr = len(pr_lab)
 
-            # --- all-class confusion matrix: for each GT, best-IoU pred over all classes
+            # count all GT (for unmatched accounting), regardless of preds
             for g in range(ngt):
                 gt_tot[gt_lab[g]] += 1
+
+            # --- all-class confusion matrix (with center-distance prefilter) ---
             if npr == 0:
                 continue
+            gt_xy = gt_np[:, :2]
+            pr_xy = pr_np[:, :2]
+            d = nearest_center_dists(gt_xy, pr_xy)
+            # max plausible car/truck half-diagonal ~6m; filter conservatively
+            max_diag = np.sqrt(gt_np[:, 3]**2 + gt_np[:, 4]**2) / 2
             for g in range(ngt):
+                cand = np.where(d[g] <= max_diag[g] + 3.0)[0]
                 best_j, best_iou = -1, 0.0
-                for j in range(npr):
+                for j in cand:
                     iou = oriented_3d_iou(gt_np[g], pr_np[j])
                     if iou > best_iou:
                         best_iou = iou
@@ -188,25 +245,25 @@ def main():
                     strict_denom[gc] += 1
                     if iou >= STRICT:
                         strict_correct[gc] += 1
-                    err['dx'].append(abs(pb[0] - gb[0]))
-                    err['dy'].append(abs(pb[1] - gb[1]))
+                    err['center_bev'].append(center_bev_err(pb, gb))
                     err['dz'].append(abs(pb[2] - gb[2]))
-                    err['dw'].append(abs(pb[3] - gb[3]))
-                    err['dl'].append(abs(pb[4] - gb[4]))
-                    err['dh'].append(abs(pb[5] - gb[5]))
-                    err['yaw'].append(yaw_diff(pb[6], gb[6]))
+                    err['long'].append(abs(long_extent(pb) - long_extent(gb)))
+                    err['short'].append(abs(short_extent(pb) - short_extent(gb)))
+                    err['orient'].append(orientation_error(pb, gb))
 
-                # loose ok strict fail decomposition
+                # loose ok strict fail decomposition (convention-robust)
                 if LOOSE <= iou < STRICT:
-                    c = float(np.hypot(pb[0]-gb[0], pb[1]-gb[1]))
-                    y = yaw_diff(pb[6], gb[6])
-                    s = max(abs(pb[3]-gb[3])/max(gb[3],1e-3),
-                            abs(pb[4]-gb[4])/max(gb[4],1e-3),
-                            abs(pb[5]-gb[5])/max(gb[5],1e-3))
+                    c = center_bev_err(pb, gb)
+                    o = orientation_error(pb, gb)
+                    dz = abs(pb[2] - gb[2])
+                    # width/length (convention-free) size error normalized by GT short axis
+                    s = max(abs(long_extent(pb) - long_extent(gb)),
+                            abs(short_extent(pb) - short_extent(gb))) / max(short_extent(gb), 1e-3)
                     r = []
                     if c > 1.0: r.append('center')
-                    if y > 0.2618: r.append('yaw')
-                    if s > 0.2: r.append('size')
+                    if o > 0.35: r.append('orient')
+                    if s > 0.35: r.append('size')
+                    if dz > 0.5: r.append('z')
                     causes[(r[0] if len(r) == 1 else 'comb')] += 1
 
     print('=' * 72)
@@ -239,13 +296,13 @@ def main():
     print('=' * 72)
     print('3. Errors on correctly-classified matches (mean / median)')
     print('=' * 72)
-    for k, name in [('dx','center dx(m)'),('dy','center dy(m)'),('dz','z(m)'),
-                    ('dw','size w(m)'),('dl','size l(m)'),('dh','size h(m)'),('yaw','yaw(rad)')]:
+    for k, name in [('center_bev','BEV center(m)'),('dz','z(m)'),
+                    ('long','long-axis(m)'),('short','short-axis(m)'),('orient','orient(rad)')]:
         v = np.array(err[k])
         if len(v):
-            print(f'  {name:>14}: mean={v.mean():.3f}  median={np.median(v):.3f}')
+            print(f'  {name:>16}: mean={v.mean():.3f}  median={np.median(v):.3f}')
         else:
-            print(f'  {name:>14}: (no matches)')
+            print(f'  {name:>16}: (no matches)')
 
     print()
     print('=' * 72)
@@ -299,7 +356,7 @@ def main():
     print('5. Loose-success (0.25<=IoU<0.5) but strict-fail cause decomposition')
     print('=' * 72)
     total = sum(causes.values())
-    for k in ['center', 'yaw', 'size', 'comb']:
+    for k in ['center', 'orient', 'size', 'z', 'comb']:
         print(f'  {k:>8}: {causes[k]}  ({causes[k]/max(total,1):.3f})')
     print(f'  {"total":>8}: {total}')
 
