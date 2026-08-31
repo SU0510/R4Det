@@ -1697,3 +1697,107 @@ ep12-16 类别均值对比：
 2. 虽然 BEST 口径达到 **39.6564 @ ep10**，但从 ep6 开始 posterior std 已基本压到 `min_std` 附近；窗口期 P10/P50/P90 挤在 0.100–0.103，说明可学习 std 已提前退化，接近确定性状态。
 3. 与 Deterministic 相比几乎打平（37.0408 vs 37.0806，−0.04），说明保留一套 `squashed-to-0.1` 的可学习 std 并没有复现 KL0 的 2 点增益。
 4. 下一步停止 posterior 随机建模，回退 Deterministic，重点检查初始化路径差异；先不要把 4×1 无 accumulation 变体、single-state 压缩、free-bits 或检测头改动混入这条因果链。
+
+---
+
+## 25. KL=0 消融多 seed 复现（seed1 + seed2，配对完整 RSSM）
+
+> 日期：2026-08-29 ~ 2026-08-31。承接第 22 节 KL0 seed0 的单点结果，
+> 按原定判定规则补跑 KL0 seed1/seed2，并与完整 RSSM 同名 seed 作配对对比，
+> 最终决定 RSSM 机制是否保留 KL/prior 梯度。两轮均 3 卡（GPU 5/6/7）、
+> `samples_per_gpu=2`、`cumulative_iters=2`（有效 batch 12）、24e、`--deterministic`、
+> `rssm_bptt_steps=1`，未使用 `bs4_noaccum` 变体，确保 BN 微批次口径与 seed0 一致。
+
+### 25.0 运行设置
+
+| seed | KL0 work_dir | KL0 日志 | 完整 RSSM 日志（对照） |
+|---|---|---|---|
+| seed0 | `rssm_kl0_N4_2x4_24e_seed0` | `20260826_043350` | `run10_headv2_multiseed/seed_0/20260821_171603` |
+| seed1 | `rssm_kl0_N4_2x4_24e/seed_1` | `20260829_025956` | `run10_headv2_multiseed/seed_1/20260822_152808` |
+| seed2 | `rssm_kl0_N4_2x4_24e/seed_2` | `20260830_013427` | `run10_headv2_multiseed/seed_2/20260823_140745` |
+
+- 配置：`configs/r4det/TJ4D-R4Det_motion_align_rssm_N4_2x4_24e_pretrained_v2_head_kl0.py`
+- 完整 RSSM 对照：`configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head.py`
+- 两轮均完整跑完 24 epoch，24 个 checkpoint 落盘，无 NaN、无梯度爆炸。
+
+### 25.1 KL0 三 seed 逐 epoch Overall_3D_moderate 曲线
+
+| ep | seed0 | seed1 | seed2 | ep | seed0 | seed1 | seed2 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+|  1 | 16.78 | 18.52 | 19.24 | 13 | 39.49 | 40.19 | 35.97 |
+|  2 | 23.93 | 24.51 | 24.70 | 14 | **39.62** | 37.82 | 35.28 |
+|  3 | 30.38 | 33.08 | 27.42 | 15 | 37.64 | **40.40** | 34.42 |
+|  4 | 29.60 | 35.46 | 33.32 | 16 | 38.97 | 38.72 | 36.32 |
+|  5 | 31.60 | 34.99 | 35.07 | 17 | 37.20 | 40.56 | **36.76** |
+|  6 | 34.53 | 37.37 | 31.61 | 18 | 38.87 | 40.49 | 35.29 |
+|  7 | 35.98 | 37.62 | 32.68 | 19 | 37.39 | 40.37 | 36.08 |
+|  8 | 35.24 | 39.26 | 31.86 | 20 | 39.18 | **41.10** | 36.49 |
+|  9 | 38.60 | 37.03 | 35.61 | 21 | 38.84 | 40.75 | 36.42 |
+| 10 | 37.19 | 36.81 | 34.91 | 22 | **40.35** | 39.98 | 35.82 |
+| 11 | 37.27 | 38.28 | 34.05 | 23 | 38.83 | 40.11 | 36.67 |
+| 12 | 39.58 | 39.90 | 34.84 | 24 | 37.96 | 40.54 | 35.89 |
+
+### 25.2 与完整 RSSM 配对对比（同 seed）
+
+| 口径 | seed0 | seed1 | seed2 | 三 seed 均值 |
+|---|---:|---:|---:|---:|
+| KL0 ep12-16 mean | 39.0634 | 39.4058 | 35.3651 | 37.9448 |
+| RSSM ep12-16 mean | 38.3902 | 39.1994 | 39.3990 | 38.9962 |
+| Δ (KL0 − RSSM) | +0.6733 | +0.2064 | **−4.0339** | **−1.0514** |
+| KL0 last-5 mean | 39.0299 | 40.4955 | 36.2578 | 38.5944 |
+| RSSM last-5 mean | 37.6084 | 38.5457 | 38.1864 | 38.1135 |
+| Δ (KL0 − RSSM) | +1.4215 | +1.9498 | **−1.9286** | +0.4809 |
+
+### 25.3 ep12-16 各类别均值（KL0 / RSSM）
+
+| Metric | KL0 s0 | RSSM s0 | KL0 s1 | RSSM s1 | KL0 s2 | RSSM s2 |
+|---|---:|---:|---:|---:|---:|---:|
+| Car_3D_moderate_strict | 48.01 | 47.80 | 50.31 | 45.40 | 43.25 | 48.98 |
+| Cyclist_3D_moderate_loose | 49.34 | 48.63 | 44.64 | 47.60 | 39.89 | 47.99 |
+| Pedestrian_3D_moderate_loose | 26.93 | 28.92 | 27.51 | 30.20 | 28.75 | 30.58 |
+| Truck_3D_moderate_strict | 31.98 | 28.21 | 35.16 | 33.60 | 29.57 | 30.04 |
+
+### 25.4 训练稳定性检查（KL0 seed2 排除跑崩）
+
+seed2 虽然 Overall 明显偏低，但训练过程健康，不是失败或 NaN：
+
+| 指标 | ep24 训练末值 |
+|---|---:|
+| loss_rssm_kl | 0.0000 |
+| loss_rssm_recon | 0.0019 |
+| stat_kl_raw_mean | 26.80 |
+| stat_kl_effective_mean | 26.97 |
+| stat_clamped_ratio | 0.376 |
+| stat_posterior_std | 0.1015 |
+| stat_prior_std | 0.2055 |
+| grad_norm | ~4.21 |
+
+posterior/prior std 与 seed0/seed1 一致，说明 KL0 在 seed2 上客观收敛到了更低的 Car/Cyclist 平台，
+而不是训练异常。
+
+### 25.5 判定与结论
+
+按原定规则三档判定：
+
+1. **不满足「删除 KL」条件**：要求「三 seed ep12-16 与 last-5 均值提升 ≥0.5 且至少 2/3 seed 提升」。
+   - ep12-16 三 seed 均值 Δ = **−1.05**（KL0 更低）；
+   - last-5 三 seed 均值 Δ = +0.48（勉强为正，但 ep12-16 为负）；
+   - 只有 seed0/seed1 两个 seed 提升，seed2 在 ep12-16 大降 4.03，增益完全不稳健。
+2. **超出「±0.3 灰区」**：KL0 平均下降 1.05（ep12-16），seed2 单项 −4.03，远大于 0.3 阈值。
+3. **落入「保留完整 RSSM」分支**：种子间方差把 KL0 的高分平均掉，且出现负信号，不能说明
+   KL/prior 梯度是可删除的冗余；相反，seed2 表明关闭 KL 会破坏后验状态跨帧的一致性。
+
+**结论：保留完整 RSSM（含 KL/prior 梯度），不删除 KL。**
+
+seed0 单点的 +0.67（第 22 节）在三 seed 视角下被证明不是稳健收益，更多是 KL0 在个别种子上的
+波动放大，而非机制性提升。第 22 节「主要收益来自 posterior sampling 而非 KL」的中间结论需要
+修正为：posterior sampling 与 prior/KL 两者共同构成 RSSM 随机建模，缺一会引入跨种子不稳定。
+
+### 25.6 下一步
+
+1. **RSSM 机制就此定稿**：`MotionAlignedRSSMFusion` + full prior/KL + posterior sampling，
+   N4、BPTT1、2×4（有效 batch 12）、24e，作为论文的时序融合基准，不再继续堆随机状态变体。
+2. 检测头消融回归主线，优先级：Truck/Car 混淆（Cyclist strict / Truck strict 是多 seed 方差
+   的主要来源）→ Pedestrian strict（BEV 分辨率物理瓶颈，需单独定向）。
+3. 论文最终报告口径仍以第 19 节完整 RSSM 三 seed BEST mean 40.42 ± 0.51 为准；
+   KL0 多 seed 结果作为负向消融证据列入附录，佐证「保留 KL」的机制性结论。
