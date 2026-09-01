@@ -69,6 +69,10 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                      type='SmoothL1Loss', beta=1.0 / 9.0, loss_weight=2.0),
                  loss_dir=dict(type='CrossEntropyLoss', loss_weight=0.2),
                  init_cfg=None,
+                 truck_refine=False,
+                 truck_refine_channels=64,
+                 truck_refine_dims=(0, 1, 4),
+                 truck_anchor_class=None,
                  **kwargs):
         super().__init__(init_cfg=init_cfg)
         self.in_channels = in_channels
@@ -81,6 +85,12 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         self.use_iou_branch = kwargs.get('use_iou_branch', False)
         self.confusion_pairs = kwargs.get('confusion_pairs', None)
         self.confusion_loss_weight = kwargs.get('confusion_loss_weight', 0.0)
+        # Truck-specific residual refinement (dx, dy, dl only), to prioritize
+        # Truck center + length regression without disturbing other classes.
+        self.truck_refine = truck_refine
+        self.truck_refine_channels = truck_refine_channels
+        self.truck_refine_dims = tuple(truck_refine_dims)
+        self.truck_anchor_class = truck_anchor_class
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.assigner_per_size = assigner_per_size
@@ -149,6 +159,51 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         if self.use_iou_branch:
             self.conv_iou = nn.Conv2d(self.feat_channels, self.num_anchors, 1)
 
+        # --- Truck residual refinement branch ---
+        # Predicts a residual for (dx, dy, dl) on the Truck anchors only.
+        # The base conv_reg still predicts everything; this branch only learns
+        # Truck-specific corrections. The last conv is zero-initialized so that
+        # at training start the refined output is identical to the baseline.
+        self._truck_refine_inds = None
+        if self.truck_refine:
+            # Resolve which anchors belong to the Truck class.
+            num_rot = len(self.anchor_generator.rotations)
+            if self.truck_anchor_class is not None:
+                truck_size_idx = self.truck_anchor_class
+            elif self.anchor_class_mapping is not None:
+                # last distinct class token = Truck; its anchors are the tail
+                truck_size_idx = self.anchor_class_mapping.index(
+                    self.anchor_class_mapping[-1])
+                # guard: ensure it maps to the final contiguous block
+                truck_size_idx = len(self.anchor_class_mapping) - 1
+            else:
+                # no mapping: assume Truck is the last anchor size slot
+                truck_size_idx = self.anchor_generator.num_base_anchors // num_rot - 1
+
+            # flat anchor indices in [size, rot] (size-major, rot-inner) order
+            anchor_flat_start = truck_size_idx * num_rot
+            anchor_flat = list(range(anchor_flat_start, anchor_flat_start + num_rot))
+
+            # channel indices in conv_reg output: anchor * code_size + dim
+            inds = []
+            for a in anchor_flat:
+                for d in self.truck_refine_dims:
+                    inds.append(a * self.box_code_size + d)
+            self._truck_refine_inds = inds
+            self.num_truck_rot = num_rot
+            n_out = num_rot * len(self.truck_refine_dims)
+
+            refine_layers = [
+                nn.Conv2d(self.feat_channels, self.truck_refine_channels, 3,
+                          padding=1),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(self.truck_refine_channels, n_out, 1),
+            ]
+            self.truck_refine_conv = nn.Sequential(*refine_layers)
+            # zero-init the final 1x1 so refinement starts at zero
+            nn.init.constant_(self.truck_refine_conv[-1].weight, 0.0)
+            nn.init.constant_(self.truck_refine_conv[-1].bias, 0.0)
+
     def forward_single(self, x):
         """Forward function on a single-scale feature map.
 
@@ -162,6 +217,13 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
 
         cls_score = self.conv_cls(x)
         bbox_pred = self.conv_reg(x)
+
+        if self.truck_refine:
+            refine = self.truck_refine_conv(x)  # [B, n_out, H, W]
+            inds = torch.tensor(self._truck_refine_inds, device=x.device,
+                                dtype=torch.long)
+            bbox_pred = bbox_pred.clone()
+            bbox_pred.index_add_(1, inds, refine)
 
         dir_cls_preds = None
         if self.use_direction_classifier:
