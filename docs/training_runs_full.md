@@ -1801,3 +1801,55 @@ seed0 单点的 +0.67（第 22 节）在三 seed 视角下被证明不是稳健�
    的主要来源）→ Pedestrian strict（BEV 分辨率物理瓶颈，需单独定向）。
 3. 论文最终报告口径仍以第 19 节完整 RSSM 三 seed BEST mean 40.42 ± 0.51 为准；
    KL0 多 seed 结果作为负向消融证据列入附录，佐证「保留 KL」的机制性结论。
+
+---
+
+## 26. Truck 专属回归细化（Truck residual refinement: dx/dy/dl, N4, 2x4, 24e, seed0）
+
+### 26.0 动机与设计
+
+前置错误诊断（第 25 节后、`tools/diagnose_errors.py`，3 个最佳 checkpoint 聚合）结论：
+
+- Truck strict 通过率 26.1%（Car 49.2%），正确分类后仍然大量失败。
+- 错误集中在 **Truck 长度（长轴）3.02m、BEV 中心 1.41m**；朝向误差仅 0.15 rad（基本正确）。
+- Car/Truck 分类互混约 16%（cross/diag），存在但不是首要问题。
+
+因此先改 **Truck 中心 + 长度回归**，暂不拆分类分支，只验证单一变量。
+
+实现：保留共享 `conv_reg`，新增一个只对 Truck 两个 anchor 输出 `(dx, dy, dl)` 残差的旁支：
+
+```
+shared BEV feature
+ └─ conv_reg: 全 anchor 全 7D 参数（不变）
+ └─ truck_refine_conv: Conv3x3(256→64) + ReLU + Conv1x1(64→6)，末层零初始化
+      6 = 2 rotations × (dx, dy, dl)
+      bbox_pred[..., [0,1,4]] 在 Truck 两 anchor 对应通道 += refine
+```
+
+- 末层零初始化 → 训练起点与当前完整 RSSM 完全一致；原 conv_reg 仍提供基础框。
+- Car/Cyc/Ped 通道完全不受扰动；conv_cls、direction、IoU branch、anchor/assigner/FocalLoss/SmoothL1(2.0) 不变。
+- 未启用 confusion_pairs、未新增 Truck anchor、未改 Pedestrian。
+
+### 26.1 实验设置
+
+- 配置：`configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head.py`
+  - 新增 `truck_refine=True / truck_refine_channels=64 / truck_refine_dims=(0,1,4) / truck_anchor_class=5`
+  - 还原 `samples_per_gpu=2` + `GradientCumulativeOptimizerHook(cumulative_iters=2)`（对齐 seed0 基线）
+- 固定不变：`seq_len=4`、`rssm_bptt_steps=1`、`hidden_dim=128`、`kl_scale=1.0`、`free_nats=1.0`、
+  有效 batch 12、`lr=1.5e-4`、`max_epochs=24`、`checkpoint_interval=1`、pretrained_tj4d.pth。
+- 运行：`seed=0`、`--deterministic`、`CUDA_VISIBLE_DEVICES=5,6,7`、3 进程。
+- 工作目录：`work_dirs/truck_refine_N4_2x4_24e_seed0`。
+- 相关提交：`f36c90c feat: add Truck-specific residual refinement`、`6221e6a fix(config): restore samples_per_gpu=2 + cumulative_iters=2`。
+
+### 26.2 通过标准
+
+- Truck strict ep12-16 均值 ≥ 基线 +2.0
+- Overall ep12-16 ≥ 基线 +0.5
+- Car strict 下降 ≤ 0.5
+- Cyclist loose 下降 ≤ 1.0
+
+### 26.3 进度
+
+- [ ] seed0 训练中（epoch 1，ETA ~20h）。
+- [ ] ep12-16 指标采集后回填（Truck strict / Overall / Car strict / Cyclist loose）。
+- [ ] 通过后补 seed1/2；不通过转 Car/Truck classification tower。
