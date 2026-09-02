@@ -1951,3 +1951,51 @@ Cyc 预测框数量/分数分布基本不变（raw 输出分数中位数 ~0.03�
 - [x] Cyclist 下滑根因诊断：检出召回 −7.5pt（FN +163），定位/朝向无碍。
 - [ ] 最小反证实验：`truck_refine_conv` 输入 `detach()`（阻断梯度回流），重训 seed0 看 Cyc 是否回升。
 - [ ] 若 Cyc 回升 → 采用 detach 版补 seed1/2；否则转 Car/Truck classification tower 思路。
+
+---
+
+## 27. Truck-refine detach 版（阻断梯度回流，seed0）
+
+### 27.1 背景与目标
+
+第 26 节 seed0 结论：Truck strict `+2.85`、Car strict `+1.38` 达标，但 **Cyclist loose `−4.94`
+超限**（标准 ≤ −1.0）。逐样本匹配诊断：Cyclist 检出去 recall 从 0.732 → 0.657（FN +163），
+strict 反升 +2.71，判定为「Truck refine 分支对共享 BEV 特征的梯度干扰」导致检出召回下降，
+而非定位/朝向/分类问题。
+
+本轮唯一改动：给 `truck_refine_conv` 的输入做 `detach()`，阻断 refine 分支梯度回流共享 BEV 特征，
+验证 Truck 增益能否在「不改写共享特征」的前提下保留。保留当前实验作对照，故新增独立开关
+`truck_refine_detach`（默认 False，不写死）。
+
+### 27.2 改动
+
+- `mmdet3d/models/dense_heads/anchor3d_head.py`
+  - 新增参数 `truck_refine_detach=False`（init 签名 + `self.truck_refine_detach`）。
+  - `forward_single` 中：`refine_input = x.detach() if self.truck_refine_detach else x`。
+  - `truck_refine_conv` 参数仍正常训练；`(dx,dy,dl)` refinement 保留；loss 不再修改共享 BEV。
+- 新配置：`configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_truck_detach.py`
+  - `truck_refine=True / channels=64 / dims=(0,1,4) / truck_anchor_class=5 / truck_refine_detach=True`
+- 提交：`1c95fc3 feat: add truck_refine_detach switch`
+
+### 27.3 实验设置
+
+- 固定不变：`seq_len=4`、`rssm_bptt_steps=1`、`hidden_dim=128`、`kl_scale=1.0`、`free_nats=1.0`、
+  `samples_per_gpu=2`、`GradientCumulativeOptimizerHook(2)`、有效 batch 12、`lr=1.5e-4`、
+  `max_epochs=24`、`checkpoint_interval=1`、pretrained_tj4d.pth、anchor/assigner/FocalLoss/IoU 不变。
+- 运行：`seed=0`、`--deterministic`、`CUDA_VISIBLE_DEVICES=5,6,7`、3 进程。
+- 工作目录：`work_dirs/truck_refine_detach_N4_2x4_24e_seed0`（新目录，避免混日志）。
+
+### 27.4 通过标准（ep12-16 均值，Δ = 本次 − 基线 seed0）
+
+- Truck strict Δ ≥ +2.0
+- Car strict Δ ≥ −0.5
+- Cyclist loose Δ ≥ −1.0
+- Overall Δ ≥ +0.5
+- 新增观察项：Pedestrian loose Δ ≥ 约 −1.2；Cyc+Ped 合计 Δ ≥ −2.23（因即使 Cyclist 完全恢复，
+  Ped 若仍 −3.77，Overall 仅约 +0.12 仍不达标）
+
+### 27.5 训练进度（进行中）
+
+- 启动时间：2026-09-02 13:58，日志 `20260902_135846.log`。
+- 结果待补。
+
