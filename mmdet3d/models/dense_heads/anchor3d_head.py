@@ -73,6 +73,7 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                  truck_refine_channels=64,
                  truck_refine_dims=(0, 1, 4),
                  truck_anchor_class=None,
+                 truck_refine_detach=False,
                  **kwargs):
         super().__init__(init_cfg=init_cfg)
         self.in_channels = in_channels
@@ -91,6 +92,7 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         self.truck_refine_channels = truck_refine_channels
         self.truck_refine_dims = tuple(truck_refine_dims)
         self.truck_anchor_class = truck_anchor_class
+        self.truck_refine_detach = truck_refine_detach
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.assigner_per_size = assigner_per_size
@@ -219,7 +221,8 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         bbox_pred = self.conv_reg(x)
 
         if self.truck_refine:
-            refine = self.truck_refine_conv(x)  # [B, n_out, H, W]
+            refine_input = x.detach() if self.truck_refine_detach else x
+            refine = self.truck_refine_conv(refine_input)  # [B, n_out, H, W]
             inds = torch.tensor(self._truck_refine_inds, device=x.device,
                                 dtype=torch.long)
             bbox_pred = bbox_pred.clone()
