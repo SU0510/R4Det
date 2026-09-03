@@ -2079,3 +2079,48 @@ strict 反升 +2.71，判定为「Truck refine 分支对共享 BEV 特征的梯�
 - [ ] 放弃 Truck-refine 支线；下一步方向待定（候选：Truck anchor 尺寸/数量重估、Truck 独立
       regression tower、Car/Truck classification tower、或转向 Pedestrian BEV 分辨率/refinement）。
 
+
+
+## 28. Truck 独立 regression tower（直接预测替换，非残差；seed0）
+
+### 28.1 背景与决策
+- 第 26/27 节结论：Truck residual refinement（detach / 非 detach）均无法在提升 Truck 的同时保住 Cyclist / Car。
+- 用户拍板 **B 方案**：不重跑 baseline，直接以 `run10_headv2_multiseed/seed_0` 作干净对照。
+- 干净基线确认：run10（08-23）早于污染 commit `f36c90c`（09-01），不受 truck_refine 影响；
+  主配置已在 `98cc09d` 还原为干净完整 RSSM。
+
+### 28.2 改动（唯一变量）
+- Truck 的 (dx, dy, dl)（box-code indices `[0, 1, 4]`）改由独立 tower 直接预测，并用 `index_copy_`
+  **替换**共享 `conv_reg` 的对应 Truck 通道（不再 `bbox_pred[truck] += refine`）。
+- 共享 `conv_reg` 对这 6 个 Truck 通道不再收到梯度；Truck 其余通道（z / sin / cos / w / h）仍共享。
+- 新增开关 `truck_tower` / `truck_tower_channels=64` / `truck_tower_dims=(0,1,4)`（默认关，不影响基线）。
+- tower 结构：Conv3x3(256→64) + ReLU + Conv1x1(64→6)，末层 1x1 零初始化。
+- 追加 `init_weights` 重写：在 super() 后重新置零末层（因为 `init_cfg` 默认 Normal 会覆盖 `_init_layers` 的零初始化）。
+  → 顺带澄清：第 26/27 节 refine 末层此前实际被 `init_cfg` 覆盖成 Normal 初始化，而非零初始化。
+
+### 28.3 实验设置
+- 配置：`configs/r4det/..._v2_head_truck_tower.py`（= 干净 v2_head + `truck_tower=True`）
+- GPU 5,6,7；seed0；seq_len=4 / BPTT1 / hidden128 / kl1.0 / free1.0；
+  samples_per_gpu=2，cumulative_iters=2（有效 batch12）；lr=1.5e-4；24e；checkpoint_interval=1；`--deterministic`
+- work_dir：`work_dirs/truck_tower_N4_2x4_24e_seed0`
+- commit：`f6a4417 feat(head): Truck independent regression tower (replace dx/dy/dl channels)`
+
+### 28.4 通过标准（ep12-16 均值，Δ = 本次 − 干净基线 seed0）
+基线：Overall 38.39 / Truck strict 28.21 / Car strict 47.80 / Cyclist loose 48.63 / Pedestrian loose 28.92。
+
+| 指标 | 标准（绝对阈值） |
+|---|---|
+| Overall | ≥ 38.89 |
+| Truck strict | ≥ 30.21 |
+| Car strict | ≥ 47.30 |
+| Cyclist loose | ≥ 47.63 |
+| Pedestrian loose | ≥ 27.92 |
+
+（前四项必须同时满足；Pedestrian 为观察项，不降超 1.0。）
+
+### 28.5 结果
+（训练中，ep1 已启动，待补 ep12-16。）
+
+### 28.6 下一步
+- 监控 ep12-16 核对标准。
+- 通过 → 补 seed1/2；不通过 → 转 Car/Truck classification tower，或转向 Pedestrian（BEV 分辨率 / refinement）。
