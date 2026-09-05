@@ -281,8 +281,7 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
             # verify head capacity in isolation (no shared-BEV feature drain).
             self._ped_refine_inds = self._anchor_class_channel_inds(
                 self.ped_refine_dims, 0)  # class token 0 = Pedestrian
-            num_rot = len(self.anchor_generator.rotations)
-            n_out = num_rot * len(self.ped_refine_dims)
+            n_out = len(self._ped_refine_inds)
 
             layers = [
                 nn.Conv2d(self.feat_channels, self.ped_refine_channels, 3,
