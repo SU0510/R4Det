@@ -2278,3 +2278,23 @@ ep12-16 均值口径（基线 = `run10_headv2_multiseed/seed_0`，Δ = 本次 �
 + 输入 `x.detach()`，只覆盖 3 组 Ped anchor（6 个 slots × 7D），输出残差 `index_add_`。
 基线（开关关）完全不变。训练设置按用户固定模板（GPU 5,6,7 / seed0 / deterministic /
 seq4 / bptt1 / bs2 / cum2 / lr1.5e-4 / 24e / ckpt1）。
+
+### 29.8 实验启动（Pedestrian 专属 7D box refinement，唯一变量）
+- 配置：`configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_pedrefine.py`
+  （= clean full RSSM + head-v2，唯一加 `ped_refine=True` + `ped_refine_detach=True`）。
+- 实现：`Anchor3DHead` 新增 `ped_refine` 分支，完整 7D residual（dx,dy,dz,dw,dl,dh,dyaw）
+  覆盖 3 组 Ped anchor（6 slots × 7D = 42 通道），输入 `x.detach()`，零初始化末层，默认关。
+  `n_out = len(_ped_refine_inds) = 42`（首版误写 14 已修复 commit `3607fae`）。
+- 训练设置固定模板：GPU 5,6,7 / seed0 / `--deterministic` / seq_len=4 / bptt1 /
+  samples_per_gpu=2 / cumulative_iters=2（有效 batch12）/ lr=1.5e-4 / 24e / ckpt_interval=1。
+- work_dir：`work_dirs/ped_refine_N4_2x4_24e_seed0`（→ `/data/lurui/work_dirs/...`）。
+- 启动：2026-09-05 05:01 UTC，launcher `/tmp/launch_ped_refine.sh`（nohup + setsid 脱离会话）。
+- 启动健康检查：ep1 iter50 loss_bbox=1.75 loss_cls=1.15 loss_iou=0.31 grad_norm=12.82，
+  GPU 5/6/7 各 ~18.3GB / 99% util，eta ≈ 22.5h（ep1-24）。
+- commit：`5a2904f feat / 3607fae fix`。
+
+### 29.9 通过标准（复述本节/用户模板）
+- Overall ep12–16 ≥ 38.89；Car/Cyclist/Truck 各自较略干净基线不降超 0.5；
+  Pedestrian loose 不降超 0.5；Pedestrian strict 至少出现可重复的绝对提升。
+- 干净基线（run10 seed0 ep12-16 均值）：Overall 38.39 / Car 47.80 / Truck 28.21 /
+  Cyc loose 48.63 / Ped loose 28.92 / Ped strict ~0.12。
