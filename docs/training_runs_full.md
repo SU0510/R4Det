@@ -2118,10 +2118,11 @@ strict 反升 +2.71，判定为「Truck refine 分支对共享 BEV 特征的梯�
 
 （前四项必须同时满足；Pedestrian 为观察项，不降超 1.0。）
 
-### 28.5 训练结果（seed0，ep1-24 全曲线）
+### 28.5 训练结果（seed0，ep1-24 全曲线，训练已全部完成）
 
-（ep1-19 已出，截至 2026-09-04 16:56，训练进行到 ep20；eta ~3h 后 ep24 完成。
-  中途磁盘写满导致 ep5 checkpoint 损坏，从 epoch_4 完整恢复，ep5 重跑。）
+（训练于 2026-09-04 20:53 完成 ep24 checkpoint，进程正常退出，无后续崩溃。
+  中途 `/data` 磁盘写满导致 ep5 checkpoint 损坏，已从 epoch_4 完整恢复并重跑 ep5。）
+
 
 | ep | Overall | Truck strict | Car strict | Cyclist loose | Ped loose |
 |---:|---:|---:|---:|---:|---:|
@@ -2144,6 +2145,11 @@ strict 反升 +2.71，判定为「Truck refine 分支对共享 BEV 特征的梯�
 | 17 | 36.94 | 31.01 | 48.79 | 39.79 | 28.17 |
 | 18 | 38.36 | 28.98 | 50.14 | 43.56 | 30.76 |
 | 19 | 37.65 | 30.89 | 50.26 | 43.03 | 26.40 |
+| 20 | 37.95 | 32.09 | 49.09 | 41.83 | 28.78 |
+| 21 | 36.88 | 31.12 | 46.86 | 41.04 | 28.50 |
+| 22 | 37.20 | 30.85 | 49.07 | 40.53 | 28.33 |
+| 23 | 36.78 | 30.05 | 48.46 | 41.73 | 26.86 |
+| 24 | 36.81 | 31.31 | 49.16 | 40.17 | 26.61 |
 
 ### 28.6 通过标准核对（seed0，未通过）
 
@@ -2156,6 +2162,13 @@ ep12-16 均值口径（基线 = `run10_headv2_multiseed/seed_0`，Δ = 本次 �
 | Cyclist loose | 48.63 | 42.98 | −5.65 | ≥ 47.63 | ❌ 重挫 |
 | Pedestrian loose | 28.92 | 27.69 | −1.23 | ≥ 27.92 | ❌ 微降 |
 | Overall | 38.39 | 37.79 | −0.60 | ≥ 38.89 | ❌ |
+
+### 28.6b 后期阶段（ep17-24）
+- 未出现恢复：Overall 均值 37.32（ep17-24），Truck strict 均值 30.66，Cyclist loose 均值 41.35。
+- BEST Overall = ep16 的 38.74（仍低于基线平台 38.39 之后的 +0.35，未达目标 38.89）。
+- ep20 的 Truck strict 32.09 为全曲线最高，也印证 tower 对 Truck 确有增益；但 Cyclist loose
+  始终在 39.8-43.6 之间徘徊，无法回到基线 48.63。
+
 
 ### 28.7 核心结论（本轮不通过；三次 Truck 回归实验统一指向同一根因）
 
@@ -2176,12 +2189,12 @@ ep12-16 均值口径（基线 = `run10_headv2_multiseed/seed_0`，Δ = 本次 �
    **停止当前 Truck 回归路径实验**，不再补 seed1/2。
 
 ### 28.8 下一步
-- [x] 独立 tower seed0 跑完 ep12-16，按新标准核对：不通过。
+- [x] 独立 tower seed0 完整跑完 ep1-24 全 checkpoint，按新标准核对：不通过。
 - [x] 结论：Truck 回归改善总伴随 Cyclist 下滑，共享 BEV 特征容量是零和瓶颈。
-- [ ] 收紧方向选项（供决策）：
-  1. **Car/Truck classification tower**（拆分类塔）——注意 26.6 诊断已排除分类混淆为首要
+- [x] 最终决策：停止 Truck 回归路径实验（residual / detach / 独立替换三轮全部不通过），不补 seed1/2。
+- [ ] 待用户选定下一步方向（候选）：
+  1. **转向 Pedestrian**（strict 长期≈0、loose 27-31，全场最硬短板）：更高 BEV 分辨率 /
+     pedestrian refinement / 中心量化误差与高度尺寸误差分析。→ 优先级最高。
+  2. Car/Truck classification tower（拆分类塔）——注意 26.6 诊断已排除分类混淆为首要
      （Truck 长轴 3.02m、中心 1.41m 是定位问题），预期收益有限，不建议优先。
-  2. **转向 Pedestrian**（strict 长期≈0，loose 27-31）：更高 BEV 分辨率 / pedestrian
-     refinement / 中心量化误差与高度尺寸误差分析。
-  3. **回 clean full RSSM 复现**（若担心累积干扰；run10 已确认 38.39 可作对照）。
-- 通过 → 补 seed1/2；不通过 → 转 Car/Truck classification tower，或转向 Pedestrian（BEV 分辨率 / refinement）。
+  3. 回 clean full RSSM 复现（若担心累积干扰；run10 已确认 38.39 可作对照）。
