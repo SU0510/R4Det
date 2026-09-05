@@ -77,6 +77,10 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                  truck_tower=False,
                  truck_tower_channels=64,
                  truck_tower_dims=(0, 1, 4),
+                 ped_refine=False,
+                 ped_refine_channels=64,
+                 ped_refine_dims=(0, 1, 2, 3, 4, 5, 6),
+                 ped_refine_detach=False,
                  **kwargs):
         super().__init__(init_cfg=init_cfg)
         self.in_channels = in_channels
@@ -99,6 +103,10 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         self.truck_tower = truck_tower
         self.truck_tower_channels = truck_tower_channels
         self.truck_tower_dims = tuple(truck_tower_dims)
+        self.ped_refine = ped_refine
+        self.ped_refine_channels = ped_refine_channels
+        self.ped_refine_dims = tuple(ped_refine_dims)
+        self.ped_refine_detach = ped_refine_detach
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.assigner_per_size = assigner_per_size
@@ -155,17 +163,38 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                 build_assigner(res) for res in self.train_cfg.assigner
             ]
 
-    def _truck_channel_inds(self, dims):
-        """Resolve conv_reg channel indices for the Truck anchors.
+    def _anchor_class_channel_inds(self, dims, class_token):
+        """Resolve conv_reg channel indices for one class's anchor slots.
 
         Args:
-            dims (tuple[int]): box-code dims to select (e.g. (0, 1, 4) maps to
-                dx, dy, dl in DeltaXYZWLHRBBoxCoder).
+            dims (tuple[int]): box-code dims to select (e.g. (0, 1, 4)).
+            class_token (int): class index whose anchors to touch. Anchor
+                slots are [size, rot] (size-major, rot-inner); each class
+                owns a contiguous run of sizes given by the size index where
+                that class first appears in ``anchor_class_mapping`` through
+                the index where it last appears.
 
         Returns:
             list[int]: flat channel indices in conv_reg's
-                [anchor * code_size + dim] layout (size-major, rot-inner).
+                [anchor * code_size + dim] layout.
         """
+        cls_tokens = self.anchor_class_mapping
+        class_token = int(class_token)
+        start = cls_tokens.index(class_token)
+        end = len(cls_tokens) - 1 - cls_tokens[::-1].index(class_token)
+        num_rot = len(self.anchor_generator.rotations)
+        anchor_flat_start = start * num_rot
+        anchor_flat_end = (end + 1) * num_rot
+        anchor_flat = list(range(anchor_flat_start, anchor_flat_end))
+
+        inds = []
+        for a in anchor_flat:
+            for d in dims:
+                inds.append(a * self.box_code_size + d)
+        return inds
+
+    def _truck_channel_inds(self, dims):
+        """Resolve conv_reg channel indices for the Truck anchors."""
         num_rot = len(self.anchor_generator.rotations)
         if self.truck_anchor_class is not None:
             truck_size_idx = self.truck_anchor_class
@@ -244,6 +273,28 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
             nn.init.constant_(self.truck_tower_conv[-1].weight, 0.0)
             nn.init.constant_(self.truck_tower_conv[-1].bias, 0.0)
 
+        self._ped_refine_inds = None
+        if self.ped_refine:
+            # Pedestrian residual refinement over the FULL 7D box code
+            # (dx, dy, dz, dw, dl, dh, dθ). Adds to shared conv_reg output for
+            # the 3 Ped anchor slots only. Input detached by default in v1 to
+            # verify head capacity in isolation (no shared-BEV feature drain).
+            self._ped_refine_inds = self._anchor_class_channel_inds(
+                self.ped_refine_dims, 0)  # class token 0 = Pedestrian
+            num_rot = len(self.anchor_generator.rotations)
+            n_out = num_rot * len(self.ped_refine_dims)
+
+            layers = [
+                nn.Conv2d(self.feat_channels, self.ped_refine_channels, 3,
+                          padding=1),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(self.ped_refine_channels, n_out, 1),
+            ]
+            self.ped_refine_conv = nn.Sequential(*layers)
+            # zero-init the final 1x1 so refinement starts at zero
+            nn.init.constant_(self.ped_refine_conv[-1].weight, 0.0)
+            nn.init.constant_(self.ped_refine_conv[-1].bias, 0.0)
+
     def init_weights(self):
         super().init_weights()
         # init_cfg applies Normal over every Conv2d in super().init_weights(),
@@ -257,6 +308,9 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         if self.truck_tower:
             nn.init.constant_(self.truck_tower_conv[-1].weight, 0.0)
             nn.init.constant_(self.truck_tower_conv[-1].bias, 0.0)
+        if self.ped_refine:
+            nn.init.constant_(self.ped_refine_conv[-1].weight, 0.0)
+            nn.init.constant_(self.ped_refine_conv[-1].bias, 0.0)
 
     def forward_single(self, x):
         """Forward function on a single-scale feature map.
@@ -283,6 +337,14 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
             refine_input = x.detach() if self.truck_refine_detach else x
             refine = self.truck_refine_conv(refine_input)  # [B, n_out, H, W]
             inds = torch.tensor(self._truck_refine_inds, device=x.device,
+                                dtype=torch.long)
+            bbox_pred = bbox_pred.clone()
+            bbox_pred.index_add_(1, inds, refine)
+
+        if self.ped_refine:
+            refine_input = x.detach() if self.ped_refine_detach else x
+            refine = self.ped_refine_conv(refine_input)  # [B, n_out, H, W]
+            inds = torch.tensor(self._ped_refine_inds, device=x.device,
                                 dtype=torch.long)
             bbox_pred = bbox_pred.clone()
             bbox_pred.index_add_(1, inds, refine)

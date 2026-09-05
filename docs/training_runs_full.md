@@ -2198,3 +2198,83 @@ ep12-16 均值口径（基线 = `run10_headv2_multiseed/seed_0`，Δ = 本次 �
   2. Car/Truck classification tower（拆分类塔）——注意 26.6 诊断已排除分类混淆为首要
      （Truck 长轴 3.02m、中心 1.41m 是定位问题），预期收益有限，不建议优先。
   3. 回 clean full RSSM 复现（若担心累积干扰；run10 已确认 38.39 可作对照）。
+
+---
+
+## 29. Pedestrian 专项误差拆解（不训练；run10 seed0 ep16 干净基线 dump）
+
+> 日期：2026-09-05。承接第 28 节「停止 Truck 回归、转向 Pedestrian（优先级最高）」。
+> 全部 CPU-only，基于现成 dump `work_dirs/diag_dumps/cyc_diag/base_seed0_ep16.pkl`
+> （md5 与 `diag_dumps/seed0_ep16.pkl` 完全一致 = `run10_headv2_multiseed/seed_0/epoch_16`
+> = clean full RSSM + head-v2，未重新训练、未动 GPU）。
+> 新工具：`tools/ped_error_breakdown.py`（对 Pedestrian 的 A–F 六项拆解）。
+
+### 29.1 数据与口径
+- dump：`base_seed0_ep16.pkl`，2040 个 val 样本，Pedestrian GT 计数 = 999。
+- head：`Anchor3DHead`，Ped 3 组 anchor × 2 朝向 = 6 个 Ped anchor slots。
+- test_cfg `score_thr=0.0`，所以 dump 里的 pred 含「sigmoid>0 的全部解码 anchor + NMS 后」
+  的 raw 输出，可做 score 分布与 λ-recall（anchor 几何覆盖）分析，不受 score 阈值截断。
+- 指标 frame：LiDAR `[x,y,z,w,l,h,yaw]`，w=横向(短轴)、l=纵向(长轴)。
+
+### 29.2 A. Ped score 是否偏低？
+- 全量 Ped anchor sigmoid：count=104907，**mean=0.0202，p50=0.0002，p90=0.054**，max=0.934。
+- 每样本 max Ped score：mean=0.133，p50=0.057，p90=0.328。
+- **72.7% 样本 max Ped score < 0.1，88.7% < 0.25，91.2% < 0.5**。
+- 结论：同一帧内几乎绝大多数 Ped anchor 都被分类头压到 ~0，只有极少数 anchor 冒头。
+  → AP 曲线上 Ped 主要落在 score∈[0,0.5] 的低分召回带，不是「分数高但框差」。
+
+### 29.3 B. λ-recall（anchor 几何覆盖，去掉分类/score 因素）
+对每个 GT Pedestrian，看「是否存在任一 Ped anchor（6 朝向）与 GT 的 3D IoU ≥ λ」：
+
+| λ | 0.10 | 0.20 | 0.25 | 0.30 | 0.35 | 0.40 | 0.50 | 0.60 | 0.70 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 覆盖率 | 0.501 | 0.467 | **0.452** | 0.383 | 0.242 | 0.134 | **0.045** | 0.006 | 0.000 |
+
+- 若 anchor 几何完美，这些值应 ≈1。实际 λ=0.5 只有 **4.5%**（与旧诊断「Ped strict 通过率
+  ~4%」一致），λ=0.25 只有 45.2%。
+- **这是决定性证据：即便忽略分类分数、只问「6 个朝向的 anchor 能否摆到 GT 头上去」，
+  strict(0.5) 上限也只有 4.5%。也就是说模型被 anchor 几何 + 一刀切的同一 box-code
+  残差缩放卡死了，而不是 NMS/score 阈值卡死。**
+- 反过来说 λ=0.25 的 45.2% 也低，说明 **Ped anchor 的朝向命中率本就不够**（2 朝向 anchor
+  + sin/cos 编码，缺少匹配 GT 朝向的分辨率），这正是 Cyclist 同类问题（Cyc loose 48.6
+  一样长期卡在 ~50）。
+
+### 29.4 C+D. 正确召回 Ped 的逐分量误差（n=540）
+- center BEV：mean=0.323m / median=0.197m；**73.5% ≤0.35m**，38.1% ≤0.15m。
+  中心误差并不受「BEV 0.16m 网格量化」主导——中位数 0.2m 略高于 0.16 网格，但可接受。
+- w(横向)：mean=0.307 / median=0.316；**只有 27.6% ≤0.15m**；有 45.5% 落在 0.25–0.60m。
+  → **横向尺寸误差是首要定位错误**（行人 w 才 ~0.4–0.7m，错 0.3m ≈ 错半个身子）。
+- l(纵向)：mean=0.430 / median=0.249；78.7% ≤0.30m——纵向基本贴 GT，不是主要矛盾。
+- h(高度)：mean=0.140 / median=0.104；89.1% ≤0.25m——高度最好，基本不是矛盾。
+- yaw：mean=0.593rad / median=0.379rad；**42.4% ≤0.25rad**，但 33.5% >0.9rad（近 π/2）。
+  → **朝向存在明显双峰：一批对了，一批差 ~90°（w/l 与 GT 垂直/互换）**。
+
+### 29.5 F. loose-ok(0.25≤IoU<0.5) 而 strict-fail 的根因分解（n=311 配对）
+- 单一致命因素命中：**w 至少差 0.15m 占 20.6%**；center 1.9%、yaw 1.6%、l 0%、h 0%。
+- 多因素叠加 75.9%——不是某个单一量独占，而是 w⊕center⊕yaw 叠加把 IoU 从 [0.25,0.5) 拉不
+  到 0.5。
+- h/l 贡献为零。→ Ped strict 的失败不是「三维高度对齐」，本质是 2D BEV 的 w/朝向/中心
+  精度问题，与旧结论「BEV 物理瓶颈」一致但更精确：**不是纯网格量化，是 anchor 宽度预测量 +
+  朝向分辨 + 中心漂移的叠加**。
+
+### 29.6 E. 距离与尺寸分桶
+- 距离：loose/strict = 0-20m `0.778/0.024`，20-40m `0.453/0.060`，40-60m `0.150/0.000`。
+  strict 全程被压死，但 20-40m 反而略高于 0-20m（0.060 vs 0.024，样本少、噪声级）。
+- 尺寸（GT 长轴）：<0.55m `loose=0.689`, strict=0；0.55-0.7m `0.576/0.023`；
+  0.7-0.85m `0.594/0.087`；0.85-1.0m `0.630/0.333`。**越大越容易 strict**：
+  小 Ped（<0.55m）loose 高但 strict=0.000，是纯框质量被宽度误差吃掉。
+
+### 29.7 决策：单一路线 = Pedestrian 专属 box refinement（路线 2）
+三点证据共同指向「加 Ped 专属 7D box refinement」而不是高分辨率 BEV：
+
+1. **B 表 λ=0.5 只有 4.5%**：高分辨率 BEV/Pillar 缩小中心量化只能救 center（D 表 center
+   74% ≤0.35m，已不是主矛盾），救不了 w/yaw 的 anchor 几何上限——换网格不改 anchor 几何。
+2. **w 误差 45% >0.25m + yaw 33% >0.9rad**：需要「完整 7D box residual」，只加 anchor
+   不解决；detach 输入第一版只验证检测头容量（信噪优先，避免再次污染 Cyclist）。
+3. **score 低（A）是下游症状**：一旦框好、可严格匹配的 anchor 变正样本、分得更高，score
+   自然上移；因此先修回归、不先修分类/匹配（对应用户给的 branch 3 先不动）。
+
+唯一改动：`Anchor3DHead` 新增 `ped_refine` / `ped_refine_dims=(0,1,3,4,5,6)`（7D=dx,dy,dw,dl,dh,yaw）
++ 输入 `x.detach()`，只覆盖 3 组 Ped anchor（6 个 slots × 7D），输出残差 `index_add_`。
+基线（开关关）完全不变。训练设置按用户固定模板（GPU 5,6,7 / seed0 / deterministic /
+seq4 / bptt1 / bs2 / cum2 / lr1.5e-4 / 24e / ckpt1）。
