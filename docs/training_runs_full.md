@@ -2376,3 +2376,26 @@ ep12–16 均值口径（基线 = `run10_headv2_multiseed/seed_0`，Δ = 本次 
 2. **回 clean full RSSM 复现**：若担心累积干扰，run10 已确认 38.39 可作对照（本轮基线
    与历史 clean 基线一致，主因果链仍然成立）。
 3. Car/Truck 分类塔拆法（26.6 已排除为首要，收益有限，暂不优先）。
+
+### 30.1 实验设计（Pedestrian anchor 朝向 2→4，唯一变量）
+- 新配置：`configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_pedrot4.py`
+  （= clean full RSSM + head-v2，唯一改动 `rotations=[0.0, 0.785398, 1.570796, 2.356194]`）。
+- 其余全部冻结：ped_refine 关 / BEV / voxel / RSSM / KL / BPTT / loss / lr / seq_len=4 /
+  samples_per_gpu=2 / cumulative_iters=2 / max_epochs=24。
+- 目标：缩短 Ped yaw 初始匹配误差 45°→22.5°。
+- 训练设置固定模板：GPU 5,6,7 / seed0 / `--deterministic` / ckpt_interval=1。
+- work_dir：`/data/lurui/work_dirs/pedrot4_N4_2x4_24e_seed0`。
+- 启动：2026-09-06 08:52 UTC，launcher `/tmp/launch_pedrot4.sh`（nohup + setsid）。
+
+### 30.2 健康检查（iter50/100/200）
+- conv_cls 96→conv_reg 168→conv_dir_cls 48→conv_iou 24 通道，与 24 anchors（6 size × 4 rot）完全一致。
+- iter50 loss_bbox=1.89 loss_cls=1.13 loss_iou=0.28 grad_norm=10.7；iter200 loss 降至 2.37，梯度正常。
+
+### 30.3 ⚠️ 重要技术提示：`rotations` 是跨全部 size 共享的
+`Anchor3DRangeGenerator.anchors_single_range` 对 **每个 anchor size** 都套用同一个
+`self.rotations`（`single_level_grid_anchors` 里 `zip(ranges,sizes)` → `anchors_single_range(...,self.rotations)`）。
+因此本配置下 anchors 数量 = 6 size × 4 朝向 = **24**（不是「Ped 6→12」）。
+也就是说 Cyc/Car/Truck 也各从 2 朝向变成 4 朝向，rotation-only 并不只作用于 Ped。
+- Ped 达标口径（Ped loose ≥28.42 / strict 稳定提升）仍按计划直接观察；
+- 若 Cyc/Car/Truck 由此受损、或 strict 无稳定提升，下一步按预设分支直接评估
+  **Pedestrian 独立 point/center-based head**，RSSM 保持当前完整版本冻结，不再堆 anchor/改 RSSM。
