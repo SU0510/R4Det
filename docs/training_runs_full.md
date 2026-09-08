@@ -2465,3 +2465,49 @@ Ped strict 全程 0.026–0.287 噪声带内，无任何一个 epoch 形成可�
    下一步直接评估 **Pedestrian 独立 center/point-based head**；RSSM 维持当前完整版本冻结，
    不再回到 anchor 层或 RSSM 调整。
 
+
+---
+
+## 31. Pedestrian 独立 CenterHead（stage-1 隔离，Anchor3DHead 冻结保 Car/Truck/Cyclist）
+
+### 31.0 实验设置（launch record）
+
+- 目的：第 30 节判定后，转向【Pedestrian 独立 center head】路线。共享 BEV 之上新增一个只
+  检 Pedestrian 的 `CenterHeadkitti`，原 `Anchor3DHead` 完全不变并冻结，只训练新 CenterHead。
+- 架构：
+  - `ped_center_head = CenterHeadkitti(tasks=[dict(num_class=1, class_names=['Pedestrian'])], in_channels=256, share_conv_channel=64)`
+  - `common_heads = dict(reg=(2,2), height=(1,2), dim=(3,2), rot=(2,2))`
+  - 空间参数：`point_cloud_range=[0,-39.68,-4,69.12,39.68,2]`、`voxel_size=[0.32,0.32]`、
+    `grid_size=[216,248,1]`、`out_size_factor=1`、`min_radius=1`、`gaussian_overlap=0.1`、`max_objs=100`
+  - `pts_bbox_head`（Anchor3DHead）与原 clean 配置逐字段一致（校验 `dict(orig)==dict(new)` 成立）。
+- 训练隔离：`ped_stage1=True`。冻结 RSSM、img/radar backbone+neck、depth_net、view_transformer、
+  RCFusion、原 Anchor3DHead；冻结模块在训练时强制 `training=False`（BN 统计不漂移）。
+  梯度只允许进入 `ped_center_head`；shared BEV 输入也 `.detach()`。
+- checkpoint：`load_from=/data/lurui/work_dirs/run10_headv2_multiseed/seed_0/epoch_16.pth`
+  （anchor/backbone/fusion 全量加载，仅新 CenterHead 为随机初始化权重）。
+- 推理合并（`R4Det._simple_test_pts_dual`）：
+  1. 删除 AnchorHead 中 `label==0`（Pedestrian）框；
+  2. CenterHead 输出统一 `label=0`；
+  3. 保留 AnchorHead Cyclist/Car/Truck；
+  4. 拼接，不做跨类别 NMS。
+- 调度：`GPU=5,6,7`（3 卡）、`samples_per_gpu=2`、`cumulative_iters=2`（有效 batch=12）、
+  `AdamW lr=1e-3`、`max_epochs=12`、`score_threshold=0.0`、RepeatDataset×2（与 clean 同 epoch 口径）。
+- 配置：`configs/r4det/TJ4D-R4Det_ped_centerhead_stage1_3x2x2_12e.py`
+- 代码：`R4Det` 新增 sibling `ped_center_head` + `ped_stage1` 冻结；`centerpoint_head.CenterHeadkitti`
+  修复 `box_type_3d` 兼容（LiDAR 直接调用而非 `[0]` 索引）。
+- 运行：`seed=0`、`CUDA_VISIBLE_DEVICES=5,6,7`、`bash tools/dist_train.sh <config> 3 --seed 0 --deterministic`。
+
+### 31.1 通过标准
+
+| 指标 | 标准 |
+|---|---|
+| Ped strict（ep8–12 mean） | ≥ 1.0 |
+| Ped loose | ≥ 28.42 |
+| Car strict | 与 clean 差异 ≤ 0.1 |
+| Truck strict | 与 clean 差异 ≤ 0.1 |
+| Cyclist loose | 与 clean 差异 ≤ 0.1 |
+
+- 后三类应近乎完全不变（主网络冻结）。若 Ped strict 仍 <1.0，说明现有 0.32m BEV 特征本身不足，
+  CenterHead 也救不了，下一步才考虑 Ped 高分辨率 BEV；若通过，再做第二阶段小学习率联合微调。
+
+> 结果待补：本段为 launch record，ep1–12 曲线与判读在训练完成后回填。

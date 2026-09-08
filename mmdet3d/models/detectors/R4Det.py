@@ -27,6 +27,7 @@ from ...utils.visualization import custom_draw_lidar_bbox3d_on_img
 from mmdet.models import build_head
 from mmdet3d.models.roi_heads.standard_roi_head import StandardRoIHead
 from mmdet3d.models.dense_heads import Anchor3DHead
+from mmdet3d.models.dense_heads.centerpoint_head import CenterHeadkitti
 from mmcv.ops import box_iou_rotated
 from mmcv.runner import force_fp32
 def _calculate_bev_iou(gt_boxes, pred_boxes):
@@ -181,8 +182,10 @@ class R4Det(MVXFasterRCNN):
                  test_cfg=None,
                  instance_feature_fusion_layer=None,
                  temporal_fusion=None,
+                 ped_center_head=None,
                  seq_len=2,
                  rssm_bptt_steps=1,
+                 ped_stage1=False,
                  **kwargs):
         super(R4Det, self).__init__(train_cfg=train_cfg, test_cfg=test_cfg, **kwargs)
         HEADS.module_dict['StandardRoIHead'] = StandardRoIHead
@@ -251,6 +254,7 @@ class R4Det(MVXFasterRCNN):
         # Number of history timesteps folded into the training graph. None or
         # negative means "all available history frames".
         self.rssm_bptt_steps = rssm_bptt_steps
+        self.ped_stage1 = ped_stage1
 
         # other papa for convenience
         self.xbound = self.grid_config['xbound']
@@ -293,11 +297,27 @@ class R4Det(MVXFasterRCNN):
         # seq_len=2 reproduces the original prev/curr behaviour.
         assert seq_len >= 2, f'seq_len must be >= 2, got {seq_len}'
         self.seq_len = seq_len
+
+        # Pedestrian-only CenterHead sibling (stage-1 isolation). Built after
+        # the frozen Anchor3DHead so the clean checkpoint loads the anchor head
+        # intact and only this new head gets freshly-initialized weights.
+        self.ped_center_head = None
+        self._ped_center_outs = None
+        if ped_center_head is not None:
+            _ped_cfg = dict(ped_center_head)
+            _ped_train_cfg = _ped_cfg.pop('train_cfg', None)
+            _ped_test_cfg = _ped_cfg.pop('test_cfg', None)
+            _ped_cfg.update(train_cfg=_ped_train_cfg, test_cfg=_ped_test_cfg)
+            self.ped_center_head = builder.build_head(_ped_cfg)
+
         # init weights and freeze if needed
         self.init_flexible_modules()
         self.init_weights()
         if self.freeze_images: self.freeze_img_model()
         if self.freeze_radars: self.freeze_pts_model()
+        self._frozen_eval_modules = []
+        if self.ped_stage1 and self.ped_center_head is not None:
+            self._freeze_for_ped_stage1()
         self.record_fps = {'num': 0, 'time': 0}
         self.init_visulization()
         self.igdr_fusion = IGDRModule(
@@ -528,6 +548,44 @@ class R4Det(MVXFasterRCNN):
         if self.with_pts_bbox:
             for param in self.pts_bbox_head.parameters():
                 param.requires_grad = False
+
+    def _freeze_for_ped_stage1(self):
+        """Stage-1 isolation freeze.
+
+        Freeze everything (RSSM, img/radar backbones + necks, fusion, original
+        Anchor3DHead) and keep only the Pedestrian CenterHead trainable.
+        Frozen modules are additionally kept in eval mode during training so
+        their BatchNorm statistics cannot drift.
+        """
+        center_head = self.ped_center_head
+
+        # 1) only the CenterHead keeps gradients.
+        for name, param in self.named_parameters():
+            param.requires_grad = False
+        for param in center_head.parameters():
+            param.requires_grad = True
+
+        # 2) everything except the CenterHead subtree is kept in eval mode.
+        #    We set `training` directly (not `.eval()`) so the flag does not
+        #    propagate into the CenterHead child.
+        self._frozen_eval_modules = []
+        for name, module in self.named_modules():
+            if name == '':
+                continue
+            if name == 'ped_center_head' or \
+                    name.startswith('ped_center_head.'):
+                continue
+            self._frozen_eval_modules.append(module)
+        for module in self._frozen_eval_modules:
+            module.training = False
+
+    def train(self, mode=True):
+        """Re-assert frozen modules stay in eval mode when training resumes."""
+        super().train(mode)
+        for module in getattr(self, '_frozen_eval_modules', []):
+            if mode:
+                module.training = False
+        return self
 
     # feature pre-extraction
     def generate_pillar_ref_points(self, num_in_height):
@@ -1368,17 +1426,84 @@ class R4Det(MVXFasterRCNN):
                           ):
 
 
-        outs = self.pts_bbox_head(pts_feats)
+        if self.ped_center_head is None:
+            outs = self.pts_bbox_head(pts_feats)
+            loss_inputs = outs + (gt_bboxes_3d, gt_labels_3d, img_metas)
+            losses = self.pts_bbox_head.loss(
+                *loss_inputs,
+                gt_bboxes_ignore=gt_bboxes_ignore,
+                bev_semantic_mask=bev_semantic_mask
+            )
+        else:
+            # Stage-1 isolation: the Anchor3DHead is frozen, so run it (for
+            # output bookkeeping) without gradient and skip its loss.
+            with torch.no_grad():
+                outs = self.pts_bbox_head(pts_feats)
+            losses = dict()
 
-        loss_inputs = outs + (gt_bboxes_3d, gt_labels_3d, img_metas)
-        losses = self.pts_bbox_head.loss(
-            *loss_inputs,
-            gt_bboxes_ignore=gt_bboxes_ignore,
-            bev_semantic_mask=bev_semantic_mask
-        )
+        if self.ped_center_head is not None:
+            # Detach the frozen shared BEV so gradients flow ONLY into the
+            # Pedestrian CenterHead parameters (and not the frozen producers).
+            ped_feats = [f.detach() for f in pts_feats]
+            self._ped_center_outs = self.ped_center_head(ped_feats)
+            ped_losses = self.ped_center_head.loss(
+                gt_bboxes_3d, gt_labels_3d, self._ped_center_outs)
+            losses.update(ped_losses)
 
         # losses = self.pts_bbox_head.loss(gt_bboxes_3d, gt_labels_3d, outs)
         return losses, outs
+
+    def simple_test_pts(self, x, img_metas, rescale=False):
+        """Test function of the point-cloud branch."""
+        if self.ped_center_head is None:
+            outs = self.pts_bbox_head(x)
+            bbox_list = self.pts_bbox_head.get_bboxes(
+                *outs, img_metas, rescale=rescale)
+            bbox_results = [
+                bbox3d2result(bboxes, scores, labels)
+                for bboxes, scores, labels in bbox_list
+            ]
+            return bbox_results, outs
+        return self._simple_test_pts_dual(x, img_metas, rescale=rescale)
+
+    def _simple_test_pts_dual(self, x, img_metas, rescale=False):
+        """Merged inference for Anchor3DHead + Pedestrian CenterHead.
+
+        Merging rules:
+          1. Drop every label==0 (Pedestrian) box from the Anchor3DHead.
+          2. Force every CenterHead box to label==0.
+          3. Keep Anchor3DHead Cyclist/Car/Truck untouched.
+          4. Concatenate; no cross-class NMS.
+        """
+        a_outs = self.pts_bbox_head(x)
+        anchor_list = self.pts_bbox_head.get_bboxes(
+            *a_outs, img_metas, rescale=rescale)
+        center_outs = self.ped_center_head(x)
+        center_list = self.ped_center_head.get_bboxes(
+            center_outs, img_metas, rescale=rescale)
+
+        merged = []
+        for i in range(len(img_metas)):
+            a_boxes, a_scores, a_labels = anchor_list[i]
+            keep = a_labels != 0
+            a_boxes_kept = a_boxes[keep]
+            a_scores_kept = a_scores[keep]
+            a_labels_kept = a_labels[keep]
+
+            c_boxes, c_scores, c_labels = center_list[i]
+            c_labels = torch.zeros_like(c_labels)
+
+            box_type_3d = img_metas[i]['box_type_3d']
+            if isinstance(box_type_3d, (list, tuple)):
+                box_type_3d = box_type_3d[0]
+
+            merged_boxes = box_type_3d.cat([a_boxes_kept, c_boxes])
+            merged_scores = torch.cat([a_scores_kept, c_scores], dim=0)
+            merged_labels = torch.cat([a_labels_kept, c_labels], dim=0)
+            merged.append(
+                bbox3d2result(merged_boxes, merged_scores, merged_labels))
+
+        return merged, (a_outs, center_outs)
 
 
     # preprocessing for data and others

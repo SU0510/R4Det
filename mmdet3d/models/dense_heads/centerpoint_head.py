@@ -1593,7 +1593,10 @@ class CenterHeadkitti(BaseModule):
                 if k == 'bboxes':
                     bboxes = torch.cat([ret[i][k] for ret in rets])
                     bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
-                    bboxes = img_metas[i]['box_type_3d'][0](
+                    bt3d = img_metas[i]['box_type_3d']
+                    if isinstance(bt3d, (list, tuple)):
+                        bt3d = bt3d[0]
+                    bboxes = bt3d(
                         bboxes, self.bbox_coder.code_size)
                 elif k == 'scores':
                     scores = torch.cat([ret[i][k] for ret in rets])
@@ -1677,7 +1680,10 @@ class CenterHeadkitti(BaseModule):
                 if self.test_cfg['score_threshold'] > 0.0:
                     box_preds = box_preds[top_scores_keep]
                     top_labels = top_labels[top_scores_keep]
-                boxes_for_nms = xywhr2xyxyr(img_metas[i]['box_type_3d'][0](
+                bt3d = img_metas[i]['box_type_3d']
+                if isinstance(bt3d, (list, tuple)):
+                    bt3d = bt3d[0]
+                boxes_for_nms = xywhr2xyxyr(bt3d(
                     box_preds[:, :], self.bbox_coder.code_size).bev)
                 # the nms in 3d detection just remove overlap boxes.
                 if isinstance(self.test_cfg['nms_thr'], list):
