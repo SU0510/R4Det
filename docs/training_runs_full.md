@@ -2495,7 +2495,10 @@ Ped strict 全程 0.026–0.287 噪声带内，无任何一个 epoch 形成可�
 - 配置：`configs/r4det/TJ4D-R4Det_ped_centerhead_stage1_3x2x2_12e.py`
 - 代码：`R4Det` 新增 sibling `ped_center_head` + `ped_stage1` 冻结；`centerpoint_head.CenterHeadkitti`
   修复 `box_type_3d` 兼容（LiDAR 直接调用而非 `[0]` 索引）。
-- 运行：`seed=0`、`CUDA_VISIBLE_DEVICES=5,6,7`、`bash tools/dist_train.sh <config> 3 --seed 0 --deterministic`。
+- 工作目录：`work_dirs/ped_centerhead_stage1_3x2x2_12e_seed0`（`work_dirs` → `/data/lurui/work_dirs`）。
+- 运行：`seed=0`、`CUDA_VISIBLE_DEVICES=5,6,7`、\
+  `bash tools/dist_train.sh configs/r4det/TJ4D-R4Det_ped_centerhead_stage1_3x2x2_12e.py 3 \
+  --seed 0 --deterministic --work-dir work_dirs/ped_centerhead_stage1_3x2x2_12e_seed0`。
 
 ### 31.1 通过标准
 
