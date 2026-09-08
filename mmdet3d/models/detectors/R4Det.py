@@ -1106,7 +1106,8 @@ class R4Det(MVXFasterRCNN):
             cur_pts = frame_points[N - 1]
             if not isinstance(cur_pts, list): cur_pts = [cur_pts]
             self.draw_gt_pred_figures_3d(cur_pts, cur_img, gt_bboxes_3d, gt_labels_3d,
-                                         frame_img_metas[N - 1], False, threshold, outs_pts=outs_pts)
+                                         frame_img_metas[N - 1], False, threshold,
+                                         bbox_list=bbox_pts)
         else: # vanilla testing method
             self.vis_time_box3d += 1
             if self.vis_time_box3d % self.SAVE_INTERVALS == 0:
