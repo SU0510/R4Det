@@ -2513,4 +2513,73 @@ Ped strict 全程 0.026–0.287 噪声带内，无任何一个 epoch 形成可�
 - 后三类应近乎完全不变（主网络冻结）。若 Ped strict 仍 <1.0，说明现有 0.32m BEV 特征本身不足，
   CenterHead 也救不了，下一步才考虑 Ped 高分辨率 BEV；若通过，再做第二阶段小学习率联合微调。
 
-> 结果待补：本段为 launch record，ep1–12 曲线与判读在训练完成后回填。
+### 31.2 训练结果（seed0，ep1–12 全曲线，训练已全部完成）
+
+训练于 2026-09-08 14:22 完成 ep12，三卡 `[RANK 0/1/2] FINISH` 正常退出，无 NaN、无梯度爆炸。
+12 个 checkpoint 全部落盘，`latest.pth -> epoch_12.pth`。冻结网络全部 `requires_grad=False` 且 `training=False`，
+仅 `ped_center_head`（含 bbox coder + 共享 head）参与训练；loss 正常收敛（`loss_heatmap` 0.45、
+`loss_xy/z/whl/yaw` 均 →1e-4 量级，`grad_norm` 0.95）。
+
+| ep | Overall | Ped strict | Ped loose | Car strict | Truck strict | Cyc loose |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 38.20 | 0.085 | 21.92 | 49.9772 | 30.4303 | 50.4709 |
+| 2 | 38.72 | 0.058 | 24.01 | 49.9772 | 30.4303 | 50.4709 |
+| 3 | 38.84 | 0.056 | 24.48 | 49.9772 | 30.4303 | 50.4709 |
+| 4 | 39.30 | 0.050 | 26.33 | 49.9772 | 30.4303 | 50.4709 |
+| 5 | 38.89 | 0.075 | 24.69 | 49.9772 | 30.4303 | 50.4709 |
+| 6 | 39.63 | 0.067 | 27.66 | 49.9772 | 30.4303 | 50.4709 |
+| 7 | 39.85 | 0.045 | **28.53** | 49.9772 | 30.4303 | 50.4709 |
+| 8 | 38.69 | 0.027 | 23.90 | 49.9772 | 30.4303 | 50.4709 |
+| 9 | 39.37 | 0.080 | 26.62 | 49.9772 | 30.4303 | 50.4709 |
+| 10 | 39.51 | 0.167 | 27.15 | 49.9772 | 30.4303 | 50.4709 |
+| 11 | 39.31 | 0.159 | 26.35 | 49.9772 | 30.4303 | 50.4709 |
+| 12 | 39.35 | 0.164 | 26.51 | 49.9772 | 30.4303 | 50.4709 |
+
+- Car/Truck/Cyclist 三列 **全程恒定**（12 个 epoch 逐 epoch 完全一致），与 clean ep16 四舍五入后相同，
+  证明阶段-1 冻结 + BEV detach 生效：主网络与前向统计量没有任何漂移。
+- Ped loose 全曲线峰值 = ep7 **28.53**，随后 ep8 跌到 23.90（lr 已退到 3.7e-4），ep9–12 在 26.3–27.2 窄带内
+  反复震荡，无法站稳 28.42。
+- Ped strict 全曲线 0.027–0.167 噪声带内震荡，与本方案之前所有 Ped 专项实验（29/30 节）同量级。
+
+### 31.3 通过标准核对（seed0，未通过）
+
+基线 = clean full RSSM（run10 seed0 ep16：Car strict 49.9772 / Truck strict 30.4303 /
+Cyc loose 50.4709 / Ped loose 28.6426 / Ped strict 0.1036；Ped strict 达标口径取 ep8–12 mean）：
+
+| 指标 | 本次 | 基线/标准 | 判定 |
+|---|---:|---|:---:|
+| Ped strict（ep8–12 mean） | **0.1195** | ≥ 1.0 | ❌ |
+| Ped loose（ep8–12 mean） | 26.11 | ≥ 28.42 | ❌ |
+| Ped loose（全曲线 best） | 28.53（ep7） | ≥ 28.42 | 仅单点 |
+| Car strict（diff） | 0.0000 | ≤ 0.1 | ✅ |
+| Truck strict（diff） | 0.0000 | ≤ 0.1 | ✅ |
+| Cyclist loose（diff） | 0.0000 | ≤ 0.1 | ✅ |
+
+- 后三类（Car/Truck/Cyclist）**完全冻结、0 差异通过**，符合「主网络冻结即不变」的设计预期。
+- Ped strict ep8–12 mean 0.1195，距离 ≥1.0 差约一个量级；
+  Ped loose ep8–12 mean 26.11，未回到 28.42，且 best（28.53）落在 ep7，不在 ep8–12 达标窗内。
+
+### 31.4 核心结论（不通过；0.32m BEV 特征本身不足）
+
+1. **后三类隔离验证完全通过**：Car/Truck/Cyclist 三个指标与 clean ep16 差异均为
+   **0.0000**，逐 epoch 恒定。说明 sibling CenterHead 的加入没有扰动主网络：
+   冻结 + `training=False` + BEV detach 三者同时生效，Anchor3DHead/BE/融合的 BN 统计无漂移。
+   这坐实了「加独立 CenterHead 不影响现有指标」的结构可行性，为后续高分辨率 BEV 分支铺平了路。
+2. **Ped 专项指标未达标**：Ped strict ep8–12 mean 0.1195（vs 标准 ≥1.0），Ped loose ep8–12 mean
+   26.11（vs ≥28.42）。即便 CenterHead 以 heatmap 方式在全 BEV 网格上独立定位 Ped，
+   strict 仍然卡在噪声带内——与用户预设分支的判据一致：**现有 0.32m BEV 特征本身不足以给出
+   strict 所需的像素级定位精度，CenterHead 也救不了**。
+3. **Curve 形态佐证**：Ped loose 在 ep7 碰到 28.53 后立刻回落到 23–27 振荡平台，
+   与 29 节 C/D 诊断（w 与 yaw 的回归误差上限）一致：0.32m 体素下 Ped 目标的宽度/朝向
+   观测信息不足，head 换型（anchor→center）无法补偿 BEV 的信息瓶颈。
+4. **判定**：阶段-1 不通过。按预设分支进入下一步——**Ped 高分辨率 BEV**（保留冻结的
+   Car/Truck/Cyclist 主网络，Ped 走更高分辨率的专用 BEV 分支 + CenterHead）。
+
+### 31.5 下一步
+
+- 优先验证 **Ped 高分辨率 BEV**：减小 Ped 专用 BEV 的 `voxel_size`（如 0.32→0.16/0.20），
+  放大 `grid_size`，`point_cloud_range` 可裁到 Ped 常见深度窗（可视统计后定），
+  其余沿用本节的 CenterHead 配置与 stage-1 冻结隔离（Car/Truck/Cyclist 归主 Anchor3DHead）。
+- 保持通过口径不变：Ped strict ep8–12 mean ≥1.0、Ped loose ≥28.42、后三类 diff ≤0.1。
+- 若高分辨率 BEV 仍未达 Ped strict ≥1.0，则回溯 29 节误差拆解，重点处理 w/yaw 的回归
+  误差上限（而非继续换 head 或堆 anchor）。
