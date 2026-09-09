@@ -36,6 +36,9 @@ def parse_args():
     p.add_argument('--gpu-id', type=int, default=0)
     p.add_argument('--deterministic', action='store_true', default=True)
     p.add_argument('--limit', type=int, default=0, help='debug: only first N samples')
+    p.add_argument('--raw-nms', action='store_true', default=False,
+                   help='bypass CenterHead NMS: save all decoded Ped boxes (circle r=0)')
+    p.add_argument('--nms-thr', type=float, default=0.2, help='rotate NMS IoU thr when --rotate-nms')
     return p.parse_args()
 
 
@@ -58,6 +61,12 @@ def main():
     figures_path = os.path.join('/tmp', 'r4det_diag_figures')
     os.makedirs(figures_path, exist_ok=True)
     cfg.model['meta_info'] = {'figures_path': figures_path, 'project_name': 'TJ4D'}
+    if args.raw_nms and cfg.model.get('ped_center_head') is not None:
+        tc = cfg.model['ped_center_head']['test_cfg']
+        tc['nms_type'] = 'circle'
+        tc['min_radius'] = [0.0]
+        tc['post_max_size'] = 100
+        print('[dump] raw-nms: circle r=0 (keep all decoded Ped boxes)')
 
     dataset = build_dataset(cfg.data.val)
     data_loader = build_dataloader(
