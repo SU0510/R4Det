@@ -2698,3 +2698,63 @@ Ped BEV**。依据第 32.2 的 −7.8% w 改善：即使给 head 加先验/loss�
 - 本次只做诊断与 sweep，**未启动高分辨率训练、未补 seed**。
 - 支路已被排除：只修 NMS；只调 heatmap loss；纯 center 高分辨率。
 - 已确认唯一路径：**Ped 0.16m 高分辨率 BEV + CenterHead（w/yaw 仍主导）**。
+
+---
+
+## 33. 固定尺寸先验验证（零训练，CenterHead 解码后 NMS 前覆盖 Ped w/l）
+
+### 33.0 实验设置
+
+- 目的：在没有重新训练的前提下，验证「w（宽度）是 Ped strict 主导瓶颈」这一第 32 节结论。
+  在 `CenterHeadkitti` 解码后、NMS 前，仅对 Ped 覆盖 `boxes[..., 3] = fixed_x_size`、
+  `boxes[..., 4] = fixed_y_size`（即 w/l）。center/z/height/yaw 继续使用 CenterHead 预测，
+  score/NMS/主 AnchorHead/RSSM 全部不变。
+- 实现：`mmdet3d/models/dense_heads/centerpoint_head.py` 的 `CenterHeadkitti.get_bboxes`
+  新增 inference-only 分支，由 `test_cfg.fixed_size_prior=[fw, fl]` 开关，仅作用于
+  `temp[i]['bboxes']` 解码结果，NMS 之前；不影响训练、不影响 AnchorHead。
+- 两个非 val 泄漏先验（均为训练集口径，不接触 val GT）:
+  - **A**：训练集 LiDAR 中位数 `0.655 × 0.628 m`
+  - **B**：现有 Ped-small anchor `0.500 × 0.600 m`
+- checkpoint：`epoch_7.pth` / `epoch_12.pth`（`work_dirs/ped_centerhead_stage1_3x2x2_12e_seed0`）。
+- 评估：`tools/test_vod.py`（TJ4D eval），`--cfg-options model.ped_center_head.test_cfg.fixed_size_prior=[fw,fl]`，
+  single-GPU，`CUDA_VISIBLE_DEVICES=5/6/7` 各跑一份，无训练。
+
+### 33.1 通过标准
+
+| 指标 | 标准 |
+|---|---|
+| Ped strict moderate | ≥ 1.0 |
+| Ped loose moderate | ≥ 原 checkpoint − 0.5 |
+| ep7 / ep12 都出现 strict 提升 | 是 |
+| Car/Truck/Cyclist | 与原 checkpoint 0 差异 |
+
+### 33.2 基线（原 checkpoint，训练日志口径）
+
+| checkpoint | Ped strict mod | Ped loose mod |
+|---|---:|---:|
+| ep7 | 0.0452 | 28.5298 |
+| ep12 | 0.1639 | 26.5118 |
+
+### 33.3 复评结果（Ped 3D moderate）
+
+| 先验 | checkpoint | strict | loose | Δstrict | Δloose | 判定 |
+|---|---|---:|---:|---:|---:|---|
+| A 0.655×0.628 | ep7 | **3.7382** | 27.6353 | +3.693 | −0.895 | strict 通过，loose 超标 |
+| A 0.655×0.628 | ep12 | **3.6693** | 26.4229 | +3.505 | −0.089 | 通过 |
+| B 0.500×0.600 | ep7 | **5.6055** | 27.2042 | +5.560 | −1.326 | strict 通过，loose 超标 |
+| B 0.500×0.600 | ep12 | **7.3104** | 25.6589 | +7.147 | −0.853 | strict 通过，loose 超标 |
+
+Car/Truck/Cyclist 所有 checkpoint、所有先验下逐位不变（Car strict 49.9772、
+Truck strict 30.4303、Cyclist loose 50.4709，与训练日志一致，0 差异）。
+
+### 33.4 判定
+
+- **strict 全面暴涨**：两种先验下 ep7/ep12 的 Ped strict 都从 ~0 级（0.045/0.164）
+  跃升到 3.7–7.3，远高于 ≥1.0 阈值，直接验证「w 预测是 Ped strict 主瓶颈」（第 32 节）。
+- **先验 B（0.5×0.6 anchor）strict 增益大于 A（0.655×0.628 中位数）**：ep12 上
+  B=7.31 vs A=3.67，ep7 上 B=5.61 vs A=3.74。更小更紧的 Ped 先验对 strict 更有利。
+- **loose 为代价**：固定先验牺牲了逐目标宽度适配，loose 均有下降（−0.09 ~ −1.33）。
+  仅「A @ ep12」满足 loose ≥ 原 −0.5；其余 3 组 loose 超标。
+- **结论**：固定尺寸先验能把 Ped strict 从「无效」抬到「可用」，但 loose 同步受损，
+  属于「以 loose 换 strict」的零训练上界验证，**不代表最终方案**。下一步仍然走
+  0.16m 高分辨率 Ped BEV（保留逐目标 w 回归，而非固定先验）。
