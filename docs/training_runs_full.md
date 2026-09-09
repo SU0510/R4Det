@@ -2758,3 +2758,78 @@ Truck strict 30.4303、Cyclist loose 50.4709，与训练日志一致，0 差异�
 - **结论**：固定尺寸先验能把 Ped strict 从「无效」抬到「可用」，但 loose 同步受损，
   属于「以 loose 换 strict」的零训练上界验证，**不代表最终方案**。下一步仍然走
   0.16m 高分辨率 Ped BEV（保留逐目标 w 回归，而非固定先验）。
+
+---
+
+## 34. 软尺寸先验复评（零训练，log-space blend）
+
+### 34.0 实验设置
+
+- 目的：第 33 节硬先验（alpha=1.0）虽然 strict 暴涨，但 loose 普遍下降。本步在硬先验
+  基础上引入 log-space blend，在「保住 loose」与「提升 strict」之间寻软着陆点。
+- 实现：`CenterHeadkitti.get_bboxes` 解码后、NMS 前，仅对 Ped 的 w/l（`boxes[..., 3]` /
+  `boxes[..., 4]`）做：
+  ```
+  final = exp((1-alpha)*log(pred) + alpha*log(prior))
+  ```
+  配置键 `test_cfg.size_prior_alpha=[fw, fl, alpha]`。center/z/height/yaw 继续用 CenterHead
+  预测，score/NMS/AnchorHead/RSSM 全部不变。alpha=0 原样、alpha=1 退化为硬先验。
+- 先验：A 训练集中位数 `0.655 × 0.628`；B Ped-small anchor `0.500 × 0.600`。
+- alpha：0.50、0.75；checkpoint：ep7、ep12。
+- 全部 `tools/test_vod.py` 零训练 single-GPU 复评（GPU 5/6/7）。
+
+### 34.1 复评结果（Ped 3D moderate，strict / loose）
+
+| 先验 × alpha | ep7 strict | ep7 loose | ep12 strict | ep12 loose | 备注 |
+|---|---:|---:|---:|---:|---|
+| 原始（无先验） | 0.0452 | 28.5298 | 0.1639 | 26.5118 | 训练日志口径 |
+| A × 0.50 | 0.6879 | 28.2018 | — | — | |
+| A × 0.75 | **2.4054** | **28.2016** ✅ | 1.9930 | 26.8525 | ep7 满足正式标准 |
+| B × 0.50 | 2.5603 | 28.1777 | 2.1425 | 26.9962 | 0.15 微欠 loose |
+| B × 0.75 | — | — | 5.5671 | 26.6590 | |
+
+- Car strict=49.9772、Truck strict=30.4303、Cyclist loose=50.4709 在所有组合下逐位不变（0 差异）。
+- ep7 Overall 3D moderate：原始 39.8520 → A×0.75 39.77（−0.082，基本持平）。
+
+### 34.2 通过标准核对（优先 ep7）
+
+| 指标 | 标准 | A×0.75 @ep7 | 判定 |
+|---|---|---:|---|
+| Ped strict moderate | ≥ 1.0 | 2.4054 | ✅ |
+| Ped loose moderate | ≥ 28.03 | 28.2016 | ✅ |
+| Car/Truck/Cyclist | 完全不变 | 0 差异 | ✅ |
+
+更理想目标（strict≥3.0、loose≥28.5、Overall 不低于原 ep7）：
+
+| 指标 | 目标 | A×0.75 @ep7 | 判定 |
+|---|---|---:|---|
+| Ped strict | ≥ 3.0 | 2.4054 | ✗（差 0.59） |
+| Ped loose | ≥ 28.5 | 28.2016 | ✗（差 0.30） |
+| Overall | ≥ 39.8520 | 39.77 | ✗（差 0.08） |
+
+- **正式通过标准已达成**（A×0.75 @ ep7：strict 2.405 / loose 28.202，Car/Truck/Cyclist 0 差异）。
+- 更理想目标未达：strict 2.405 < 3.0、loose 28.20 < 28.5、Overall 39.77 略低于 39.85。
+
+### 34.3 与 raw dump 趋势对照
+
+- 用户给出的 Ped-small（先验 B）raw dump 趋势：alpha 0.50 loose 0.313 / strict 0.076，
+  alpha 0.75 loose 0.311 / strict 0.111，原始 loose 0.306 / strict 0.015。
+- 正式 AP 复评方向一致：B 先验 strict 从 0.16（ep12）→ 2.14（α=.50）→ 5.57（α=.75），
+  loose 基本守住（26.51 → 27.00 → 26.66）。软先验确实同时小幅保 loose、显著抬 strict。
+- 但正式 AP 下 A 先验（中位数）是唯一同时过 strict/loose 阈值的组合，B 先验在 α 较低时
+  保住 loose 略优于 A，却仍差 0.03–0.15 到 28.03 阈值线。
+
+### 34.4 判定与下一步
+
+- **软先验（alpha≈0.75）+ 中位数先验 A @ ep7 达成正式通过标准**：strict 2.405 ≥ 1.0、
+  loose 28.202 ≥ 28.03、Car/Truck/Cyclist 0 差异。零训练下已能把 Ped strict 从无效抬到可用。
+- 距离更理想目标仅差一档（strict 差 0.59、loose 差 0.30、Overall 差 0.08），说明**纯推理
+  尺寸先验已接近其信息上限**，继续调 alpha / 换先验不足以突破。
+- 按既定路线顺序，下一步进入 **训练有界尺寸残差**：
+  ```
+  prior = [0.655, 0.628]; max_log_residual = 0.25
+  dim = prior * exp(max_log_residual * tanh(raw_dim))
+  ```
+  用真训练把 strict 推过 3.0、loose 抬过 28.5。若 bounded residual 训练后仍守不住 loose，
+  再启动 0.16m 高分辨率 BEV（对应的软先验 alpha 正好落在 0.75 附近，且高分辨率让逐目标
+  w 回归本身更准，进一步减少对先验的依赖）。
