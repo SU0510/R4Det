@@ -2583,3 +2583,118 @@ Cyc loose 50.4709 / Ped loose 28.6426 / Ped strict 0.1036；Ped strict 达标口
 - 保持通过口径不变：Ped strict ep8–12 mean ≥1.0、Ped loose ≥28.42、后三类 diff ≤0.1。
 - 若高分辨率 BEV 仍未达 Ped strict ≥1.0，则回溯 29 节误差拆解，重点处理 w/yaw 的回归
   误差上限（而非继续换 head 或堆 anchor）。
+
+## 32. CenterHead ep7/ep12 误差诊断 + NMS sweep（不训练）
+
+### 32.0 诊断范围（launch record）
+
+- 目的：第 31 节 CenterHead 阶段-1 不通过后，按「先诊断、不训练」要求，对三个 checkpoint
+  生成 dump 并做 CPU-only 误差拆解，确定唯一分支：
+  center 误差主导 → 高分辨率 BEV；center 正常且 w/yaw 主导 → 不动分辨率，改 head 先验/loss；
+  NMS sweep 明显提 loose → 只修 NMS；score 低但框好 → 只调 heatmap loss。
+- dumps（均由 `tools/dump_predictions.py` 生成，GPU 5）：
+  - `diag_dumps/seed0_ep16.pkl` — clean full RSSM + head-v2（第 29/31 节基线，prior 已存在）
+  - `diag_dumps/ped_center_ep7.pkl` — CenterHead ep7（loose 峰值 28.53）
+  - `diag_dumps/ped_center_ep12.pkl` — CenterHead ep12（末轮）
+  - `diag_dumps/ped_center_ep7_raw.pkl` — ep7 禁用 CenterHead NMS（circle r=0，保留全部 100
+    个 decoded box/样本）用于 CPU NMS sweep。
+- 脚本：`tools/ped_center_diag.py`（逐 checkpoint）、`tools/ped_nms_sweep.py`（raw sweep）。
+- 口径：Pedestrian（class 0）单类、LiDAR 帧、greedy 一对一匹配（KITTI 同序，按 score 降序）。
+  3D IoU 为 BEV 多边形 × 高度重叠（与 eval 一致）。loose=0.25、strict=0.5。
+
+### 32.1 完整 GT recall@0.25 / @0.5（三 checkpoint 对比，Ped GT=999）
+
+| checkpoint | recall@0.25 | recall@0.5 |
+|---|---:|---:|
+| clean ep16 | 0.332 | 0.021 |
+| Center ep7 | 0.300 | 0.012 |
+| Center ep12 | 0.285 | 0.006 |
+
+- CenterHead 的完整 Ped GT recall 反而略低于 clean baseline（0.300 vs 0.332 @0.25），
+  strict 也略低（0.012 vs 0.021）。head 换型没有带来 recall 提升，仅改变了匹配到的
+  box 的分布（见 32.2 误差）。
+
+### 32.2 匹配对误差（mean，center / w / l / h / yaw）
+
+| 轴 | clean ep16 | Center ep7 | Center ep12 | ep7 相对 clean 改善 |
+|---|---:|---:|---:|---:|
+| center BEV (m) | 0.323 | 0.213 | 0.209 | −34.1% |
+| w across (m) | 0.307 | 0.283 | 0.311 | −7.8% |
+| l along (m) | 0.430 | 0.204 | 0.239 | −52.6% |
+| h (m) | 0.140 | 0.118 | 0.122 | −15.7% |
+| yaw (rad) | 0.593 | 0.504 | 0.517 | −15.0% |
+
+- CenterHead 大幅改善 center（−34%）、l（−53%）、yaw（−15%）、h（−16%），
+  说明 heatmap 定位与 per-pixel reg 确实优于 anchor 回归。
+- **w（across 宽度）几乎不动（−7.8%）**：clean 0.307 → ep7 0.283 → ep12 0.311，
+  仍停在 0.28–0.31 m。w 是唯一「换 head 也压不下去」的轴。
+
+### 32.3 loose-ok-strict-fail 的失效原因（非互斥，逐轴超限率）
+
+| 轴超限 | clean ep16 | Center ep7 | Center ep12 |
+|---|---:|---:|---:|
+| center >0.15m | 0.415 | 0.406 | 0.366 |
+| w >0.15m | 0.855 | **0.920** | **0.928** |
+| l >0.30m | 0.170 | 0.049 | 0.215 |
+| h >0.25m | 0.039 | 0.045 | 0.018 |
+| yaw >0.25rad | 0.547 | 0.569 | 0.591 |
+| ≥2 轴同时超限 | 0.759 | 0.750 | 0.781 |
+
+- 在 loose 命中但 strict 失败的样本中，**w 超限在 92% 以上**（ep7/12），是压倒性主因；
+  其次 yaw（≈57%）与 center（≈37%）；l/h 几乎不构成瓶颈。
+- CenterHead 已把 center/l/h 压到接近容限，但 w 仍系统性地超限。
+  结论：**w（across 宽度）主导 strict 失败**，与第 29 节结论一致。
+
+### 32.4 预测 w/l/h 分布 vs GT
+
+| 轴 | pred (Center ep7) | GT |
+|---|---:|---:|
+| w mean/median | 0.593 / 0.573 | 0.580 / 0.542 |
+| l mean/median | 0.569 / 0.560 | 0.604 / 0.588 |
+| h mean/median | 1.655 / 1.620 | 1.716 / 1.697 |
+
+- 均值/中位数都对齐 GT，问题不在全局维度偏置，而在**逐目标的 w 抖动**（0.28m 误差）。
+
+### 32.5 NMS sweep（ep7，CPU-only，LiDAR 帧 greedy recall）
+
+| variant | ped box/样本 | recall@0.25 | recall@0.5 |
+|---|---:|---:|---:|
+| 原配置（post-baseline circle r=1.0） | 12.9 | 0.3003 | 0.0120 |
+| circle r=0.5 | 26.9 | 0.3043 | 0.0120 |
+| circle r=0.25 | 96.2 | 0.2973 | 0.0120 |
+| rotate IoU=0.2 | 61.6 | 0.2973 | 0.0120 |
+| 无 NMS（top100 raw） | 100.0 | 0.2973 | 0.0120 |
+
+- 放松 NMS 到 r=0.25 / rotate 0.2 / 完全无 NMS，drill-down 后 recall@0.25 只波动 ±0.004、
+  recall@0.5 恒为 0.0120，**均无实质提升**。
+- 判定：**NMS 不构成 recall 瓶颈**。当前 `circle r=1m` 过的不是密集行人的漏检主因。
+  因此「只修 NMS」分支排除。
+
+### 32.6 分支判定（唯一）
+
+1. center 误差：CenterHead 已把 center BEV 误差从 0.323 压到 0.21（−34%），
+   且 loose-ok-strict-fail 中 center 超限率 37–41%，**不是主导**。
+2. **w（+yaw）主导**：w 换 head 后几乎不变（−7.8%）、92% 的 strict 失败样本 w 超限。
+   yaw 超限 57% 次主因。它们都是 0.32m BEV 下的信息瓶颈（Ped 宽 ~0.6 m ≈ 2 体素）。
+3. NMS sweep 无提升 → 排除「只修 NMS」。
+4. score 低但框质量正常？→ 不成立：框质量（尤其 w）本身不达标，不是 score 问题。
+
+⇒ **唯一分支：改 CenterHead 尺寸先验 + yaw/corner/IoU loss，并同步重做 0.16m 高分辨率
+Ped BEV**。依据第 32.2 的 −7.8% w 改善：即使给 head 加先验/loss，0.32m BEV 也无法提供
+亚体素宽度信息，w 的硬上限就是体素分辨率。因此分辨率必须上 0.16m（而非仅改 loss）。
+
+### 32.7 高分辨率参数确认（若启动训练）
+
+- 横向裁剪 `ped_point_cloud_range = [0, -20, -4, 69.12, 20, 2]`，
+  `ped_voxel_size = [0.16, 0.16]`、`ped_grid_size = [432, 250, 1]`。
+- 覆盖验证（基于 clean ep16 dump）：val 999 个 Ped GT 中 995 个 `|y| ≤ 20`，
+  **995/999 = 99.6%** 覆盖，符合设定。
+- 网格量 432×250 = 108,000，约为原 216×248 = 53,568 的 **2.0 倍**（全范围 0.16m 的 4 倍
+  可控口径一致）。
+- 必须重新做 0.16m LSS pooling + SECOND 前的 0.16m radar scatter，**禁止插值现有 0.32m BEV**。
+
+### 32.8 结论
+
+- 本次只做诊断与 sweep，**未启动高分辨率训练、未补 seed**。
+- 支路已被排除：只修 NMS；只调 heatmap loss；纯 center 高分辨率。
+- 已确认唯一路径：**Ped 0.16m 高分辨率 BEV + CenterHead（w/yaw 仍主导）**。
