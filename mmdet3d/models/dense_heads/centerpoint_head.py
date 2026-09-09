@@ -1552,6 +1552,19 @@ class CenterHeadkitti(BaseModule):
             batch_reg_preds = [box['bboxes'] for box in temp]
             batch_cls_preds = [box['scores'] for box in temp]
             batch_cls_labels = [box['labels'] for box in temp]
+            # Zero-training fixed-size prior override (inference only).
+            # After the bbox coder decodes `[x, y, z, w, l, h, yaw]`, overwrite
+            # the predicted w/l (boxes[..., 3] / boxes[..., 4]) with a fixed
+            # class prior. center/z/height/yaw keep the CenterHead predictions.
+            # Applied before NMS so the fixed footprint participates in the
+            # circle/rotate NMS exactly as decoded. Only active when the config
+            # sets `test_cfg.fixed_size_prior`.
+            fixed_size_prior = self.test_cfg.get('fixed_size_prior')
+            if fixed_size_prior is not None:
+                fw, fl = float(fixed_size_prior[0]), float(fixed_size_prior[1])
+                for b in temp:
+                    b['bboxes'][:, 3] = fw
+                    b['bboxes'][:, 4] = fl
             nms_type = self.test_cfg.get('nms_type')
             if isinstance(nms_type, list):
                 nms_type = nms_type[task_id]
