@@ -1,5 +1,6 @@
 
 import copy
+import math
 
 import torch
 from mmcv.cnn import ConvModule, build_conv_layer, kaiming_init
@@ -1552,19 +1553,37 @@ class CenterHeadkitti(BaseModule):
             batch_reg_preds = [box['bboxes'] for box in temp]
             batch_cls_preds = [box['scores'] for box in temp]
             batch_cls_labels = [box['labels'] for box in temp]
-            # Zero-training fixed-size prior override (inference only).
-            # After the bbox coder decodes `[x, y, z, w, l, h, yaw]`, overwrite
-            # the predicted w/l (boxes[..., 3] / boxes[..., 4]) with a fixed
-            # class prior. center/z/height/yaw keep the CenterHead predictions.
-            # Applied before NMS so the fixed footprint participates in the
-            # circle/rotate NMS exactly as decoded. Only active when the config
-            # sets `test_cfg.fixed_size_prior`.
+            # Zero-training size-prior overrides (inference only).
+            # After the bbox coder decodes `[x, y, z, w, l, h, yaw]`, blend the
+            # predicted w/l (boxes[..., 3] / boxes[..., 4]) toward a fixed class
+            # prior in LOG space. center/z/height/yaw keep the CenterHead
+            # predictions. Applied before NMS so the adjusted footprint
+            # participates in circle/rotate NMS exactly as decoded.
+            #
+            # Two mutually-exclusive knobs (config `test_cfg`):
+            #   fixed_size_prior = [fw, fl]  -> hard override (alpha == 1.0)
+            #   size_prior_alpha  = [fw, fl, alpha]
+            #      final = exp((1-alpha)*log(pred) + alpha*log(prior))
+            #      alpha in [0, 1]: 0 = untouched, 1 = hard prior.
             fixed_size_prior = self.test_cfg.get('fixed_size_prior')
+            size_prior_alpha = self.test_cfg.get('size_prior_alpha')
             if fixed_size_prior is not None:
                 fw, fl = float(fixed_size_prior[0]), float(fixed_size_prior[1])
                 for b in temp:
                     b['bboxes'][:, 3] = fw
                     b['bboxes'][:, 4] = fl
+            elif size_prior_alpha is not None:
+                fw = float(size_prior_alpha[0])
+                fl = float(size_prior_alpha[1])
+                alpha = float(size_prior_alpha[2])
+                prior_w = math.log(fw)
+                prior_l = math.log(fl)
+                wa = 1.0 - alpha
+                for b in temp:
+                    w = b['bboxes'][:, 3]
+                    l = b['bboxes'][:, 4]
+                    b['bboxes'][:, 3] = torch.exp(wa * torch.log(w) + alpha * prior_w)
+                    b['bboxes'][:, 4] = torch.exp(wa * torch.log(l) + alpha * prior_l)
             nms_type = self.test_cfg.get('nms_type')
             if isinstance(nms_type, list):
                 nms_type = nms_type[task_id]
