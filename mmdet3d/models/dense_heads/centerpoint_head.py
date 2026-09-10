@@ -1099,7 +1099,9 @@ class CenterHeadkitti(BaseModule):
                  bias='auto',
                  norm_bbox=True,
                  init_cfg=None,
-                 task_specific=True):
+                 task_specific=True,
+                 size_prior_xy=None,
+                 max_log_residual=None):
         assert init_cfg is None, 'To prevent abnormal initialization ' \
             'behavior, init_cfg is not allowed to be set'
         super(CenterHeadkitti, self).__init__(init_cfg=init_cfg)
@@ -1111,6 +1113,24 @@ class CenterHeadkitti(BaseModule):
         self.in_channels = in_channels
         self.num_classes = num_classes
         self.norm_bbox = norm_bbox
+
+        # Bounded size prior on Pedestrian w/l (LiDAR x/y size). When enabled,
+        # the `dim` head's first two channels are treated as a bounded log
+        # residual around a fixed prior instead of free log dims:
+        #   pred_log_xy = log(prior_xy) + max_log_residual * tanh(raw_xy)
+        #   pred_xy     = exp(pred_log_xy)
+        # height keeps the original free log scheme: pred_h = exp(raw_h).
+        # `loss()` and `get_bboxes()` must share this exact transform.
+        self.bounded_size = (size_prior_xy is not None
+                             and max_log_residual is not None)
+        if self.bounded_size:
+            assert len(size_prior_xy) == 2, \
+                'size_prior_xy must be [prior_w, prior_l]'
+            self.size_prior_xy = [float(v) for v in size_prior_xy]
+            self.max_log_residual = float(max_log_residual)
+        else:
+            self.size_prior_xy = None
+            self.max_log_residual = None
 
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
@@ -1482,8 +1502,15 @@ class CenterHeadkitti(BaseModule):
                                     (name_list[reg_task_id])] = loss_bbox_tmp
                     loss_dict[f'task{task_id}.loss_heatmap'] = loss_heatmap
                 else:
-                    name_list = ['xy', 'z', 'whl', 'yaw']
-                    clip_index = [0, 2, 3, 6, 8]
+                    if self.bounded_size:
+                        # dim head channels are [log-w residual, log-l
+                        # residual, log-h]; split w/l (size_xy) from h so
+                        # decode and loss share the same transform.
+                        name_list = ['xy', 'z', 'size_xy', 'size_h', 'yaw']
+                        clip_index = [0, 2, 3, 5, 6, 8]
+                    else:
+                        name_list = ['xy', 'z', 'whl', 'yaw']
+                        clip_index = [0, 2, 3, 6, 8]
                     for reg_task_id in range(len(name_list)):
                         pred_tmp = pred[
                             ...,
@@ -1494,6 +1521,13 @@ class CenterHeadkitti(BaseModule):
                         bbox_weights_tmp = bbox_weights[
                             ...,
                             clip_index[reg_task_id]:clip_index[reg_task_id + 1]]
+                        if name_list[reg_task_id] == 'size_xy':
+                            raw_xy = pred_tmp
+                            log_prior_xy = pred_tmp.new_tensor([
+                                math.log(self.size_prior_xy[0]),
+                                math.log(self.size_prior_xy[1])])
+                            pred_tmp = log_prior_xy + \
+                                self.max_log_residual * torch.tanh(raw_xy)
                         loss_bbox_tmp = self.loss_bbox(
                             pred_tmp,
                             target_box_tmp,
@@ -1501,6 +1535,18 @@ class CenterHeadkitti(BaseModule):
                             avg_factor=(num + 1e-4))
                         loss_dict[f'task{task_id}.loss_%s' %
                                     (name_list[reg_task_id])] = loss_bbox_tmp
+                        if name_list[reg_task_id] == 'size_xy':
+                            # Monitoring-only metrics (no 'loss' in key, so
+                            # they are logged but not back-propagated).
+                            denom = bbox_weights_tmp.sum() + 1e-6
+                            loss_dict[
+                                f'task{task_id}.ped_size_log_mae'] = (
+                                    (pred_tmp - target_box_tmp).abs() *
+                                    bbox_weights_tmp).sum() / denom
+                            sat = (torch.tanh(raw_xy).abs() > 0.95).float()
+                            loss_dict[
+                                f'task{task_id}.tanh_sat_ratio'] = (
+                                    sat * bbox_weights_tmp).sum() / denom
                     loss_dict[f'task{task_id}.loss_heatmap'] = loss_heatmap
             else:
                 loss_bbox = self.loss_bbox(
@@ -1529,7 +1575,21 @@ class CenterHeadkitti(BaseModule):
             batch_reg = preds_dict[0]['reg']
             batch_hei = preds_dict[0]['height']
 
-            if self.norm_bbox:
+            # Decode size through the exact same transform used by `loss()`.
+            # Under the bounded size prior, the dim head's first two channels
+            # are a log residual around `size_prior_xy` (w, l in LiDAR x/y).
+            if self.bounded_size:
+                raw_dim = preds_dict[0]['dim']
+                raw_xy = raw_dim[:, 0:2]
+                raw_h = raw_dim[:, 2:3]
+                log_prior_xy = raw_xy.new_tensor(
+                    [math.log(self.size_prior_xy[0]),
+                     math.log(self.size_prior_xy[1])])
+                pred_log_xy = log_prior_xy + self.max_log_residual * torch.tanh(
+                    raw_xy)
+                pred_h = torch.exp(raw_h)
+                batch_dim = torch.cat([torch.exp(pred_log_xy), pred_h], dim=1)
+            elif self.norm_bbox:
                 batch_dim = torch.exp(preds_dict[0]['dim'])
             else:
                 batch_dim = preds_dict[0]['dim']

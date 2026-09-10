@@ -186,6 +186,7 @@ class R4Det(MVXFasterRCNN):
                  seq_len=2,
                  rssm_bptt_steps=1,
                  ped_stage1=False,
+                 ped_stage2_dim=False,
                  **kwargs):
         super(R4Det, self).__init__(train_cfg=train_cfg, test_cfg=test_cfg, **kwargs)
         HEADS.module_dict['StandardRoIHead'] = StandardRoIHead
@@ -255,6 +256,7 @@ class R4Det(MVXFasterRCNN):
         # negative means "all available history frames".
         self.rssm_bptt_steps = rssm_bptt_steps
         self.ped_stage1 = ped_stage1
+        self.ped_stage2_dim = ped_stage2_dim
 
         # other papa for convenience
         self.xbound = self.grid_config['xbound']
@@ -316,7 +318,9 @@ class R4Det(MVXFasterRCNN):
         if self.freeze_images: self.freeze_img_model()
         if self.freeze_radars: self.freeze_pts_model()
         self._frozen_eval_modules = []
-        if self.ped_stage1 and self.ped_center_head is not None:
+        if self.ped_stage2_dim and self.ped_center_head is not None:
+            self._freeze_for_ped_stage2_dim()
+        elif self.ped_stage1 and self.ped_center_head is not None:
             self._freeze_for_ped_stage1()
         self.record_fps = {'num': 0, 'time': 0}
         self.init_visulization()
@@ -574,6 +578,37 @@ class R4Det(MVXFasterRCNN):
                 continue
             if name == 'ped_center_head' or \
                     name.startswith('ped_center_head.'):
+                continue
+            self._frozen_eval_modules.append(module)
+        for module in self._frozen_eval_modules:
+            module.training = False
+
+    def _freeze_for_ped_stage2_dim(self):
+        """Stage-2 size-residual fine-tune freeze.
+
+        Freeze the whole model and the Pedestrian CenterHead's
+        shared_conv/heatmap/reg/height/rot branches, keeping ONLY the
+        `task_heads.0.dim` branch trainable. Frozen modules stay in eval mode
+        during training so BatchNorm statistics cannot drift.
+        """
+        center_head = self.ped_center_head
+
+        # 1) freeze everything, then thaw only the dim branch of task head 0.
+        for name, param in self.named_parameters():
+            param.requires_grad = False
+        dim_branch = center_head.task_heads[0].dim
+        for param in dim_branch.parameters():
+            param.requires_grad = True
+
+        # 2) everything except the dim-branch subtree stays in eval mode.
+        self._frozen_eval_modules = []
+        for name, module in self.named_modules():
+            if name == '':
+                continue
+            # keep the dim branch trainable (it has BN for its hidden conv).
+            if (name == 'ped_center_head.task_heads.0.dim'
+                    or name.startswith(
+                        'ped_center_head.task_heads.0.dim.')):
                 continue
             self._frozen_eval_modules.append(module)
         for module in self._frozen_eval_modules:
