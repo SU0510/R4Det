@@ -2833,3 +2833,75 @@ Truck strict 30.4303、Cyclist loose 50.4709，与训练日志一致，0 差异�
   用真训练把 strict 推过 3.0、loose 抬过 28.5。若 bounded residual 训练后仍守不住 loose，
   再启动 0.16m 高分辨率 BEV（对应的软先验 alpha 正好落在 0.75 附近，且高分辨率让逐目标
   w 回归本身更准，进一步减少对先验的依赖）。
+
+## 35. 有界尺寸残差训练（Ped dim branch，已完成）
+
+### 35.1 目标与实现
+
+- 只约束 Ped 的 LiDAR `x_size/y_size`（w/l），不重训整个 CenterHead，不加高分辨率/IoU/corner/yaw loss。
+- 尺寸变换（decode 与 loss 共用同一公式）：
+  ```ini
+  prior_xy = [0.655454, 0.627535]
+  max_log_residual = 0.25
+  pred_log_xy = log(prior_xy) + 0.25 * tanh(raw_xy)
+  pred_xy = exp(pred_log_xy)        # w/l
+  pred_h = exp(raw_h)               # 高度保持原逻辑
+  ```
+- loss 拆分：
+  ```ini
+  loss_dim_xy = L1(pred_log_xy, log(gt_xy))   # size_xy
+  loss_dim_h  = L1(raw_h, log(gt_h))          # size_h
+  ```
+- 监控项（无 `loss` 前缀，仅记录不回传梯度）：
+  `ped_size_log_mae`、`tanh_sat_ratio`。
+- 测试阶段不再叠加 `fixed_size_prior` / `size_prior_alpha`（这两个 inference-only 开关保留但本实验不用）。
+- 冻结：R4Det 主网络全冻 + CenterHead shared_conv/heatmap/reg/height/rot 全冻，
+  只训练 `task_heads.0.dim`。新增 `ped_stage2_dim` 分支（`_freeze_for_ped_stage2_dim`）。
+
+### 35.2 训练配置
+
+- config：`TJ4D-R4Det_ped_centerhead_stage2_dim_3x2x2_6e.py`
+- load_from = stage1 `epoch_7.pth`；`ped_stage2_dim=True`
+- seed 0，GPU 5/6/7，lr 2e-4，samples_per_gpu 2，cumulative_iters 2（有效 batch 12），max_epochs 6。
+
+### 35.3 结果与判定（已跑完）
+
+- epoch_1 独立复评（修复 decode 形状广播 bug 后）：
+  ```
+  Ped  3D strict = 0.0441   （≈ 基线 0.0452）
+  Ped  3D loose  = 28.2393  （≈ 软先验 28.20）
+  Overall 3D mod = 39.7794
+  Car moder strict = 49.9772 / Truck 30.4303 / Cyclist loose 50.4709（0 差异）
+  ```
+  epoch_1 时刻 dim 分支近似先验硬收缩（strict 仍接近基线，残差尚未学到逐目标变化）。
+- 训练中 `ped_size_log_mae` 0.067 → 0.028，`tanh_sat_ratio` ≈ 0.01–0.03（无饱和），
+  `grad_norm ≈ 0.002`（仅有 dim 分支梯度），`loss_rssm_kl` 随 KL 调度上跳但冻结模块不产生梯度。
+### 35.4 最终复评结果（ped_centerhead_stage2_dim，seed0，6 epoch）
+
+| epoch | Ped 3D mod strict | Ped 3D mod loose | Overall 3D mod |
+|-------|------------------:|-----------------:|---------------:|
+| 基线 ep7（未训练） | 0.0452 | 28.5298 | 39.8520 |
+| 软先验 Aα.75 @ep7（零训练） | 2.4054 | 28.2016 | 39.7700 |
+| 1（独立复评，修复后） | 0.0441 | 28.2393 | 39.7794 |
+| 2 | 0.0437 | 27.8851 | 39.6909 |
+| 3 | 0.0441 | 28.0944 | 39.7432 |
+| 4 | 0.0434 | 28.0850 | 39.7408 |
+| 5 | 0.0441 | 28.0852 | 39.7409 |
+| 6 | 0.0437 | 28.2374 | 39.7789 |
+
+所有组合下 Car moder strict 49.9772 / Truck moder strict 30.4303 / Cyclist loos 50.4709 逐位 0 差异。
+
+### 35.5 判定
+
+- **有界残差@0.25 在 6 epoch、只训 dim 分支的条件下基本无效**：Ped strict 全程
+  0.043–0.044，未突破基线 0.045；loose 最终 28.24 也只是回到软先验级别的 28.2，
+  未达到 28.5 理想目标，且低于未缩紧前的 ep7 原始 loose 28.53。
+- `tanh_sat_ratio` 全程 ≈ 0.01–0.03，说明**不是 0.25 范围过窄被削峰**，而是 dim 分支
+  在冻结 heatmap/center 之后只能产出极小的逐目标尺寸残差；ep7 的 dim.1.bias =
+  [-0.0676, -0.0997, 0.2052]，加载后解码≈硬先验起点，训练 6 epoch 也几乎未离开该点。
+- 与「纯推理软先验（零训练）Aα.75 strict 2.41」相比，**训练有界残差没有带来任何增益**，
+  甚至 loose 因 heatmap 被冻结不动、尺寸又未拉开而略低于原始 ep7。因此：
+  - 不再保留这个纯训练技巧；ep7 上 strict 的提升此前只能由**推理期尺寸先验**获得。
+  - 按既定路线，下一轮进入 `0.16 m` 高分辨率 BEV 分支（让逐目标 w/l 回归本身更准，
+    减少对先验的依赖），而不是继续在冻结 heatmap 上微调 bounded residual。
+
