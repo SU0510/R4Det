@@ -122,7 +122,8 @@ model = dict(
     focusradardepth_ablation=focusradardepth_ablation,
     painting_ablation=painting_ablation,
     ped_stage1=False,
-    ped_stage2_dim=True,
+    ped_stage2_dim=False,
+    ped_stage2_delta=True,
 
     # NOTE: No img_rpn_head, no img_roi_head — 2D detection heads disabled
     # NOTE: No instance_feature_fusion_layer — IGDR disabled
@@ -238,6 +239,12 @@ model = dict(
         in_channels=_dim_,
         size_prior_xy=[0.655454, 0.627535],
         max_log_residual=0.25,
+        soft_prior_alpha=0.75,
+        delta_log_residual=0.15,
+        delta_channels=64,
+        delta_num_convs=2,
+        delta_kernel_size=3,
+        size_l1_weight=0.1,
         share_conv_channel=64,
         num_heatmap_convs=2,
         tasks=[dict(num_class=1, class_names=['Pedestrian'])],
@@ -483,7 +490,7 @@ data = dict(
 
 # Training settings
 lr = 2e-4
-max_epochs = 6
+max_epochs = 3
 optimizer = dict(type='AdamW', lr=lr, betas=(0.95, 0.99), weight_decay=0.01)
 optimizer_config = dict(
     grad_clip=dict(max_norm=35, norm_type=2),

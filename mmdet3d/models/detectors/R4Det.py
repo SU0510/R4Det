@@ -187,6 +187,7 @@ class R4Det(MVXFasterRCNN):
                  rssm_bptt_steps=1,
                  ped_stage1=False,
                  ped_stage2_dim=False,
+                 ped_stage2_delta=False,
                  **kwargs):
         super(R4Det, self).__init__(train_cfg=train_cfg, test_cfg=test_cfg, **kwargs)
         HEADS.module_dict['StandardRoIHead'] = StandardRoIHead
@@ -257,6 +258,7 @@ class R4Det(MVXFasterRCNN):
         self.rssm_bptt_steps = rssm_bptt_steps
         self.ped_stage1 = ped_stage1
         self.ped_stage2_dim = ped_stage2_dim
+        self.ped_stage2_delta = ped_stage2_delta
 
         # other papa for convenience
         self.xbound = self.grid_config['xbound']
@@ -320,6 +322,9 @@ class R4Det(MVXFasterRCNN):
         self._frozen_eval_modules = []
         if self.ped_stage2_dim and self.ped_center_head is not None:
             self._freeze_for_ped_stage2_dim()
+        elif (self.ped_stage2_delta
+                and self.ped_center_head is not None):
+            self._freeze_for_ped_stage2_delta()
         elif self.ped_stage1 and self.ped_center_head is not None:
             self._freeze_for_ped_stage1()
         self.record_fps = {'num': 0, 'time': 0}
@@ -609,6 +614,27 @@ class R4Det(MVXFasterRCNN):
             if (name == 'ped_center_head.task_heads.0.dim'
                     or name.startswith(
                         'ped_center_head.task_heads.0.dim.')):
+                continue
+            self._frozen_eval_modules.append(module)
+        for module in self._frozen_eval_modules:
+            module.training = False
+
+    def _freeze_for_ped_stage2_delta(self):
+        """Train only the Pedestrian CenterHead delta_xy branch."""
+        center_head = self.ped_center_head
+        delta_branch = center_head.delta_xy
+
+        for name, param in self.named_parameters():
+            param.requires_grad = False
+        for param in delta_branch.parameters():
+            param.requires_grad = True
+
+        self._frozen_eval_modules = []
+        for name, module in self.named_modules():
+            if name == '':
+                continue
+            if (name == 'ped_center_head.delta_xy'
+                    or name.startswith('ped_center_head.delta_xy.')):
                 continue
             self._frozen_eval_modules.append(module)
         for module in self._frozen_eval_modules:

@@ -2905,3 +2905,61 @@ Truck strict 30.4303、Cyclist loose 50.4709，与训练日志一致，0 差异�
   - 按既定路线，下一轮进入 `0.16 m` 高分辨率 BEV 分支（让逐目标 w/l 回归本身更准，
     减少对先验的依赖），而不是继续在冻结 heatmap 上微调 bounded residual。
 
+---
+
+## 36. 低成本软先验 residual correction（delta_xy，3 epoch 门控，已完成）
+
+### 36.1 实验设置
+
+- 目的：修正第 35 节的残差起点错误。以已经通过正式标准的 Aα.75 为固定起点，
+  再训练一个零初始化 correction 分支，测试 IoU 对齐目标能否把 Ped strict/loose
+  同时推过理想阈值。
+- 尺寸变换（decode 与 loss 共用）：
+  ```ini
+  prior = [0.655454, 0.627535]
+  alpha = 0.75
+  base_log_xy = 0.25 * old_log_xy.detach() + 0.75 * log(prior)
+  final_log_xy = base_log_xy + 0.15 * tanh(delta_xy)
+  ```
+- `delta_xy` 独立分支：Conv3x3(64→64)+BN+ReLU → Conv3x3(64→2)，末层 weight/bias
+  均零初始化，因此 epoch 0（加载 stage1 ep7 后、未训练）数学上精确等于 Aα.75。
+- 冻结：R4Det 全部冻结，仅训练 `ped_center_head.delta_xy`；其余所有模块保持 eval。
+- Loss：主损失为正样本 decoded Ped 3D rotated IoU loss（`1-IoU`，正样本数平均）；
+  尺寸 log L1 仅作 0.1 辅助。保留原有 heatmap/其他回归项以维持完整训练日志口径。
+- 运行：seed 0、deterministic、`CUDA_VISIBLE_DEVICES=5,6,7`、3 进程、
+  `samples_per_gpu=2` + `cumulative_iters=2`（有效 batch 12）、lr=2e-4、max_epochs=3。
+- 工作目录：`/data/lurui/work_dirs/ped_centerhead_stage2_delta_3x2x2_3e_seed0`
+
+### 36.2 结果（Ped 3D moderate）
+
+| epoch | Ped strict | Ped loose | Overall 3D moderate | 判定 |
+|---:|---:|---:|---:|---|
+| Aα.75 起点 | 2.4054 | 28.2016 | 39.77 | 参考 |
+| 1 | 0.0485 | 28.5083 | 39.8467 | strict 大幅回退 |
+| 2 | 0.0485 | 28.5087 | 39.8468 | strict 无提升 |
+| 3 | 0.0485 | 28.5086 | 39.8468 | strict 无提升 |
+
+Car strict 49.9772、Truck strict 30.4303、Cyclist loose 50.4709 与第 34/35 节
+既有冻结口径一致，其他类未受扰动。
+
+### 36.3 训练信号
+
+- `task0.loss_ped_bev_iou` 约在 0.23–0.39 波动，训练 3 epoch 未见稳定下降。
+- `task0.ped_size_log_mae` 从约 0.055 降到 0.03 左右，但只改善 log 尺寸误差，
+  未转化为 strict IoU/AP。
+- `grad_norm` 全程约 0.0002–0.0004，末层 bias 在 ep1 已偏移到约 ±0.025；
+  尽管绝对值小，它足以把 strict 从 2.4054 拉回 0.0485。
+- `tanh_sat_ratio` 始终接近 0（无饱和），说明不是 `0.15` 上限约束导致失败，
+  而是 IoU 正样本监督在该冻结 heatmap/center 表征下学到的偏移方向与 strict
+  判定所需尺寸不匹配。
+
+### 36.4 判定与最终分支
+
+- **未通过**：Ped strict 未达到 ≥3.0，且相对 Aα.75 起点出现完全退化（2.4054 → 0.0485）。
+  loose 与 Overall 虽然达标（28.51 / 39.85），但按门控逻辑不能保留该分支。
+- **低分辨率路线结束**：零初始化 residual correction 已修正到正确 Aα.75 起点，
+  且换成 IoU 主损失后 3 epoch 完全无法提升 strict；结合第 35 节 6 epoch 结果，
+  0.32 m BEV 上的 Ped strict 支线不再具备继续训练价值。
+- 后续分支：
+  - 若必须解决 Ped strict，才进入真实 0.16 m BEV。
+  - 若目标是 Overall，应停止 Ped strict 支线，保留 clean full RSSM 主线。

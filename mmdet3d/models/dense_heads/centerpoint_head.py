@@ -3,6 +3,7 @@ import copy
 import math
 
 import torch
+from mmcv.ops import diff_iou_rotated_3d
 from mmcv.cnn import ConvModule, build_conv_layer, kaiming_init
 from mmcv.runner import BaseModule
 from torch import nn
@@ -1101,7 +1102,13 @@ class CenterHeadkitti(BaseModule):
                  init_cfg=None,
                  task_specific=True,
                  size_prior_xy=None,
-                 max_log_residual=None):
+                 max_log_residual=None,
+                 soft_prior_alpha=None,
+                 delta_log_residual=None,
+                 delta_channels=64,
+                 delta_num_convs=2,
+                 delta_kernel_size=3,
+                 size_l1_weight=0.1):
         assert init_cfg is None, 'To prevent abnormal initialization ' \
             'behavior, init_cfg is not allowed to be set'
         super(CenterHeadkitti, self).__init__(init_cfg=init_cfg)
@@ -1131,12 +1138,46 @@ class CenterHeadkitti(BaseModule):
         else:
             self.size_prior_xy = None
             self.max_log_residual = None
+        self.soft_size_residual = (self.bounded_size
+                                   and soft_prior_alpha is not None
+                                   and delta_log_residual is not None)
+        if self.soft_size_residual:
+            self.soft_prior_alpha = float(soft_prior_alpha)
+            self.delta_log_residual = float(delta_log_residual)
+            self.size_l1_weight = float(size_l1_weight)
+            assert 0.0 <= self.soft_prior_alpha <= 1.0
+            assert self.delta_log_residual > 0.0
+            assert self.size_l1_weight >= 0.0
+            self.delta_xy = nn.Sequential(
+                *[
+                    ConvModule(
+                        share_conv_channel if i == 0 else delta_channels,
+                        delta_channels,
+                        kernel_size=delta_kernel_size,
+                        padding=delta_kernel_size // 2,
+                        norm_cfg=norm_cfg,
+                        bias=bias)
+                    for i in range(delta_num_convs - 1)
+                ],
+                build_conv_layer(
+                    conv_cfg,
+                    delta_channels,
+                    2,
+                    kernel_size=delta_kernel_size,
+                    padding=delta_kernel_size // 2,
+                    bias=True))
+        else:
+            self.soft_prior_alpha = None
+            self.delta_log_residual = None
+            self.size_l1_weight = None
 
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.num_anchor_per_locs = [n for n in num_classes]
         self.fp16_enabled = False
+        if self.soft_size_residual:
+            self.loss_bbox.loss_weight = self.size_l1_weight
 
         # a shared convolution
         self.shared_conv = ConvModule(
@@ -1160,6 +1201,52 @@ class CenterHeadkitti(BaseModule):
         self.with_velocity = 'vel' in common_heads.keys()
         self.task_specific = task_specific
 
+    def init_weights(self):
+        super(CenterHeadkitti, self).init_weights()
+        if self.soft_size_residual:
+            nn.init.zeros_(self.delta_xy[-1].weight)
+            nn.init.zeros_(self.delta_xy[-1].bias)
+
+    def _decode_size_log_xy(self, preds_dict):
+        """Return decoded log w/l and old log w/l for the Ped task."""
+        raw_dim = preds_dict['dim']
+        old_log_xy = raw_dim[:, 0:2]
+        if not self.soft_size_residual:
+            if self.bounded_size:
+                log_prior_xy = old_log_xy.new_tensor(
+                    [math.log(self.size_prior_xy[0]),
+                     math.log(self.size_prior_xy[1])]).view(1, 2, 1, 1)
+                return (
+                    log_prior_xy
+                    + self.max_log_residual * torch.tanh(old_log_xy),
+                    old_log_xy,
+                )
+            return old_log_xy, old_log_xy
+
+        old_log_xy = old_log_xy.detach()
+        log_prior_xy = old_log_xy.new_tensor(
+            [math.log(self.size_prior_xy[0]),
+             math.log(self.size_prior_xy[1])]).view(1, 2, 1, 1)
+        base_log_xy = (
+            (1.0 - self.soft_prior_alpha) * old_log_xy
+            + self.soft_prior_alpha * log_prior_xy)
+        final_log_xy = (
+            base_log_xy
+            + self.delta_log_residual * torch.tanh(preds_dict['delta_xy']))
+        return final_log_xy, old_log_xy
+
+    @staticmethod
+    def _positive_boxes_for_iou(pred, target_box, mask, ind):
+        pred = pred.view(ind.size(0), ind.size(1), pred.size(2))
+        target_box = target_box.view(
+            ind.size(0), ind.size(1), target_box.size(2))
+        positive_mask = mask[..., :1].expand_as(pred)
+        positive_mask = positive_mask.bool()
+        return (
+            pred[positive_mask].view(-1, pred.size(2)),
+            target_box[positive_mask].view(-1, target_box.size(2)),
+        )
+
     def forward_single(self, x):
         """Forward function for CenterPoint.
 
@@ -1175,7 +1262,10 @@ class CenterHeadkitti(BaseModule):
         x = self.shared_conv(x)
 
         for task in self.task_heads:
-            ret_dicts.append(task(x))
+            task_dict = task(x)
+            if self.soft_size_residual:
+                task_dict['delta_xy'] = self.delta_xy(x)
+            ret_dicts.append(task_dict)
 
         return ret_dicts
 
@@ -1522,12 +1612,14 @@ class CenterHeadkitti(BaseModule):
                             ...,
                             clip_index[reg_task_id]:clip_index[reg_task_id + 1]]
                         if name_list[reg_task_id] == 'size_xy':
-                            raw_xy = pred_tmp
-                            log_prior_xy = pred_tmp.new_tensor([
-                                math.log(self.size_prior_xy[0]),
-                                math.log(self.size_prior_xy[1])])
-                            pred_tmp = log_prior_xy + \
-                                self.max_log_residual * torch.tanh(raw_xy)
+                            pred_tmp, old_log_xy = self._decode_size_log_xy(
+                                preds_dict[0])
+                            pred_tmp = self._gather_feat(
+                                pred_tmp.permute(0, 2, 3, 1).contiguous().view(
+                                    pred_tmp.size(0), -1, pred_tmp.size(1)), ind)
+                            old_log_xy = self._gather_feat(
+                                old_log_xy.permute(0, 2, 3, 1).contiguous().view(
+                                    old_log_xy.size(0), -1, old_log_xy.size(1)), ind)
                         loss_bbox_tmp = self.loss_bbox(
                             pred_tmp,
                             target_box_tmp,
@@ -1536,6 +1628,19 @@ class CenterHeadkitti(BaseModule):
                         loss_dict[f'task{task_id}.loss_%s' %
                                     (name_list[reg_task_id])] = loss_bbox_tmp
                         if name_list[reg_task_id] == 'size_xy':
+                            positive_pred, positive_target = \
+                                self._positive_boxes_for_iou(
+                                    pred, target_box, mask, ind)
+                            positive_count = max(positive_pred.size(0), 1)
+                            if positive_pred.numel() > 0:
+                                pred_iou = diff_iou_rotated_3d(
+                                    positive_pred.unsqueeze(0),
+                                    positive_target.unsqueeze(0))[0]
+                                iou_loss = 1.0 - pred_iou
+                            else:
+                                iou_loss = pred.sum().new_zeros(())
+                            loss_dict[f'task{task_id}.loss_ped_bev_iou'] = (
+                                iou_loss.sum() / positive_count)
                             # Monitoring-only metrics (no 'loss' in key, so
                             # they are logged but not back-propagated).
                             denom = bbox_weights_tmp.sum() + 1e-6
@@ -1543,7 +1648,10 @@ class CenterHeadkitti(BaseModule):
                                 f'task{task_id}.ped_size_log_mae'] = (
                                     (pred_tmp - target_box_tmp).abs() *
                                     bbox_weights_tmp).sum() / denom
-                            sat = (torch.tanh(raw_xy).abs() > 0.95).float()
+                            sat = (
+                                (pred_tmp - old_log_xy).abs()
+                                / self.delta_log_residual
+                                > 0.95).float()
                             loss_dict[
                                 f'task{task_id}.tanh_sat_ratio'] = (
                                     sat * bbox_weights_tmp).sum() / denom
@@ -1580,13 +1688,8 @@ class CenterHeadkitti(BaseModule):
             # are a log residual around `size_prior_xy` (w, l in LiDAR x/y).
             if self.bounded_size:
                 raw_dim = preds_dict[0]['dim']
-                raw_xy = raw_dim[:, 0:2]
                 raw_h = raw_dim[:, 2:3]
-                log_prior_xy = raw_xy.new_tensor(
-                    [math.log(self.size_prior_xy[0]),
-                     math.log(self.size_prior_xy[1])]).view(1, 2, 1, 1)
-                pred_log_xy = log_prior_xy + self.max_log_residual * torch.tanh(
-                    raw_xy)
+                pred_log_xy, _ = self._decode_size_log_xy(preds_dict[0])
                 pred_h = torch.exp(raw_h)
                 batch_dim = torch.cat([torch.exp(pred_log_xy), pred_h], dim=1)
             elif self.norm_bbox:
