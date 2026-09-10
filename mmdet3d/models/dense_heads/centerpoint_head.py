@@ -1584,7 +1584,7 @@ class CenterHeadkitti(BaseModule):
                 raw_h = raw_dim[:, 2:3]
                 log_prior_xy = raw_xy.new_tensor(
                     [math.log(self.size_prior_xy[0]),
-                     math.log(self.size_prior_xy[1])])
+                     math.log(self.size_prior_xy[1])]).view(1, 2, 1, 1)
                 pred_log_xy = log_prior_xy + self.max_log_residual * torch.tanh(
                     raw_xy)
                 pred_h = torch.exp(raw_h)
