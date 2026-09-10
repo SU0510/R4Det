@@ -1235,16 +1235,50 @@ class CenterHeadkitti(BaseModule):
             + self.delta_log_residual * torch.tanh(preds_dict['delta_xy']))
         return final_log_xy, old_log_xy
 
-    @staticmethod
-    def _positive_boxes_for_iou(pred, target_box, mask, ind):
+    def _positive_boxes_for_iou(self, pred, target_box, mask, ind,
+                                final_log_xy, feature_map_width):
+        """Gather positive samples and decode them to physical 7D boxes."""
         pred = pred.view(ind.size(0), ind.size(1), pred.size(2))
         target_box = target_box.view(
             ind.size(0), ind.size(1), target_box.size(2))
-        positive_mask = mask[..., :1].expand_as(pred)
-        positive_mask = positive_mask.bool()
+
+        gathered_log_xy = final_log_xy.permute(0, 2, 3, 1).contiguous()
+        gathered_log_xy = gathered_log_xy.view(
+            gathered_log_xy.size(0), -1, gathered_log_xy.size(3))
+        gathered_log_xy = self._gather_feat(gathered_log_xy, ind)
+
+        ix = ind % feature_map_width
+        iy = ind // feature_map_width
+        factor = self.train_cfg['out_size_factor']
+        voxel_xy = final_log_xy.new_tensor(self.train_cfg['voxel_size'][:2])
+        pc_range_xy = final_log_xy.new_tensor(
+            self.train_cfg['point_cloud_range'][:2])
+        grid_xy = torch.stack((ix.to(final_log_xy.dtype),
+                               iy.to(final_log_xy.dtype)), dim=-1)
+
+        def decode(encoded, log_xy):
+            center_xy = (
+                (grid_xy + encoded[..., :2]) * voxel_xy * factor
+                + pc_range_xy)
+            if self.norm_bbox:
+                size = torch.exp(torch.cat(
+                    (log_xy, encoded[..., 5:6]), dim=-1))
+            else:
+                size = torch.cat((log_xy, encoded[..., 5:6]), dim=-1)
+            yaw = torch.atan2(encoded[..., 6], encoded[..., 7])
+            return torch.cat(
+                (center_xy, encoded[..., 2:3], size, yaw.unsqueeze(-1)),
+                dim=-1)
+
+        decoded_pred = decode(pred, gathered_log_xy)
+        decoded_target = decode(target_box, target_box[..., 3:5])
+        assert decoded_pred.shape[-1] == 7
+        assert decoded_target.shape[-1] == 7
+
+        positive_mask = mask[..., 0].bool()
         return (
-            pred[positive_mask].view(-1, pred.size(2)),
-            target_box[positive_mask].view(-1, target_box.size(2)),
+            decoded_pred[positive_mask],
+            decoded_target[positive_mask],
         )
 
     def forward_single(self, x):
@@ -1614,9 +1648,11 @@ class CenterHeadkitti(BaseModule):
                         if name_list[reg_task_id] == 'size_xy':
                             pred_tmp, old_log_xy = self._decode_size_log_xy(
                                 preds_dict[0])
+                            final_log_xy = pred_tmp
                             pred_tmp = self._gather_feat(
-                                pred_tmp.permute(0, 2, 3, 1).contiguous().view(
-                                    pred_tmp.size(0), -1, pred_tmp.size(1)), ind)
+                                final_log_xy.permute(0, 2, 3, 1).contiguous(
+                                ).view(final_log_xy.size(0), -1,
+                                       final_log_xy.size(1)), ind)
                             old_log_xy = self._gather_feat(
                                 old_log_xy.permute(0, 2, 3, 1).contiguous().view(
                                     old_log_xy.size(0), -1, old_log_xy.size(1)), ind)
@@ -1630,7 +1666,9 @@ class CenterHeadkitti(BaseModule):
                         if name_list[reg_task_id] == 'size_xy':
                             positive_pred, positive_target = \
                                 self._positive_boxes_for_iou(
-                                    pred, target_box, mask, ind)
+                                    pred, target_box, mask, ind, final_log_xy,
+                                    self.train_cfg['grid_size'][0]
+                                    // self.train_cfg['out_size_factor'])
                             positive_count = max(positive_pred.size(0), 1)
                             if positive_pred.numel() > 0:
                                 pred_iou = diff_iou_rotated_3d(

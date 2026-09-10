@@ -2907,7 +2907,7 @@ Truck strict 30.4303、Cyclist loose 50.4709，与训练日志一致，0 差异�
 
 ---
 
-## 36. 低成本软先验 residual correction（delta_xy，3 epoch 门控，已完成）
+## 36. 低成本软先验 residual correction（delta_xy，3 epoch 门控，已完成，后续发现 IoU 输入编码错误）
 
 ### 36.1 实验设置
 
@@ -2953,9 +2953,16 @@ Car strict 49.9772、Truck strict 30.4303、Cyclist loose 50.4709 与第 34/35 �
   而是 IoU 正样本监督在该冻结 heatmap/center 表征下学到的偏移方向与 strict
   判定所需尺寸不匹配。
 
-### 36.4 判定与最终分支
+### 36.4 判定与最终分支（已作废）
 
-- **未通过**：Ped strict 未达到 ≥3.0，且相对 Aα.75 起点出现完全退化（2.4054 → 0.0485）。
+> **本节实验无效。** 2026-09-10 复查发现 `loss_ped_bev_iou` 把 CenterPoint
+> 8 维编码向量 `[offset_x, offset_y, z, log_w, log_l, log_h, sin_yaw, cos_yaw]`
+> 直接传给 `diff_iou_rotated_3d`。该算子要求 7 维物理框
+> `[x, y, z, w, l, h, yaw]`，因此 offset 被当作绝对中心、log 尺寸被当作
+> 物理尺寸、sin(yaw) 被当作 yaw，cos(yaw) 被忽略。IoU 数值、梯度方向以及
+> “低分辨率路线结束”的结论均不可信。第 36 节 checkpoint 不作为任何路线依据。
+
+- **原记录（作废）**：Ped strict 未达到 ≥3.0，且相对 Aα.75 起点出现完全退化（2.4054 → 0.0485）。
   loose 与 Overall 虽然达标（28.51 / 39.85），但按门控逻辑不能保留该分支。
 - **低分辨率路线结束**：零初始化 residual correction 已修正到正确 Aα.75 起点，
   且换成 IoU 主损失后 3 epoch 完全无法提升 strict；结合第 35 节 6 epoch 结果，
