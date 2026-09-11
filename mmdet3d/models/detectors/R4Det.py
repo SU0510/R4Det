@@ -188,6 +188,8 @@ class R4Det(MVXFasterRCNN):
                  ped_stage1=False,
                  ped_stage2_dim=False,
                  ped_stage2_delta=False,
+                 ped_highres_stage=False,
+                 highres_ped_branch=None,
                  **kwargs):
         super(R4Det, self).__init__(train_cfg=train_cfg, test_cfg=test_cfg, **kwargs)
         HEADS.module_dict['StandardRoIHead'] = StandardRoIHead
@@ -259,6 +261,8 @@ class R4Det(MVXFasterRCNN):
         self.ped_stage1 = ped_stage1
         self.ped_stage2_dim = ped_stage2_dim
         self.ped_stage2_delta = ped_stage2_delta
+        self.ped_highres_stage = ped_highres_stage
+        self._highres_radar_scatter = None
 
         # other papa for convenience
         self.xbound = self.grid_config['xbound']
@@ -301,6 +305,11 @@ class R4Det(MVXFasterRCNN):
         # seq_len=2 reproduces the original prev/curr behaviour.
         assert seq_len >= 2, f'seq_len must be >= 2, got {seq_len}'
         self.seq_len = seq_len
+        assert not (ped_highres_stage and highres_ped_branch is None), (
+            'ped_highres_stage requires highres_ped_branch')
+        assert not (highres_ped_branch is not None
+                    and not ped_highres_stage), (
+            'highres_ped_branch requires ped_highres_stage')
 
         # Pedestrian-only CenterHead sibling (stage-1 isolation). Built after
         # the frozen Anchor3DHead so the clean checkpoint loads the anchor head
@@ -314,6 +323,12 @@ class R4Det(MVXFasterRCNN):
             _ped_cfg.update(train_cfg=_ped_train_cfg, test_cfg=_ped_test_cfg)
             self.ped_center_head = builder.build_head(_ped_cfg)
 
+        # Ped-only 0.16 m branch. The global radar voxel size stays unchanged;
+        # this branch consumes the already-doubled radar scatter grid.
+        self.highres_ped_branch = None
+        if highres_ped_branch is not None:
+            self.highres_ped_branch = FUSION_LAYERS.build(highres_ped_branch)
+
         # init weights and freeze if needed
         self.init_flexible_modules()
         self.init_weights()
@@ -325,6 +340,9 @@ class R4Det(MVXFasterRCNN):
         elif (self.ped_stage2_delta
                 and self.ped_center_head is not None):
             self._freeze_for_ped_stage2_delta()
+        elif (self.ped_highres_stage
+                and self.ped_center_head is not None):
+            self._freeze_for_ped_highres_stage()
         elif self.ped_stage1 and self.ped_center_head is not None:
             self._freeze_for_ped_stage1()
         self.record_fps = {'num': 0, 'time': 0}
@@ -640,6 +658,33 @@ class R4Det(MVXFasterRCNN):
         for module in self._frozen_eval_modules:
             module.training = False
 
+    def _freeze_for_ped_highres_stage(self):
+        """Train only the Ped high-resolution branch and its CenterHead."""
+        trainable_prefixes = ('highres_ped_branch', 'ped_center_head')
+        for name, param in self.named_parameters():
+            param.requires_grad = name.startswith(trainable_prefixes)
+
+        self._frozen_eval_modules = []
+        for name, module in self.named_modules():
+            if name == '':
+                continue
+            if name.startswith(trainable_prefixes):
+                continue
+            self._frozen_eval_modules.append(module)
+        for module in self._frozen_eval_modules:
+            module.training = False
+
+    def _make_ped_highres_feats(self, pts_feats):
+        highres_radar = self._highres_radar_scatter
+        if highres_radar is None:
+            raise RuntimeError(
+                'Ped high-resolution branch requires cached radar scatter '
+                'features; call extract_feat() first.')
+        return [
+            self.highres_ped_branch(highres_radar.detach(), f.detach())
+            for f in pts_feats
+        ]
+
     def train(self, mode=True):
         """Re-assert frozen modules stay in eval mode when training resumes."""
         super().train(mode)
@@ -678,8 +723,10 @@ class R4Det(MVXFasterRCNN):
         batch_size = len(pts)
         voxels, num_points, coors = self.voxelize(pts)
         voxel_features = self.pts_voxel_encoder(voxels, num_points, coors, )
+        self._highres_radar_scatter = self.pts_middle_encoder(
+            voxel_features, coors, batch_size)
         #batch_size = coors[-1, 0].item() + 1
-        x = self.pts_middle_encoder(voxel_features, coors, batch_size)
+        x = self._highres_radar_scatter
         x = self.pts_backbone(x)
         if self.with_pts_neck:
             x = self.pts_neck(x)
@@ -715,6 +762,7 @@ class R4Det(MVXFasterRCNN):
                      rssm_detach_state=True, rssm_deterministic=None,
                      rssm_history_losses=None):
         """Extract features from images and points."""
+        self._highres_radar_scatter = None
         # preparation of camera-geo-aware input
         if img.dim() == 3 and img.size(0) == 3: img = img.unsqueeze(0)
         B, C, H, W = img.shape
@@ -883,6 +931,13 @@ class R4Det(MVXFasterRCNN):
             bev_mask_logit_latter = None
         bev_mask_logit = {'former': bev_mask_logit_former, 'latter': bev_mask_logit_latter}
         bev_feats_refined = bev_feats_refined.permute(0, 1, 3, 2).contiguous()
+        if feat_or_dict == 1:
+            # Match the final fused feature's [B, C, H, W] spatial layout.
+            self._highres_radar_scatter = (
+                self._highres_radar_scatter.permute(
+                    0, 1, 3, 2).contiguous())
+        else:
+            self._highres_radar_scatter = None
         step_all_time = step1_time + step2_time + step3_time + step4_time + step5_time + step6_time
         self.recording_fps(step_all_time)
 
@@ -1504,9 +1559,14 @@ class R4Det(MVXFasterRCNN):
             losses = dict()
 
         if self.ped_center_head is not None:
-            # Detach the frozen shared BEV so gradients flow ONLY into the
-            # Pedestrian CenterHead parameters (and not the frozen producers).
-            ped_feats = [f.detach() for f in pts_feats]
+            if self.highres_ped_branch is not None:
+                # Both inputs are frozen. Gradients only update the Ped-only
+                # branch and Ped CenterHead.
+                ped_feats = self._make_ped_highres_feats(pts_feats)
+            else:
+                # Detach the frozen shared BEV so gradients flow ONLY into the
+                # Pedestrian CenterHead parameters (and not the frozen producers).
+                ped_feats = [f.detach() for f in pts_feats]
             self._ped_center_outs = self.ped_center_head(ped_feats)
             ped_losses = self.ped_center_head.loss(
                 gt_bboxes_3d, gt_labels_3d, self._ped_center_outs)
@@ -1540,7 +1600,10 @@ class R4Det(MVXFasterRCNN):
         a_outs = self.pts_bbox_head(x)
         anchor_list = self.pts_bbox_head.get_bboxes(
             *a_outs, img_metas, rescale=rescale)
-        center_outs = self.ped_center_head(x)
+        ped_x = x
+        if self.highres_ped_branch is not None:
+            ped_x = self._make_ped_highres_feats(x)
+        center_outs = self.ped_center_head(ped_x)
         center_list = self.ped_center_head.get_bboxes(
             center_outs, img_metas, rescale=rescale)
 
