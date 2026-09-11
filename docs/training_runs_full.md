@@ -2970,3 +2970,62 @@ Car strict 49.9772、Truck strict 30.4303、Cyclist loose 50.4709 与第 34/35 �
 - 后续分支：
   - 若必须解决 Ped strict，才进入真实 0.16 m BEV。
   - 若目标是 Overall，应停止 Ped strict 支线，保留 clean full RSSM 主线。
+
+---
+
+## 37. 修复 encoded-box IoU bug 后重跑 delta_xy 门控（3 epoch，已完成）
+
+### 37.1 修复与训练前验证
+
+- 修复：`CenterHeadkitti._positive_boxes_for_iou` 在进入
+  `diff_iou_rotated_3d` 前把 pred/target 从 CenterPoint 8 维编码解码为
+  7 维物理 gravity-center 框：
+  `[offset_x, offset_y, z, log_w, log_l, log_h, sin, cos]`
+  → `[x, y, z, w, l, h, yaw]`。
+- pred 的 `w/l` 来自完整 `final_log_xy` feature map 的正样本 gather，保证
+  `delta_xy -> final_log_xy -> decoded box -> IoU` 梯度路径连续。
+- 单测：`tests/test_centerhead_iou_decode.py`（1 passed）覆盖 7D shape、
+  同框 IoU=1、扰动降低 IoU、`yaw=atan2(sin,cos)`、`final_log_xy` 梯度非零。
+- epoch0 精确复现 Aα.75：
+  Ped strict `2.4054`、Ped loose `28.2016`、Overall `39.7700`；
+  Car strict `49.9772`、Truck strict `30.4303`、Cyclist loose `50.4709`。
+- 训练：重新加载 stage1 `epoch_7.pth`，不复用第 36 节 checkpoint；
+  seed 0、deterministic、GPU 5/6/7、3 进程、有效 batch 12、lr `2e-4`、
+  `max_epochs=3`；工作目录
+  `/data/lurui/work_dirs/ped_centerhead_stage2_delta_ioufix_3x2x2_3e_seed0`。
+
+### 37.2 结果（Ped 3D moderate）
+
+| epoch | Ped strict | Ped loose | Overall 3D moderate | 判定 |
+|---:|---:|---:|---:|---|
+| Aα.75 epoch0 | 2.4054 | 28.2016 | 39.7700 | 起点复现通过 |
+| 1 | 0.2024 | 28.5481 | 39.8566 | strict 大幅退化 |
+| 2 | 0.0485 | 28.5231 | 39.8504 | strict 继续退化 |
+| 3 | 0.0485 | 28.5086 | 39.8467 | strict 无提升 |
+
+Car strict `49.9772`、Truck strict `30.4303`、Cyclist loose `50.4709`
+三个 epoch 均与冻结口径 0 差异。
+
+### 37.3 训练信号
+
+| epoch | mean `loss_ped_bev_iou` | mean `ped_size_log_mae` | mean `grad_norm` | mean `tanh_sat_ratio` |
+|---:|---:|---:|---:|---:|
+| 1 | 0.15643 | 0.04007 | 0.11268 | 0.02561 |
+| 2 | 0.15301 | 0.03601 | 0.08225 | 0.00899 |
+| 3 | 0.15288 | 0.03490 | 0.07295 | 0.00764 |
+
+修复后梯度不再是第 36 节的 `1e-4` 量级死梯度，IoU loss 也有轻微下降
+（0.15643 → 0.15288），但它只改善正样本训练 IoU，没有转化为 strict AP。
+`tanh_sat_ratio` 全程低于 0.026，说明 `0.15` 残差上限不是失败原因。
+
+### 37.4 判定
+
+- **未通过**：Ped strict 远低于 ≥3.0；虽然 Ped loose（28.51）与 Overall
+  （39.85）超过阈值，但 strict 退化到 0.05 级，门控不通过。
+- **低分辨率路线真正关闭**：这次 IoU 输入已修复、epoch0 精确复现、
+  梯度有效且 IoU loss 轻微下降，但仍无法改善 strict。说明失败不是 IoU 编码
+  bug 或残差饱和造成，而是 0.32 m 表征/冻结正样本条件下无法恢复 strict
+  所需的几何细节。
+- 后续分支：
+  - 若研究目标必须解决 Ped strict，进入真实 `0.16 m` Ped BEV。
+  - 若目标只是 Overall，停止 Ped strict 支线，保留 clean full RSSM 主线。
