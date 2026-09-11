@@ -3029,3 +3029,86 @@ Car strict `49.9772`、Truck strict `30.4303`、Cyclist loose `50.4709`
 - 后续分支：
   - 若研究目标必须解决 Ped strict，进入真实 `0.16 m` Ped BEV。
   - 若目标只是 Overall，停止 Ped strict 支线，保留 clean full RSSM 主线。
+
+## 38. Ped-only 高分辨率 BEV 门控（0.16 m，3 epoch，已完成）
+
+### 38.1 实验设置
+
+- 目的：第 37 节关闭低分辨率 residual 路线后，验证真实 `0.16 m` Ped-only BEV
+  是否能恢复 Ped strict，同时保持 clean RSSM 主路径完全不变。
+- 架构：
+  - 复用已有 doubled radar voxel/scatter：`voxel_size=[0.16,0.16,6.0]`，
+    `output_shape=[496,432]`；**不改全局 `voxel_size=[0.32,0.32]`**。
+  - 新增 `PedHighresBranch`：high-res radar scatter -> Conv/BN/ReLU，
+    与 bilinear 上采样后的冻结 fused BEV concat，再输出 Ped 专用 CenterHead 特征。
+  - 两路输入均 detach；只训练 `highres_ped_branch + ped_center_head`。
+  - RSSM、image/radar backbone、融合模块、原 Anchor3DHead、Car/Truck/Cyclist
+    主检测路径全部冻结并保持 eval 状态。
+  - 不加入 IoU/corner/yaw auxiliary loss、bounded residual、尺寸先验训练或
+    RSSM 修改。
+- checkpoint：重新加载 stage1 `epoch_7.pth`；highres branch 随机初始化，
+  不 resume 第 37 节 checkpoint。
+- 训练：seed 0、deterministic、GPU 5/6/7、3 进程、`samples_per_gpu=2`、
+  `cumulative_iters=2`（有效 batch 12）、AdamW lr `2e-4`、`max_epochs=3`。
+- 配置：
+  - raw：`configs/r4det/TJ4D-R4Det_ped_highres_centerhead_3x2x2_3e_raw.py`
+  - prior：`configs/r4det/TJ4D-R4Det_ped_highres_centerhead_3x2x2_3e_prior.py`
+    （`size_prior_alpha=[0.655454,0.627535,0.75]`，只影响解码复评）
+- 工作目录：`work_dirs/ped_highres_centerhead_3x2x2_3e_seed0_raw`
+  （实际落盘于 repo 内；训练与 checkpoint 完整）。
+- 单测与 smoke：
+  - `tests/test_ped_highres_branch.py`
+  - `tests/test_centerhead_iou_decode.py`
+  - 合计 `3 passed`；raw/prior one-item GPU smoke 均通过。
+
+### 38.2 Raw 解码结果（Ped 3D moderate）
+
+| epoch | Ped strict | Ped loose | Overall 3D moderate | Car strict | Truck strict | Cyclist loose |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.0000 | 0.0011 | 32.7199 | 49.9772 | 30.4303 | 50.4709 |
+| 2 | 0.0000 | 0.0017 | 32.7200 | 49.9772 | 30.4303 | 50.4709 |
+| 3 | 0.0000 | 0.0004 | 32.7197 | 49.9772 | 30.4303 | 50.4709 |
+
+三个 epoch 中 Car/Truck/Cyclist 逐项完全一致，与冻结主路径预期一致，
+隔离条件通过。
+
+### 38.3 Size-prior 解码复评（同一 raw checkpoint）
+
+| epoch | Ped strict | Ped loose | Overall 3D moderate | Ped 2D moderate |
+|---:|---:|---:|---:|---:|
+| 1 | 0.0000 | 0.0011 | 32.7199 | 0.0066 |
+| 2 | 0.0000 | 0.0017 | 32.7200 | 0.0125 |
+| 3 | 0.0000 | 0.0004 | 32.7197 | 0.0082 |
+
+prior 与 raw 的 Ped strict/loose、Overall 基本完全一致；2D AP 也停在
+0.006–0.013 量级。说明问题不是尺寸解码先验不足，而是 high-res Ped 分支
+本身没有产生可用的 Ped proposal/定位信号。
+
+### 38.4 训练信号
+
+| epoch | mean total loss | mean heatmap loss | mean grad_norm |
+|---:|---:|---:|---:|
+| 1 | 2.9403 | 2.9357 | 9.0291 |
+| 2 | 2.7053 | 2.6008 | 3.9943 |
+| 3 | 2.6876 | 2.4831 | 4.2846 |
+
+训练无 NaN、无梯度爆炸，loss 正常小幅下降；但 heatmap loss 仍在 2.5 左右，
+且验证集 Ped 3D/BEV AP 没有形成有效召回。
+
+### 38.5 门控判定：未通过，Ped 高分辨率支线关闭
+
+| 指标 | 标准 | epoch 3 raw / prior | 判定 |
+|---|---:|---:|:---:|
+| Ped strict | ≥ 3.0 | 0.0000 / 0.0000 | ❌ |
+| Ped loose | ≥ 28.5 | 0.0004 / 0.0004 | ❌ |
+| Overall | ≥ 39.85 | 32.7197 / 32.7197 | ❌ |
+| Car/Truck/Cyclist diff | ≤ 0.1 | 0.0000 | ✅ |
+
+- **门控失败且不是 prior-only 假象**：raw 与 prior 都没有提升，说明高分辨率
+  分支 3 epoch 内没有学出有效 Ped 检测，不是尺寸先验掩盖 raw 结果。
+- **关闭 Ped high-res 支线**：按预设标准，3 epoch 后 Ped strict 仍远低于 2.4，
+  不继续堆 Ped head、不再修改 RSSM，也不继续调高分辨率。
+- **主结果保留 clean full RSSM**：当前 Ped strict 支线已完整尝试
+  独立 CenterHead、固定/soft size prior、bounded residual、修复后的 IoU loss、
+  以及真实 `0.16 m` Ped-only BEV；证据链一致指向该支线不能在门控预算内提升
+  Ped strict。后续应回到 clean full RSSM 主线。
