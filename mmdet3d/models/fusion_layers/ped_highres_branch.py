@@ -43,16 +43,14 @@ class PedHighresBranch(nn.Module):
                     norm_cfg=norm_cfg,
                     act_cfg=act_cfg))
         self.convs = nn.Sequential(*convs)
-        self.fusion_conv = ConvModule(
+        self.fusion_conv = nn.Conv2d(
             channels + fused_channels,
             out_channels,
             kernel_size,
             padding=kernel_size // 2,
-            norm_cfg=norm_cfg,
-            act_cfg=act_cfg)
-        nn.init.zeros_(self.fusion_conv.conv.weight)
-        if self.fusion_conv.conv.bias is not None:
-            nn.init.zeros_(self.fusion_conv.conv.bias)
+            bias=True)
+        nn.init.zeros_(self.fusion_conv.weight)
+        nn.init.zeros_(self.fusion_conv.bias)
 
     def forward(self, highres_radar, lowres_fused):
         highres = self.convs(self.radar_conv(highres_radar))

@@ -36,6 +36,25 @@ def test_ped_highres_branch_output_shape_and_gradient():
         for param in branch.parameters())
 
 
+def test_ped_highres_branch_residual_gets_nonzero_gradient():
+    branch = _branch()
+    branch.train()
+    radar = torch.randn(2, 4, 12, 8)
+    fused = torch.randn(2, 8, 4, 6)
+
+    out = branch(radar, fused)
+    out.square().mean().backward()
+
+    assert branch.fusion_conv.weight.grad.abs().sum() > 0
+
+    optimizer = torch.optim.SGD(branch.parameters(), lr=0.1)
+    optimizer.step()
+    optimizer.zero_grad()
+    branch(radar, fused).square().mean().backward()
+
+    assert branch.radar_conv.conv.weight.grad.abs().sum() > 0
+
+
 def test_ped_highres_branch_identity_initialization():
     branch = _branch()
     branch.eval()
@@ -49,9 +68,8 @@ def test_ped_highres_branch_identity_initialization():
         out = branch(radar, fused)
 
     assert torch.allclose(out, expected, atol=1e-6, rtol=1e-6)
-    assert torch.count_nonzero(branch.fusion_conv.conv.weight) == 0
-    if branch.fusion_conv.conv.bias is not None:
-        assert torch.count_nonzero(branch.fusion_conv.conv.bias) == 0
+    assert torch.count_nonzero(branch.fusion_conv.weight) == 0
+    assert torch.count_nonzero(branch.fusion_conv.bias) == 0
 
 
 def test_ped_highres_centerhead_grid_contract():
