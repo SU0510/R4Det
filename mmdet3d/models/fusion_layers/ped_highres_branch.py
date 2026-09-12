@@ -50,13 +50,16 @@ class PedHighresBranch(nn.Module):
             padding=kernel_size // 2,
             norm_cfg=norm_cfg,
             act_cfg=act_cfg)
+        nn.init.zeros_(self.fusion_conv.conv.weight)
+        if self.fusion_conv.conv.bias is not None:
+            nn.init.zeros_(self.fusion_conv.conv.bias)
 
     def forward(self, highres_radar, lowres_fused):
         highres = self.convs(self.radar_conv(highres_radar))
         high_h, high_w = highres.shape[-2:]
-        lowres_fused = F.interpolate(
+        base = F.interpolate(
             lowres_fused,
             size=(high_h, high_w),
-            mode='bilinear',
-            align_corners=False)
-        return self.fusion_conv(torch.cat((highres, lowres_fused), dim=1))
+            mode='nearest')
+        residual = self.fusion_conv(torch.cat((highres, base), dim=1))
+        return base + residual

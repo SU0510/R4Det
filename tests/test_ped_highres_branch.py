@@ -1,6 +1,7 @@
 import pytest
 import torch
 from torch import nn
+from mmcv import Config
 
 _cuda_is_available = torch.cuda.is_available
 try:
@@ -25,7 +26,7 @@ def _branch():
 def test_ped_highres_branch_output_shape_and_gradient():
     branch = _branch()
     radar = torch.randn(2, 4, 12, 8)
-    fused = torch.randn(2, 8, 6, 4)
+    fused = torch.randn(2, 8, 4, 6)
     out = branch(radar, fused)
 
     assert out.shape == (2, 8, 12, 8)
@@ -33,6 +34,40 @@ def test_ped_highres_branch_output_shape_and_gradient():
     assert all(
         param.grad is not None and torch.isfinite(param.grad).all()
         for param in branch.parameters())
+
+
+def test_ped_highres_branch_identity_initialization():
+    branch = _branch()
+    branch.eval()
+    radar = torch.randn(2, 4, 12, 8)
+    fused = torch.randn(2, 8, 4, 6)
+    expected = torch.nn.functional.interpolate(
+            fused,
+            size=(12, 8),
+            mode='nearest')
+    with torch.no_grad():
+        out = branch(radar, fused)
+
+    assert torch.allclose(out, expected, atol=1e-6, rtol=1e-6)
+    assert torch.count_nonzero(branch.fusion_conv.conv.weight) == 0
+    if branch.fusion_conv.conv.bias is not None:
+        assert torch.count_nonzero(branch.fusion_conv.conv.bias) == 0
+
+
+def test_ped_highres_centerhead_grid_contract():
+    cfg = Config.fromfile(
+        'configs/r4det/TJ4D-R4Det_ped_highres_centerhead_3x2x2_3e_raw.py')
+    head_cfg = cfg.model.ped_center_head
+    expected_grid = [cfg.bev_w_ * 2, cfg.bev_h_ * 2, 1]
+
+    assert head_cfg.train_cfg.grid_size == expected_grid
+    # The fused BEV is x-first, so the doubled grid contract follows
+    # [W_low * 2, H_low * 2] = [432, 496].
+    assert head_cfg.train_cfg.voxel_size == [
+        cfg.voxel_size[0] / 2, cfg.voxel_size[1] / 2]
+    assert head_cfg.train_cfg.out_size_factor == 1
+    assert (cfg.bev_h_, cfg.bev_w_) == (216, 248)
+    assert cfg.model.pts_middle_encoder.output_shape == [496, 432]
 
 
 def test_ped_highres_freeze_scope_and_detached_inputs():
@@ -46,7 +81,7 @@ def test_ped_highres_freeze_scope_and_detached_inputs():
     detector.frozen = nn.Linear(8, 8)
     detector._highres_radar_scatter = torch.randn(
         2, 4, 12, 8, requires_grad=True)
-    pts_feats = [torch.randn(2, 8, 6, 4, requires_grad=True)]
+    pts_feats = [torch.randn(2, 8, 4, 6, requires_grad=True)]
 
     R4Det._freeze_for_ped_highres_stage(detector)
     ped_feats = R4Det._make_ped_highres_feats(detector, pts_feats)
