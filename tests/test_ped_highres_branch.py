@@ -58,11 +58,11 @@ def test_ped_highres_centerhead_grid_contract():
     cfg = Config.fromfile(
         'configs/r4det/TJ4D-R4Det_ped_highres_centerhead_3x2x2_3e_raw.py')
     head_cfg = cfg.model.ped_center_head
-    expected_grid = [cfg.bev_w_ * 2, cfg.bev_h_ * 2, 1]
+    expected_grid = [cfg.bev_h_ * 2, cfg.bev_w_ * 2, 1]
 
     assert head_cfg.train_cfg.grid_size == expected_grid
-    # The fused BEV is x-first, so the doubled grid contract follows
-    # [W_low * 2, H_low * 2] = [432, 496].
+    # Scatter and fused BEV are both [H_y, W_x]. CenterPoint stores
+    # grid_size as [W, H], so the doubled contract is [432, 496].
     assert head_cfg.train_cfg.voxel_size == [
         cfg.voxel_size[0] / 2, cfg.voxel_size[1] / 2]
     assert head_cfg.train_cfg.out_size_factor == 1

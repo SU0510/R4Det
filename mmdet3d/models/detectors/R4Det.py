@@ -931,12 +931,7 @@ class R4Det(MVXFasterRCNN):
             bev_mask_logit_latter = None
         bev_mask_logit = {'former': bev_mask_logit_former, 'latter': bev_mask_logit_latter}
         bev_feats_refined = bev_feats_refined.permute(0, 1, 3, 2).contiguous()
-        if feat_or_dict == 1:
-            # Match the final fused feature's [B, C, H, W] spatial layout.
-            self._highres_radar_scatter = (
-                self._highres_radar_scatter.permute(
-                    0, 1, 3, 2).contiguous())
-        else:
+        if feat_or_dict != 1:
             self._highres_radar_scatter = None
         step_all_time = step1_time + step2_time + step3_time + step4_time + step5_time + step6_time
         self.recording_fps(step_all_time)
