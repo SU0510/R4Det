@@ -3140,3 +3140,83 @@ prior 与 raw 的 Ped strict/loose、Overall 基本完全一致；2D AP 也停�
 - **第 38.5 节结论作废**：前次关闭 Ped high-res 支线的判断建立在转置布局
   bug 之上，不能作为关闭依据。重新进入 high-res Ped 支线，先跑 6 epoch
   低成本训练门控。
+
+### 38.7 布局修复后的 6-epoch 高分辨率门控（已完成）
+
+#### 38.7.1 实验设置
+
+- identity 布局修复后，先以 stage1 `epoch_7.pth` 做全量 identity 复评：
+  Ped strict `0.0660`、Ped loose `14.5976`、Overall 3D moderate `36.3690`，
+  确认高分辨率 Ped 分支有非零召回且 Car/Truck/Cyclist 与冻结主路径 0 差异。
+- 正式门控从同一 stage1 `epoch_7.pth` 重新开始，只训练
+  `highres_ped_branch + ped_center_head`；其余模块全部冻结并保持 eval。
+- 配置：
+  `configs/r4det/TJ4D-R4Det_ped_highres_centerhead_6e_identity_lr1e-4.py`。
+  训练参数为 seed 0、deterministic、GPU 5/6/7、3 进程、
+  `samples_per_gpu=2`、`cumulative_iters=2`（有效 batch 12）、
+  AdamW lr `1e-4`、`max_epochs=6`。
+- 工作目录：
+  `/data/lurui/work_dirs/ped_highres_centerhead_identity_3x2x2_6e_lr1e-4_seed0`。
+  `epoch_1.pth` 至 `epoch_6.pth` 和 `latest.pth -> epoch_6.pth` 均已落盘。
+
+#### 38.7.2 Raw 解码 6-epoch 结果（Ped 3D moderate）
+
+| epoch | Ped strict | Ped loose | Overall 3D moderate | Car strict | Truck strict | Cyclist loose |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.0633 | 25.0168 | 38.9738 | 49.9772 | 30.4303 | 50.4709 |
+| 2 | 0.0857 | 25.5354 | 39.1034 | 49.9772 | 30.4303 | 50.4709 |
+| 3 | 0.1244 | 25.3222 | 39.0501 | 49.9772 | 30.4303 | 50.4709 |
+| 4 | 0.0839 | 24.9236 | 38.9505 | 49.9772 | 30.4303 | 50.4709 |
+| 5 | 0.1045 | 26.9477 | 39.4565 | 49.9772 | 30.4303 | 50.4709 |
+| 6 | 0.0972 | 26.3535 | 39.3080 | 49.9772 | 30.4303 | 50.4709 |
+
+- Car/Truck/Cyclist 所有 epoch 与冻结主路径逐项完全一致，0 差异，隔离条件
+  通过。
+- Ped strict 最高仅为 epoch 3 的 `0.1244`，随后回落；Ped loose 最高为
+  epoch 5 的 `26.9477`，epoch 6 回落到 `26.3535`；Overall 最高同样为
+  epoch 5 的 `39.4565`，epoch 6 回落到 `39.3080`。六个 epoch 没有形成
+  连续、稳定的提升。
+
+#### 38.7.3 Size-prior 解码复评（同一 `epoch_6.pth`）
+
+- 复评继续使用 `epoch_6.pth`，仅把解码尺寸先验切换为
+  `size_prior_alpha=[0.655454, 0.627535, 0.75]`，不训练任何模块。
+- Ped strict `1.5071`、Ped loose `26.4851`、Overall 3D moderate `39.3409`。
+- Car strict `49.9772`、Truck strict `30.4303`、Cyclist loose `50.4709`，
+  与 raw 和冻结主路径的对应指标一致。
+- prior 解码把 Ped strict 从 raw 的 `0.0972` 提升到 `1.5071`，但仍远低于
+  `3.0`；Ped loose 和 Overall 也未达到 `28.5`、`39.85`。因此结果不是
+  raw 被尺寸先验掩盖，尺寸先验本身也不足以通过门控。
+
+#### 38.7.4 训练信号
+
+| epoch | mean total loss | mean heatmap loss | mean grad_norm |
+|---:|---:|---:|---:|
+| 1 | 0.8436 | 0.8396 | 1.4778 |
+| 2 | 0.9051 | 0.8011 | 1.3675 |
+| 3 | 0.9946 | 0.7906 | 1.3730 |
+| 4 | 1.0955 | 0.7915 | 1.3408 |
+| 5 | 1.1833 | 0.7792 | 1.3729 |
+| 6 | 1.2759 | 0.7717 | 1.3469 |
+
+heatmap loss 从 `0.8396` 下降到 `0.7717`，grad_norm 全程稳定，没有 NaN 或
+梯度爆炸；但验证集 AP 没有随 loss 单调改善。
+
+#### 38.7.5 门控判定：未通过，关闭 Ped high-resolution 支线
+
+| 指标 | 标准 | raw `epoch_6.pth` | prior `epoch_6.pth` | 判定 |
+|---|---:|---:|---:|:---:|
+| Ped strict | >= 3.0 | 0.0972 | 1.5071 | fail |
+| Ped loose | >= 28.5 | 26.3535 | 26.4851 | fail |
+| Overall | >= 39.85 | 39.3080 | 39.3409 | fail |
+| Car/Truck/Cyclist diff | <= 0.1 | 0.0000 | 0.0000 | pass |
+
+- **门控失败且不是 prior-only 假象**：raw 与 prior 都没有达到 strict/loose/
+  Overall 标准；prior 只窄幅抬高 Ped strict，不能改变失败判定。
+- **关闭 Ped high-resolution 支线**：布局错误已修复、identity 有正常召回、
+  loss 有下降、冻结路径 6 epoch 保持 0 差异，但 Ped strict 仍只有
+  `0.0972`（prior 复评 `1.5071`），远低于 `2.4` 和 `3.0` 门槛。
+  按预设规则，不再继续堆 Ped CenterHead，也不继续修改高分辨率输入。
+- **主结果保留 clean full RSSM**：关闭的是 Ped-only high-resolution 支线；
+  clean full RSSM 主线继续保留，RSSM、KL、BPTT、velocity、free_nats 和
+  原 Anchor3DHead 主检测路径均不再改动。
