@@ -3112,3 +3112,31 @@ prior 与 raw 的 Ped strict/loose、Overall 基本完全一致；2D AP 也停�
   独立 CenterHead、固定/soft size prior、bounded residual、修复后的 IoU loss、
   以及真实 `0.16 m` Ped-only BEV；证据链一致指向该支线不能在门控预算内提升
   Ped strict。后续应回到 clean full RSSM 主线。
+
+### 38.6 布局修复后的 identity 复评（第 38 节结论修正）
+
+- 复查发现高分辨率 scatter 在 `extract_feat(feat_or_dict=1)` 中被无条件
+  `permute`，把 `[B, C, H_y, W_x] = [1,64,432,496]` 变成了
+  `[1,64,496,432]`。Ped CenterHead 的目标和推理解码随后又按转置后的
+  `grid_size=[496,432]` 配置，导致 identity 阶段的 heatmap 位置整体转置，
+  Ped 3D AP 被错误压到 0。该问题只影响新 Ped high-res 支路，不涉及 RSSM、
+  KL、BPTT、velocity 或 clean 主检测路径。
+- 修复：
+  - `R4Det.extract_feat(feat_or_dict=1)` 保留 scatter 原生
+    `[B, C, H_y, W_x]` 布局，不再 `permute`；
+  - high-res `ped_center_head.train_cfg.grid_size` 改为
+    `[bev_h_*2, bev_w_*2, 1] = [496,432,1]`，与 CenterPoint 内部
+    `feature_map_size=[W,H]` 的契约一致；
+  - 回归测试 `tests/test_ped_highres_branch.py` 覆盖该 grid 契约。
+- 修复后 one-item 对齐：低分辨率 top peak `(132,30)` 对应高分辨率
+  `(265,60)`，不再出现转置峰值。单测
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ped_highres_branch.py -q`
+  为 `4 passed`。
+- identity 全量复评：继续加载 stage1 `epoch_7.pth`，关闭尺寸 prior，
+  GPU 6、seed 0、deterministic。Ped 3D moderate：
+  strict `0.0660`、loose `14.5976`；Overall 3D moderate `36.3690`。
+  Car strict `49.9772`、Truck strict `30.4303`、Cyclist loose `50.4709`，
+  与冻结主路径 0 差异。Ped 3D 召回不再为 0，identity 门控通过。
+- **第 38.5 节结论作废**：前次关闭 Ped high-res 支线的判断建立在转置布局
+  bug 之上，不能作为关闭依据。重新进入 high-res Ped 支线，先跑 6 epoch
+  低成本训练门控。
