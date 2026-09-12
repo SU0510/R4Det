@@ -61,6 +61,20 @@ def test_unpack_sample_accepts_collated_sequence_dims():
     assert len(labels) == 3
 
 
+def test_select_ped_indices_uses_annotations():
+    class Dataset:
+        data_infos = [
+            {"annos": {"name": ["Car"]}},
+            {"annos": {"name": ["Pedestrian", "Car"]}},
+            {"annos": {"name": ["Truck"]}},
+            {"annos": {"name": ["Pedestrian"]}},
+        ]
+
+    indices = PED_PROBE._select_ped_indices(Dataset(), limit=1)
+
+    assert indices == [1]
+
+
 def test_crop_patch_rejects_out_of_bounds_and_returns_aligned_shapes():
     boxes = torch.tensor([[1.0, -3.0, 0.0, 0.6, 0.8, 1.7, 0.2]])
     highres = torch.arange(1 * 2 * 432 * 496, dtype=torch.float32).view(

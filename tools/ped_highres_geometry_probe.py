@@ -133,6 +133,23 @@ def _build_model(cfg, checkpoint, device):
     return model.to(device).eval()
 
 
+def _select_ped_indices(dataset, limit=0):
+    infos = getattr(dataset, "data_infos", None)
+    if infos is None:
+        return list(range(len(dataset)))
+    indices = []
+    for index, info in enumerate(infos):
+        annos = info.get("annos", {})
+        names = annos.get("name", [])
+        if any(name == "Pedestrian" for name in names):
+            indices.append(index)
+            if limit and len(indices) >= limit:
+                break
+    if not indices:
+        raise RuntimeError("no Pedestrian frames found in dataset infos")
+    return indices
+
+
 @torch.no_grad()
 def _extract_sample(model, sample, device):
     points, img, img_metas, boxes, labels = _unpack_sample(sample)
@@ -280,12 +297,8 @@ def main():
                                   if "dataset" in cfg.data.train
                                   else cfg.data.train)
     val_dataset = build_dataset(cfg.data.val)
-    train_indices = list(range(len(train_dataset)))
-    val_indices = list(range(len(val_dataset)))
-    if args.limit_train:
-        train_indices = train_indices[:args.limit_train]
-    if args.limit_val:
-        val_indices = val_indices[:args.limit_val]
+    train_indices = _select_ped_indices(train_dataset, args.limit_train)
+    val_indices = _select_ped_indices(val_dataset, args.limit_val)
 
     train_cache = os.path.join(cfg.work_dir, f"train_crop{args.crop_size}.pt")
     val_cache = os.path.join(cfg.work_dir, f"val_crop{args.crop_size}.pt")
