@@ -3280,3 +3280,59 @@ heatmap loss 从 `0.8396` 下降到 `0.7717`，grad_norm 全程稳定，没有 N
 - **保留路线**：最终保留 clean full RSSM 主线；若论文需要 Ped strict，
   使用 stage1 `epoch_7.pth` + `A alpha=0.75`。不再修改 RSSM、KL、BPTT、
   velocity、free_nats 或 clean 主检测路径。
+
+### 38.9 修正 yaw 周期后的 yaw-only probe（已完成）
+
+#### 38.9.1 修正原因
+
+- 第 38.8 节证明 high-res 局部特征无法预测逐目标 `w/l`：
+  train/val 尺寸分布有 split shift（train `w mean=0.666 m`、
+  `l mean=0.656 m`；val `w mean=0.580 m`、`l mean=0.604 m`），
+  且 val 常数中位数预测的 `w MAE=0.105 m` 已优于 probe `0.133 m`。
+  因此尺寸分支停止，probe 只保留 yaw。
+- 原 probe 把 yaw 当 `2π` 周期，用 `[sin(yaw), cos(yaw)]`；但 3D box
+  中 `yaw` 与 `yaw + π` 几何等价。先前 `yaw MAE≈1.0 rad` 包含错误的反向
+  惩罚，不能作为关闭依据。
+- 修正后目标为 `[sin(2*yaw), cos(2*yaw)]`，预测
+  `pred_yaw = 0.5 * atan2(pred_sin2, pred_cos2)`，误差按 modulo-π 计算。
+
+#### 38.9.2 实验设置
+
+- 复用第 38.8 节已缓存的 detector 特征，不重新跑 detector：
+  `/data/lurui/work_dirs/ped_highres_geometry_probe_crop9_3e_seed0`
+  中的 `train_crop9.pt` 和 `val_crop9.pt`。
+- crop 9x9，只预测 `sin(2yaw), cos(2yaw)`，不预测 `w/l`。
+  训练参数：seed 0、GPU 5、AdamW lr `1e-3`、batch 64、epochs 5。
+  loss 为 `1 - cosine_similarity`。
+- 工作目录：
+  `/data/lurui/work_dirs/ped_highres_yaw_probe_crop9_5e_seed0`。
+  结果文件：`probe_result.json`。
+
+#### 38.9.3 结果
+
+通过条件：`val yaw MAE <= 0.45 rad`，连续两个 epoch 不恶化，且明显优于
+低分辨率基线 `0.504 rad`。
+
+| epoch | train loss | val yaw MAE |
+|---:|---:|---:|
+| 1 | 0.5202 | 0.5481 |
+| 2 | 0.4606 | 0.5514 |
+| 3 | 0.4578 | 0.4858 |
+| 4 | 0.4415 | 0.5372 |
+| 5 | 0.4309 | 0.5610 |
+
+#### 38.9.4 判定：yaw-only probe 未通过，彻底停止 Ped 架构实验
+
+| 指标 | 标准 | best epoch 3 | final epoch 5 | 判定 |
+|---|---:|---:|---:|---:|
+| val yaw MAE | <= 0.45 rad | 0.4858 | 0.5610 | fail |
+| 连续两个 epoch 不恶化 | required | - | epoch4/5 退化为 0.5372/0.5610 | fail |
+| 优于低分辨率基线 0.504 rad | required | 0.4858 仅小幅优于 | 0.5610 更差 | fail |
+
+- train loss 从 `0.5202` 降到 `0.4309`，但 val yaw 最好只有 `0.4858 rad`，
+  且 epoch 4-5 连续恶化。修正 `π` 周期后仍然不能稳定预测 yaw。
+- 不做 yaw-only local refiner，不训练 `delta_yaw`，不续训 high-res
+  CenterHead，也不再训练尺寸 residual。
+- **最终路线**：彻底停止 Ped 架构实验。后续只做最终方案多 seed 验证：
+  clean full RSSM 作为主结果；stage1 `epoch_7.pth` + `A alpha=0.75`
+  作为 Ped strict 补充方案；seed 0/1/2，prior 参数固定，不再调 val。
