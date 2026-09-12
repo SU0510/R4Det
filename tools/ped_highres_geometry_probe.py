@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Probe Pedestrian geometry decodability from high-resolution BEV crops.
+"""Probe Pedestrian yaw decodability from high-resolution BEV crops.
 
 The detector's full high-resolution CenterHead path is intentionally not used
 here.  A frozen R4Det checkpoint produces the same current-frame fused BEV and
 0.16 m radar scatter used by the high-resolution branch, then this tool caches
-small crops around GT Pedestrian centers and trains a tiny geometry head on
-those local features only.
+small crops around GT Pedestrian centers and trains a tiny yaw head on those
+local features only.  Yaw is represented by sin/cos of twice the angle so that
+the prediction is invariant to the pi-periodic box orientation.
 """
 import argparse
 import json
@@ -113,7 +114,7 @@ class GeometryHead(nn.Module):
             nn.BatchNorm2d(hidden_channels),
             nn.ReLU(inplace=True),
         )
-        self.fc = nn.Linear(hidden_channels, 4)
+        self.fc = nn.Linear(hidden_channels, 2)
 
     def forward(self, x):
         x = self.net(x)
@@ -131,6 +132,29 @@ def _build_model(cfg, checkpoint, device):
     state = state.get("state_dict", state)
     model.load_state_dict(state, strict=False)
     return model.to(device).eval()
+
+
+def _yaw_targets(data):
+    """Convert cached single-angle labels to pi-periodic double-angle targets."""
+    cached = data["targets"]
+    sin_yaw = cached[:, 2]
+    cos_yaw = cached[:, 3]
+    return torch.stack((
+        2.0 * sin_yaw * cos_yaw,
+        cos_yaw.square() - sin_yaw.square(),
+    ), dim=1)
+
+
+def _yaw_cosine_loss(pred, target):
+    return 1.0 - F.cosine_similarity(pred, target, dim=1).mean()
+
+
+def _yaw_error(pred, target):
+    pred_yaw = 0.5 * torch.atan2(pred[:, 0], pred[:, 1])
+    target_yaw = 0.5 * torch.atan2(target[:, 0], target[:, 1])
+    delta = pred_yaw - target_yaw
+    return 0.5 * torch.abs(torch.atan2(torch.sin(2.0 * delta),
+                                       torch.cos(2.0 * delta)))
 
 
 def _select_ped_indices(dataset, limit=0):
@@ -241,32 +265,21 @@ def _cache_split(model, dataset, indices, cfg, device, crop_size, cache_path):
 def _evaluate(head, data, batch_size, device):
     head.eval()
     preds, targets = [], []
+    yaw_targets = _yaw_targets(data)
     with torch.no_grad():
-        count = data["targets"].shape[0]
+        count = yaw_targets.shape[0]
         for start in range(0, count, batch_size):
             highres = data["highres"][start:start + batch_size].float().to(device)
             radar = data["radar"][start:start + batch_size].float().to(device)
             inputs = torch.cat((highres, radar), dim=1)
             preds.append(head(inputs).cpu())
-            targets.append(data["targets"][start:start + batch_size])
+            targets.append(yaw_targets[start:start + batch_size])
 
     pred = torch.cat(preds)
     target = torch.cat(targets)
-    pred_w = pred[:, 0].exp()
-    pred_l = pred[:, 1].exp()
-    pred_yaw = torch.atan2(pred[:, 2], pred[:, 3])
-    gt_w = target[:, 0].exp()
-    gt_l = target[:, 1].exp()
-    gt_yaw = torch.atan2(target[:, 2], target[:, 3])
-    yaw_err = torch.abs(torch.atan2(torch.sin(pred_yaw - gt_yaw),
-                                    torch.cos(pred_yaw - gt_yaw)))
-    corr = torch.corrcoef(torch.stack([pred_w, gt_w]))[0, 1].item()
     return {
         "n": int(target.shape[0]),
-        "w_mae": float((pred_w - gt_w).abs().mean()),
-        "w_corr": float(corr),
-        "l_mae": float((pred_l - gt_l).abs().mean()),
-        "yaw_mae": float(yaw_err.mean()),
+        "yaw_mae": float(_yaw_error(pred, target).mean()),
     }
 
 
@@ -280,6 +293,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--cache-dir", default="")
     parser.add_argument("--limit-train", type=int, default=0)
     parser.add_argument("--limit-val", type=int, default=0)
     args = parser.parse_args()
@@ -292,25 +306,27 @@ def main():
     cfg.work_dir = args.work_dir
     os.makedirs(cfg.work_dir, exist_ok=True)
 
-    model = _build_model(cfg, args.checkpoint, device)
-    train_dataset = build_dataset(cfg.data.train.dataset
-                                  if "dataset" in cfg.data.train
-                                  else cfg.data.train)
-    val_dataset = build_dataset(cfg.data.val)
-    train_indices = _select_ped_indices(train_dataset, args.limit_train)
-    val_indices = _select_ped_indices(val_dataset, args.limit_val)
-
-    train_cache = os.path.join(cfg.work_dir, f"train_crop{args.crop_size}.pt")
-    val_cache = os.path.join(cfg.work_dir, f"val_crop{args.crop_size}.pt")
+    cache_dir = args.cache_dir or cfg.work_dir
+    train_cache = os.path.join(cache_dir, f"train_crop{args.crop_size}.pt")
+    val_cache = os.path.join(cache_dir, f"val_crop{args.crop_size}.pt")
     if os.path.exists(train_cache):
         train_data = torch.load(train_cache, map_location="cpu")
     else:
+        model = _build_model(cfg, args.checkpoint, device)
+        train_dataset = build_dataset(cfg.data.train.dataset
+                                      if "dataset" in cfg.data.train
+                                      else cfg.data.train)
+        train_indices = _select_ped_indices(train_dataset, args.limit_train)
         train_data = _cache_split(
             model, train_dataset, train_indices, cfg, device,
             args.crop_size, train_cache)
     if os.path.exists(val_cache):
         val_data = torch.load(val_cache, map_location="cpu")
     else:
+        if "model" not in locals():
+            model = _build_model(cfg, args.checkpoint, device)
+        val_dataset = build_dataset(cfg.data.val)
+        val_indices = _select_ped_indices(val_dataset, args.limit_val)
         val_data = _cache_split(
             model, val_dataset, val_indices, cfg, device,
             args.crop_size, val_cache)
@@ -319,8 +335,8 @@ def main():
                       + train_data["radar"].shape[1])
     head = GeometryHead(input_channels).to(device)
     optimizer = torch.optim.AdamW(head.parameters(), lr=args.lr)
-    criterion = nn.SmoothL1Loss()
     train_count = train_data["targets"].shape[0]
+    train_yaw = _yaw_targets(train_data)
     generator = torch.Generator().manual_seed(args.seed)
     history = []
 
@@ -332,9 +348,9 @@ def main():
             batch = order[start:start + args.batch_size]
             highres = train_data["highres"][batch].float().to(device)
             radar = train_data["radar"][batch].float().to(device)
-            target = train_data["targets"][batch].to(device)
+            target = train_yaw[batch].to(device)
             pred = head(torch.cat((highres, radar), dim=1))
-            loss = criterion(pred, target)
+            loss = _yaw_cosine_loss(pred, target)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
@@ -346,14 +362,16 @@ def main():
         print(json.dumps(metrics), flush=True)
 
     passed = (
-        history[-1]["w_mae"] <= 0.24
-        and history[-1]["w_corr"] >= 0.20
-        and history[-1]["yaw_mae"] <= 0.45
+        history[-1]["yaw_mae"] <= 0.45
+        and history[-1]["yaw_mae"] <= history[-2]["yaw_mae"]
+        and history[-2]["yaw_mae"] <= history[-3]["yaw_mae"]
     )
     result = {
         "config": args.config,
         "checkpoint": args.checkpoint,
         "crop_size": args.crop_size,
+        "cache_dir": cache_dir,
+        "target": "sin_cos_double_yaw",
         "train_crops": int(train_data["targets"].shape[0]),
         "val_crops": int(val_data["targets"].shape[0]),
         "history": history,

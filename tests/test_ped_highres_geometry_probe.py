@@ -102,8 +102,31 @@ def test_geometry_head_shape_and_gradient():
     outputs = head(inputs)
     outputs.square().mean().backward()
 
-    assert outputs.shape == (3, 4)
+    assert outputs.shape == (3, 2)
     assert all(parameter.grad is not None for parameter in head.parameters())
+
+
+def test_yaw_targets_are_pi_periodic():
+    data = {
+        "targets": torch.tensor([
+            [0.0, 0.0, 0.1, 0.9],
+            [0.0, 0.0, -0.1, -0.9],
+        ])
+    }
+
+    targets = PED_PROBE._yaw_targets(data)
+
+    assert torch.allclose(targets[0], targets[1], atol=1e-6)
+
+
+def test_yaw_error_treats_pi_difference_as_zero():
+    yaw = torch.tensor(0.37)
+    pred = torch.stack((torch.sin(2.0 * yaw), torch.cos(2.0 * yaw))).view(1, 2)
+    target_yaw = yaw + torch.pi
+    target = torch.stack((torch.sin(2.0 * target_yaw),
+                          torch.cos(2.0 * target_yaw))).view(1, 2)
+
+    assert PED_PROBE._yaw_error(pred, target).item() < 1e-6
 
 
 if __name__ == "__main__":
