@@ -3220,3 +3220,63 @@ heatmap loss 从 `0.8396` 下降到 `0.7717`，grad_norm 全程稳定，没有 N
 - **主结果保留 clean full RSSM**：关闭的是 Ped-only high-resolution 支线；
   clean full RSSM 主线继续保留，RSSM、KL、BPTT、velocity、free_nats 和
   原 Anchor3DHead 主检测路径均不再改动。
+
+### 38.8 冻结网络 high-res 几何 probe（已完成）
+
+#### 38.8.1 实验目的与设置
+
+- 第 38.7 节关闭的是“全图 high-res CenterHead 重学 proposal”设计，不是
+  高分辨率几何信息本身。因此本节改用冻结检测器做局部几何可解码性 probe，
+  不训练完整检测器，也不替换 proposal、score 或 center。
+- 检测器全部权重冻结并处于 eval；输入为冻结 detector 当前帧产生的
+  0.16 m radar scatter 与 `highres_ped_branch` 输出。RSSM 按 `simple_test`
+  路径 reset + history burn-in，再取当前帧特征。
+- 对每个当前帧 GT Pedestrian 中心截取 `9x9` 高分辨率局部特征，
+  覆盖约 `1.44 m x 1.44 m`。输入通道为 high-res branch 256 通道与
+  high-res radar scatter 64 通道。
+- 只训练小几何头：`2x Conv2d + BN + ReLU + global average pool + Linear(4)`，
+  输出 `[log_w, log_l, sin_yaw, cos_yaw]`。
+- 参数：seed 0、GPU 5、crop size 9、AdamW lr `1e-3`、batch size 64、
+  epochs 3。样本来自所有含 Pedestrian GT 的 train/val 帧，train 共
+  `3235` 个 Ped crop，val 共 `993` 个 Ped crop。
+- 工作目录：
+  `/data/lurui/work_dirs/ped_highres_geometry_probe_crop9_3e_seed0`。
+  结果文件：`probe_result.json`；缓存：`train_crop9.pt`、`val_crop9.pt`。
+- 工具：
+  `tools/ped_highres_geometry_probe.py`；CPU 回归：
+  `tests/test_ped_highres_geometry_probe.py`。
+
+#### 38.8.2 Probe 结果
+
+低分辨率 CenterHead 对照基线为：
+`w MAE = 0.283 m`、`w correlation = -0.283`、`yaw MAE = 0.504 rad`。
+
+通过条件：`w MAE <= 0.24 m`、`w correlation >= 0.20`、
+`yaw MAE <= 0.45 rad`。
+
+| epoch | train loss | w MAE | w corr | l MAE | yaw MAE |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 0.1569 | 0.1332 | -0.0968 | 0.1606 | 0.9574 |
+| 2 | 0.1195 | 0.1569 | -0.2812 | 0.1555 | 1.0676 |
+| 3 | 0.1124 | 0.1972 | -0.3635 | 0.1731 | 1.0257 |
+
+#### 38.8.3 判定：probe 未通过，Ped 支线关闭
+
+| 指标 | 标准 | epoch 3 | 判定 |
+|---|---:|---:|---:|
+| w MAE | <= 0.24 m | 0.1972 | pass |
+| w correlation | >= 0.20 | -0.3635 | fail |
+| yaw MAE | <= 0.45 rad | 1.0257 | fail |
+
+- train loss 从 `0.1569` 降到 `0.1124`，说明小几何头确实在拟合局部 crop；
+  但 val `w correlation` 从 `-0.0968` 变成 `-0.3635`，yaw MAE 始终在
+  `0.96-1.07 rad`，没有接近可用几何解码水平。
+- `w MAE` 虽然表面低于 `0.24 m`，但 correlation 为负且随训练变差，说明
+  该 MAE 主要来自向均值/先验收缩，不是逐样本尺寸预测能力；不能用它判定
+  通过。
+- 因此不进入后续局部 box refinement，不再训练
+  `delta_log_w / delta_log_l / delta_yaw`，也不基于该高分辨率局部特征
+  继续做 Ped head。
+- **保留路线**：最终保留 clean full RSSM 主线；若论文需要 Ped strict，
+  使用 stage1 `epoch_7.pth` + `A alpha=0.75`。不再修改 RSSM、KL、BPTT、
+  velocity、free_nats 或 clean 主检测路径。
