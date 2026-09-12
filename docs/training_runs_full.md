@@ -3336,3 +3336,112 @@ heatmap loss 从 `0.8396` 下降到 `0.7717`，grad_norm 全程稳定，没有 N
 - **最终路线**：彻底停止 Ped 架构实验。后续只做最终方案多 seed 验证：
   clean full RSSM 作为主结果；stage1 `epoch_7.pth` + `A alpha=0.75`
   作为 Ped strict 补充方案；seed 0/1/2，prior 参数固定，不再调 val。
+
+### 38.10 修复 high-res residual 死分支后的 3-epoch 门控（已完成）
+
+#### 38.10.1 死分支定位与修复
+
+- 第 38.9 节末尾“彻底停止 Ped 架构实验”的结论当时仍建立在第 38.7 节
+  high-res CenterHead 训练失败上。复查发现第 38.7 节实际没有训练到
+  high-res radar 分支：`PedHighresBranch.fusion_conv` 原结构为
+  `Conv + BN + ReLU`，而最终 Conv 的 weight/bias 被零初始化；
+  ReLU 在零点梯度为零，导致残差分支从第一步起就没有非零梯度。
+- 检查第 38.7 节 checkpoint 确认
+  `highres_ped_branch.fusion_conv.conv.weight` 在 epoch 1-6 始终全零，
+  非零参数数量始终为 `0`。因此第 38.7 节训练的是
+  “nearest-upsample low-resolution BEV + CenterHead”，0.16 m radar
+  特征从未进入输出，不能证明训练后的 high-res branch 无效。
+- 修复 `mmdet3d/models/fusion_layers/ped_highres_branch.py`：
+  `fusion_conv` 改为单个有 bias 的 `nn.Conv2d`，不再包含 BN/ReLU，
+  weight/bias 仍零初始化，使 epoch0 严格保持
+  `highres_ped_feature == nearest_upsample(lowres_fused_feature)`，
+  同时允许有符号残差和非零梯度。
+- 更新 `tests/test_ped_highres_branch.py`，增加三项回归证明：
+  identity 初始化、首次 backward 后 `fusion_conv.weight.grad.abs().sum() > 0`、
+  一次 optimizer step 后第二次 backward 的 `radar_conv` 梯度非零。
+  聚焦测试通过：`5 passed`。
+- 相关提交：`91f3b4c fix(ped): unblock highres residual gradients`；
+  `d05ee9b config(ped): add highres grad-fix 3e gate`。
+
+#### 38.10.2 实验设置
+
+- 配置：
+  `configs/r4det/TJ4D-R4Det_ped_highres_centerhead_gradfix_3x2x2_3e_seed0.py`。
+- 从头加载 stage1 `epoch_7.pth`，不 resume 第 38.7 节错误 checkpoint；
+  只训练 `highres_ped_branch + ped_center_head`，其余模块全部冻结并保持
+  eval。seed 0、deterministic、GPU 5/6/7、3 进程、
+  `samples_per_gpu=2`、`cumulative_iters=2`（有效 batch 12）、
+  AdamW lr `1e-4`、`max_epochs=3`。
+- 工作目录：
+  `/data/lurui/work_dirs/ped_highres_centerhead_gradfix_3x2x2_3e_seed0`。
+  日志：`20260912_142326.log`、`20260912_142326.log.json`。
+- 每个 epoch 同时评估 raw 解码和固定 prior 解码
+  `size_prior_alpha=[0.655454,0.627535,0.75]`。
+
+#### 38.10.3 残差权重非零证明
+
+| checkpoint | fusion weight nonzero | fusion weight L1 | fusion weight absmax | fusion bias nonzero |
+|---|---:|---:|---:|---:|
+| epoch 1 | 737280 / 737280 | 1206.9482 | 0.012934 | 256 / 256 |
+| epoch 2 | 737280 / 737280 | 1663.6880 | 0.021517 | 256 / 256 |
+| epoch 3 | 737280 / 737280 | 1721.5181 | 0.022393 | 256 / 256 |
+
+`fusion_conv` weight 不再为零，且 L1 随训练增加；radar 分支的梯度阻断问题
+已解除。
+
+#### 38.10.4 训练信号
+
+| epoch | mean total loss | mean heatmap loss | mean grad_norm |
+|---:|---:|---:|---:|
+| 1 | 0.9108 | 0.9066 | 5.7817 |
+| 2 | 0.9403 | 0.8363 | 3.4836 |
+| 3 | 0.9982 | 0.7941 | 2.9320 |
+
+heatmap loss 从 `0.9066` 降到 `0.7941`，grad_norm 全程有限且逐步稳定；
+训练通路本身正常。
+
+#### 38.10.5 Raw 解码结果（Ped 3D moderate）
+
+| epoch | Ped strict | Ped loose | Overall 3D moderate | Car strict | Truck strict | Cyclist loose |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.1401 | 25.4998 | 39.0945 | 49.9772 | 30.4303 | 50.4709 |
+| 2 | 0.0257 | 26.2358 | 39.2785 | 49.9772 | 30.4303 | 50.4709 |
+| 3 | 0.0239 | 27.6425 | 39.6302 | 49.9772 | 30.4303 | 50.4709 |
+
+Car/Truck/Cyclist 与冻结主路径逐项完全一致，0 差异，隔离条件通过。
+raw Ped strict 三轮都远低于门槛，说明高分辨率分支没能直接学出可用
+Ped 3D proposal。
+
+#### 38.10.6 固定 prior 解码结果（Ped 3D moderate）
+
+| epoch | Ped strict | Ped loose | Overall 3D moderate | Car strict | Truck strict | Cyclist loose |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 3.6060 | 25.0677 | 38.9865 | 49.9772 | 30.4303 | 50.4709 |
+| 2 | 2.5677 | 27.4581 | 39.5841 | 49.9772 | 30.4303 | 50.4709 |
+| 3 | 1.5745 | 27.4867 | 39.5913 | 49.9772 | 30.4303 | 50.4709 |
+
+prior 复评把 Ped strict 拉到 epoch1 `3.6060`、epoch2 `2.5677`，但
+Ped loose 三轮分别为 `25.0677`、`27.4581`、`27.4867`，均未达到续训门槛
+`>= 27.5`。epoch3 Ped strict 又回落到 `1.5745`，没有形成稳定几何收益。
+
+#### 38.10.7 3-epoch 续训门槛判定
+
+预设续 6 epoch 条件：
+
+| 条件 | epoch 1 | epoch 2 | epoch 3 | 判定 |
+|---|---:|---:|---:|---:|
+| `fusion_conv` 权重非零 | pass | pass | pass | pass |
+| prior Ped strict >= 2.0 | 3.6060 | 2.5677 | 1.5745 | 仅 epoch1/2 |
+| Ped loose >= 27.5 | 25.0677 | 27.4581 | 27.4867 | 全部 fail |
+| 其他三类 0 差异 | pass | pass | pass | pass |
+
+- epoch2 最接近续训门槛，但 Ped loose 仍差 `0.0419`；epoch3 Ped loose 只差
+  `0.0133`，但 prior Ped strict 回落到 `1.5745`。没有任何一个 epoch 同时
+  满足续训条件，不进入 6 epoch。
+- 最终门槛同样未通过：Ped strict `>= 3.0`、Ped loose `>= 28.5`、
+  Overall `>= 39.85` 均未同时达到。
+- 修正残差死分支后，high-res radar 特征确实进入输出且训练稳定，但没有在
+  3-epoch 门控预算内带来稳定 Ped strict/loose 提升。按预设规则，Ped
+  high-res 支线不再续训，也不进入最终多 seed；后续保留 clean full RSSM
+  主线，论文若需要 Ped strict 则使用 stage1 `epoch_7.pth` +
+  `A alpha=0.75`。
