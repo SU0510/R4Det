@@ -3445,3 +3445,117 @@ Ped loose 三轮分别为 `25.0677`、`27.4581`、`27.4867`，均未达到续训
   high-res 支线不再续训，也不进入最终多 seed；后续保留 clean full RSSM
   主线，论文若需要 Ped strict 则使用 stage1 `epoch_7.pth` +
   `A alpha=0.75`。
+### 38.11 修复残差后的 6-epoch 收敛验证（已完成）
+
+#### 38.11.1 实验设置
+
+- 第 38.10 节结论被判定为“略微错过续训门槛”，而非“接近最终成功”：
+  epoch2 prior Ped strict `2.5677` 已过续训线，Ped loose `27.4581` 仅差
+  `0.0419`；raw loose 连续上升 `25.50 -> 26.24 -> 27.64`，heatmap loss
+  连续下降 `0.9066 -> 0.7941`，说明 proposal/recall 仍在学习，3 epoch
+  关闭路线过早。
+- 启动最终 6-epoch 收敛验证，保持单变量：不改结构、loss、prior 或 RSSM，
+  只延长正确 high-res 分支的训练周期。必须从 stage1 `epoch_7.pth` 重新
+  训练，不 resume 第 38.10 节 epoch3 checkpoint（其 CosineAnnealing 已接近
+  最低学习率，直接续训会改变实验含义）。
+- 配置：
+  `configs/r4det/TJ4D-R4Det_ped_highres_centerhead_6e_identity_lr1e-4.py`，
+  `load_from = ped_centerhead_stage1_3x2x2_12e_seed0/epoch_7.pth`，
+  `resume_from = None`，`max_epochs = 6`。
+- 固定参数：只有 `highres_ped_branch + ped_center_head` 可训练，其余模块
+  全部冻结并保持 eval；seed 0、deterministic、GPU 5/6/7、3 进程、
+  `samples_per_gpu=2`、`cumulative_iters=2`（有效 batch 12）、AdamW
+  lr `1e-4`；prior `[0.655454, 0.627535, 0.75]`。
+- 工作目录：
+  `/data/lurui/work_dirs/ped_highres_centerhead_gradfix_3x2x2_6e_seed0`。
+  日志：`20260912_170125.log`、`20260912_170125.log.json`。
+  每个 epoch 同时评估 raw 解码和固定 prior 解码。
+
+#### 38.11.2 残差权重非零证明
+
+| checkpoint | fusion weight nonzero | fusion weight L1 | fusion weight absmax | fusion bias nonzero |
+|---|---:|---:|---:|---:|
+| epoch 1 | 737280 / 737280 | 1206.9482 | 0.01293 | 256 / 256 |
+| epoch 2 | 737280 / 737280 | 1828.2423 | 0.02386 | 256 / 256 |
+| epoch 3 | 737280 / 737280 | 2205.3813 | 0.02894 | 256 / 256 |
+| epoch 4 | 737280 / 737280 | 2360.5073 | 0.03302 | 256 / 256 |
+| epoch 5 | 737280 / 737280 | 2403.9517 | 0.03434 | 256 / 256 |
+| epoch 6 | 737280 / 737280 | 2408.8564 | 0.03457 | 256 / 256 |
+
+`fusion_conv` weight 全轮非零，L1 从 `1206.9` 增长到 `2408.9` 后趋于饱和，
+确认 high-res radar 残差始终进入输出，梯度阻断问题在 6-epoch 尺度上同样
+已解除。
+
+#### 38.11.3 训练信号
+
+| epoch | mean total loss | mean heatmap loss | mean grad_norm |
+|---:|---:|---:|---:|
+| 1 | 0.9108 | 0.9066 | 5.7817 |
+| 2 | 0.9416 | 0.8375 | 3.3545 |
+| 3 | 1.0173 | 0.8131 | 2.8572 |
+| 4 | 1.0995 | 0.7953 | 2.7036 |
+| 5 | 1.1779 | 0.7737 | 2.7992 |
+| 6 | 1.2607 | 0.7565 | 2.7217 |
+
+heatmap loss 单调下降 `0.9066 -> 0.7565`，grad_norm 有限且稳定；
+total loss 上升来自 heatmap 头部随训练提高了对目标的回归压力，非异常。
+
+#### 38.11.4 Raw 解码结果（Ped 3D moderate）
+
+| epoch | Ped strict | Ped loose | Overall 3D moderate | Car strict | Truck strict | Cyclist loose |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.1401 | 25.4998 | 39.0945 | 49.9772 | 30.4303 | 50.4709 |
+| 2 | 0.0343 | 26.0599 | 39.2346 | 49.9772 | 30.4303 | 50.4709 |
+| 3 | 0.0252 | 23.7019 | 38.6451 | 49.9772 | 30.4303 | 50.4709 |
+| 4 | 0.0212 | 25.9307 | 39.2023 | 49.9772 | 30.4303 | 50.4709 |
+| 5 | 0.0347 | 28.1536 | 39.7580 | 49.9772 | 30.4303 | 50.4709 |
+| 6 | 0.0280 | 28.2763 | 39.7887 | 49.9772 | 30.4303 | 50.4709 |
+
+raw Ped loose/Overall 后段持续上升（epoch5 `28.1536`/`39.7580`、
+epoch6 `28.2763`/`39.7887`），但 raw Ped strict 全程在 `0.02-0.14` 噪声带，
+说明高分辨率分支始终没学出可用的 Ped 3D strict proposal。
+
+#### 38.11.5 固定 prior 解码结果（Ped 3D moderate）
+
+| epoch | Ped strict | Ped loose | Overall 3D moderate | Car strict | Truck strict | Cyclist loose |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 3.6060 | 25.0677 | 38.9865 | 49.9772 | 30.4303 | 50.4709 |
+| 2 | 2.5716 | 27.6956 | 39.6435 | 49.9772 | 30.4303 | 50.4709 |
+| 3 | 2.2570 | 27.0311 | 39.4774 | 49.9772 | 30.4303 | 50.4709 |
+| 4 | 1.7359 | 26.8478 | 39.4315 | 49.9772 | 30.4303 | 50.4709 |
+| 5 | 2.0015 | 26.9661 | 39.4611 | 49.9772 | 30.4303 | 50.4709 |
+| 6 | 1.7118 | 27.3861 | 39.5661 | 49.9772 | 30.4303 | 50.4709 |
+
+prior 复评把 Ped strict 拉到 epoch1 `3.6060`、epoch2 `2.5716`，但没有任何
+一个 epoch 同时达到 Ped loose `>= 28.2016` 和 Overall `>= 39.7700`：
+最优 Ped loose 是 epoch2 `27.6956`（低于门槛 `0.5060`），最优 Overall 是
+epoch2 `39.6435`（低于门槛 `0.1265`）。Car/Truck/Cyclist 六个 epoch 逐项
+完全一致（Car strict `49.9772`、Truck strict `30.4303`、Cyclist loose
+`50.4709`），0 差异，冻结隔离条件通过。
+
+#### 38.11.6 6-epoch 最终判定
+
+最低要求（同一 checkpoint 同时满足）：
+
+| 条件 | stage1 ep7 + Aα.75 | 6e best | 判定 |
+|---|---:|---:|---:|
+| Ped strict > 2.4054 | 2.4054 | epoch1 3.6060 | 单轮可过，但不稳定 |
+| Ped loose >= 28.2016 | 28.2016 | epoch2 27.6956 | fail |
+| Overall >= 39.7700 | 39.7700 | epoch2 39.6435 | fail |
+| 其他三类 0 差异 | - | 全部 0 差异 | pass |
+
+理想要求（`Ped strict >= 3.0`、`Ped loose >= 28.5`、`Overall >= 39.85`）
+同样未在同一 checkpoint 上达成。不能用不同 epoch 分别挑 strict 与 loose
+最优，按“同一 checkpoint 整体达标”口径，6-epoch 收敛验证失败。
+
+**结论：正式关闭 high-res / Ped 架构路线。** 修正残差死分支后，high-res
+radar 特征确实进入输出、训练稳定、heatmap loss 单调下降，raw loose/Overall
+后段也在上涨，但没有任何一个 checkpoint 同时超过现有可用方案
+stage1 `epoch_7.pth` + `A alpha=0.75`。Ped strict 与 loose 呈此消彼长，
+且 raw strict 始终无法离开噪声带，说明 0.16 m high-res CenterHead 重学
+proposal 的设计在这个预算下没有形成可用几何收益。
+
+后续只做最终方案多 seed 复现，不再改 RSSM/KL/BPTT：
+- clean full RSSM 作为主结果；
+- stage1 `epoch_7.pth` + `A alpha=0.75` 作为 Ped strict 补充方案；
+- seed 0/1/2，prior 参数固定，不再调 val。
