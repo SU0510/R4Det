@@ -3497,8 +3497,12 @@ Ped loose 三轮分别为 `25.0677`、`27.4581`、`27.4867`，均未达到续训
 | 5 | 1.1779 | 0.7737 | 2.7992 |
 | 6 | 1.2607 | 0.7565 | 2.7217 |
 
-heatmap loss 单调下降 `0.9066 -> 0.7565`，grad_norm 有限且稳定；
-total loss 上升来自 heatmap 头部随训练提高了对目标的回归压力，非异常。
+heatmap loss 单调下降 `0.9066 -> 0.7565`，grad_norm 有限且稳定。
+mean total loss 从 `0.9108` 升到 `1.2607`，增量约 `+0.10/epoch`，与冻结
+RSSM 的 `loss_rssm_kl` 完全对齐：`loss_rssm_kl` 按 `KLScaleSchedulerHook`
+从 epoch1 `0.0` 线性升到 epoch6 `0.5003`（`loss_rssm_recon` 稳定在
+`0.0028-0.0029`）。因此 total loss 上升来自 RSSM KL 项调度，不是 Ped
+回归 loss 异常；训练信号本身正常，失败是验证指标真实不成立。
 
 #### 38.11.4 Raw 解码结果（Ped 3D moderate）
 
