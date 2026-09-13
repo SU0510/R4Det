@@ -519,7 +519,7 @@ log_config = dict(
     ])
 dist_params = dict(backend='nccl')
 log_level = 'INFO'
-load_from = "/data/lurui/work_dirs/run10_headv2_multiseed/seed_1/epoch_15.pth"
+load_from = "/data/lurui/work_dirs/run10_headv2_multiseed/seed_1/epoch_14.pth"
 resume_from = None
 workflow = [('train', 1)]
 device = 'cuda'
