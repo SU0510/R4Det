@@ -3574,7 +3574,7 @@ proposal 的设计在这个预算下没有形成可用几何收益。
   不改 RSSM / KL / BPTT，不再训练 high-res，不再 sweep alpha。
 - clean full RSSM 三 seed 已完成（第 19 节：Overall `40.42 +/- 0.51`），本节不重训 clean，
   只补 Ped supplementary：seed1 / seed2 分别从对应 clean full RSSM checkpoint 训练
-  stage1 CenterHead。
+  stage1 CenterHead，并对 seed0 fixed `epoch_7.pth` 做同管线 raw / prior 复评以组成三 seed 配对。
 - 固定配置：12 epoch、`lr=1e-3`、`samples_per_gpu=2`、`cumulative_iters=2`
   （有效 batch 12）、`--deterministic`、GPU 5/6/7。
 - 固定选点：`epoch_7.pth`，不按 val 重新挑 epoch。
@@ -3598,7 +3598,24 @@ proposal 的设计在这个预算下没有形成可用几何收益。
 - 报告 Ped 3D moderate strict / loose、Overall 3D moderate，以及 Car strict、
   Truck strict、Cyclist loose 三项隔离指标。
 
-### 39.2 Seed 1（clean seed1 ep14 -> stage1 fixed ep7）
+### 39.2 Seed 0（clean seed0 ep16 -> stage1 fixed ep7，同管线复评）
+
+工作目录：`/data/lurui/work_dirs/ped_centerhead_stage1_3x2x2_12e_seed0`。
+配置 `load_from=/data/lurui/work_dirs/run10_headv2_multiseed/seed_0/epoch_16.pth`。
+
+同管线 `tools/test_vod.py --out` 复评：
+
+| 口径 | Ped strict | Ped loose | Overall 3D moderate | Car strict | Truck strict | Cyclist loose |
+|---|---:|---:|---:|---:|---:|---:|
+| stage1 ep7 raw | 0.0452 | 28.5298 | 39.8520 | 49.9772 | 30.4303 | 50.4709 |
+| stage1 ep7 + prior | 2.4054 | 28.2016 | 39.7700 | 49.9772 | 30.4303 | 50.4709 |
+
+- same-pipeline 复评精确复现第 34 节的 seed0 Aα.75 fixed ep7 数字：
+  strict `2.4054`、loose `28.2016`、Overall `39.7700`。
+- prior strict `2.4054 > raw 0.0452`，通过 seed 内 strict 提升条件。
+- prior loose 相对 raw `-0.3282`；非 Ped 三类逐项完全一致，0 差异。
+
+### 39.3 Seed 1（clean seed1 ep14 -> stage1 fixed ep7）
 
 工作目录：`/data/lurui/work_dirs/ped_centerhead_stage1_3x2x2_12e_seed1`。
 日志：`20260913_072011.log(.json)`。训练在 epoch10 保存后中断，但协议固定选点
@@ -3613,19 +3630,39 @@ proposal 的设计在这个预算下没有形成可用几何收益。
 
 - prior strict `3.5723 > raw 0.0713`，通过 seed 内 strict 提升条件。
 - prior loose 相对 raw `+1.5298`；非 Ped 三类逐项完全一致，0 差异。
-- 注意：seed1 clean/stage1 的 Car/Truck/Cyclist 绝对值与 seed0 stage1 训练日志口径不同
-  （不同 clean seed + `test_vod.py --out` 复评管线），因此本节最终只比较同 log/同复评管线内
-  raw vs prior 的 diff，不把 seed1 绝对值直接与第 31 节 seed0 日志行混作同口径。
+- seed1 的 Ped/Overall 绝对值偏低主要来自该 seed 的 clean checkpoint / stage1 训练结果；
+  Car/Truck/Cyclist 绝对值也与 seed0 不同，因此最终判定按每个 seed 内 raw vs prior 配对差值和
+  三 seed prior 均值统计，不跨 seed 混用绝对值。
 
-### 39.3 Seed 2（运行中 / 待补）
+### 39.4 Seed 2（clean seed2 ep14 -> stage1 fixed ep7）
 
 工作目录：`/data/lurui/work_dirs/ped_centerhead_stage1_3x2x2_12e_seed2`。
 配置 `load_from=/data/lurui/work_dirs/run10_headv2_multiseed/seed_2/epoch_14.pth`。
-训练已启动并从 stage1 ep1 开始验证；epoch1 raw 为 Ped strict `1.3249`、
-Ped loose `26.5489`、Overall `39.6863`（训练日志口径）。
-后续只补 fixed `epoch_7.pth` 的同管线 raw / prior 复评结果。
+日志：`20260913_134924.log(.json)`。训练已完整保存 12 个 epoch；本节固定使用
+`epoch_7.pth`，不按 val 重新选点。
 
-### 39.4 通过条件（最终统计，seed2 完成后判定）
+同管线 `tools/test_vod.py --out` 复评：
+
+| 口径 | Ped strict | Ped loose | Overall 3D moderate | Car strict | Truck strict | Cyclist loose |
+|---|---:|---:|---:|---:|---:|---:|
+| stage1 ep7 raw | 0.0281 | 24.3557 | 39.1380 | 51.3463 | 30.7597 | 50.0905 |
+| stage1 ep7 + prior | 1.1133 | 25.6637 | 39.4651 | 51.3463 | 30.7597 | 50.0905 |
+
+- prior strict `1.1133 > raw 0.0281`，通过 seed 内 strict 提升条件。
+- prior loose 相对 raw `+1.3080`，Overall 相对 raw `+0.3271`；非 Ped 三类逐项完全一致，0 差异。
+
+### 39.5 三 seed 统计与最终判定
+
+三 seed fixed ep7 同管线汇总：
+
+| seed | raw strict | prior strict | Δstrict | raw loose | prior loose | Δloose | raw Overall | prior Overall | ΔOverall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0 | 0.0452 | 2.4054 | +2.3602 | 28.5298 | 28.2016 | -0.3282 | 39.8520 | 39.7700 | -0.0820 |
+| 1 | 0.0713 | 3.5723 | +3.5010 | 26.6636 | 28.1934 | +1.5298 | 37.7779 | 38.1604 | +0.3825 |
+| 2 | 0.0281 | 1.1133 | +1.0852 | 24.3557 | 25.6637 | +1.3080 | 39.1380 | 39.4651 | +0.3271 |
+| mean | 0.0482 | 2.3637 | +2.3155 | 26.5164 | 27.3529 | +0.8365 | 38.9226 | 39.1318 | +0.2092 |
+
+通过条件核对：
 
 ```text
 每个 seed prior strict > raw strict
@@ -3634,5 +3671,13 @@ mean Ped loose 相对 raw 下降 <= 0.5
 Car / Truck / Cyclist 保持 0 差异
 ```
 
-若通过：clean full RSSM 作为主结果，stage1 ep7 + A alpha=0.75 作为 Ped strict 补充结果。
-若失败：只保留 clean full RSSM，本章 Ped supplementary 不再作为主结果的一部分。
+| 条件 | 结果 | 判定 |
+|---|---:|---:|
+| 每个 seed prior strict > raw strict | seed0 `2.4054>0.0452`；seed1 `3.5723>0.0713`；seed2 `1.1133>0.0281` | pass |
+| 三 seed mean Ped strict >= 1.0 | `2.3637` | pass |
+| mean Ped loose 相对 raw 下降 <= 0.5 | `+0.8365`（为提升，不是下降） | pass |
+| Car / Truck / Cyclist 保持 0 差异 | seed0/1/2 各自 raw vs prior 逐项完全一致 | pass |
+
+**结论：Ped supplementary 多 seed 复现通过。** clean full RSSM 继续作为主结果；
+stage1 fixed `epoch_7.pth` + `A alpha=0.75` 可作为 Ped strict 补充方案报告。
+高分辨率 / Ped 架构路线仍按第 38.11 节关闭，不因本节 supplemental 结果重启。
