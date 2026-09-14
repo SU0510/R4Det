@@ -192,9 +192,9 @@ model = dict(
         upsample_strides=[1, 2, 4],
         out_channels=[128, 128, 128]),
 
-    # Simple concat+conv fusion instead of Cross_Modal_Fusion
+    # Restore the fusion module pretrained in TJ4D-R4Det_pretrain_N4_2x4_12e.py
     RCFusion=dict(
-        type='ConcatConvFusion',
+        type='Cross_Modal_Fusion',
         img_channels=_dim_,
         rad_channels=rad_channels,
         out_channels=_dim_,
