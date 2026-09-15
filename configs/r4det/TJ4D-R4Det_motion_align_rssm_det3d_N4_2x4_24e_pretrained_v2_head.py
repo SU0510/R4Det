@@ -192,9 +192,9 @@ model = dict(
         upsample_strides=[1, 2, 4],
         out_channels=[128, 128, 128]),
 
-    # Restore the fusion module pretrained in TJ4D-R4Det_pretrain_N4_2x4_12e.py
+    # Restore the ConcatConvFusion baseline used by the clean full-RSSM runs.
     RCFusion=dict(
-        type='Cross_Modal_Fusion',
+        type='ConcatConvFusion',
         img_channels=_dim_,
         rad_channels=rad_channels,
         out_channels=_dim_,
@@ -239,6 +239,11 @@ model = dict(
         ignore_dir_classes=[0],      # disable dir classifier for Pedestrian
         anchor_class_mapping=[0, 0, 0, 1, 2, 3],  # Pedx3, Cyc, Car, Truck
         use_iou_branch=True,
+        shared_stem=True,
+        shared_stem_channels=256,
+        shared_stem_kernel_size=3,
+        shared_stem_residual_scale=0.1,
+        norm_cfg=dict(type='GN', num_groups=32),
         anchor_generator=dict(
             type='Anchor3DRangeGenerator',
             ranges=[

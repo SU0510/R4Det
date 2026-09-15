@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from mmcv.runner import BaseModule, force_fp32
+from mmcv.cnn import build_norm_layer
 from torch import nn as nn
 
 from mmdet3d.core import (PseudoSampler, box3d_multiclass_nms, limit_period,
@@ -81,6 +82,11 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                  ped_refine_channels=64,
                  ped_refine_dims=(0, 1, 2, 3, 4, 5, 6),
                  ped_refine_detach=False,
+                 shared_stem=False,
+                 shared_stem_channels=256,
+                 shared_stem_kernel_size=3,
+                 shared_stem_residual_scale=0.1,
+                 norm_cfg=dict(type='GN', num_groups=32),
                  **kwargs):
         super().__init__(init_cfg=init_cfg)
         self.in_channels = in_channels
@@ -107,6 +113,11 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         self.ped_refine_channels = ped_refine_channels
         self.ped_refine_dims = tuple(ped_refine_dims)
         self.ped_refine_detach = ped_refine_detach
+        self.shared_stem = shared_stem
+        self.shared_stem_channels = shared_stem_channels
+        self.shared_stem_kernel_size = shared_stem_kernel_size
+        self.shared_stem_residual_scale = shared_stem_residual_scale
+        self.norm_cfg = norm_cfg
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.assigner_per_size = assigner_per_size
@@ -219,6 +230,18 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
     def _init_layers(self):
         """Initialize neural network layers of the head."""
         self.cls_out_channels = self.num_anchors * self.num_classes
+        if self.shared_stem:
+            padding = self.shared_stem_kernel_size // 2
+            norm_name, norm_layer = build_norm_layer(
+                self.norm_cfg, self.shared_stem_channels)
+            self.shared_stem_layer = nn.Sequential(
+                nn.Conv2d(
+                    self.feat_channels,
+                    self.shared_stem_channels,
+                    self.shared_stem_kernel_size,
+                    padding=padding),
+                norm_layer,
+                nn.ReLU(inplace=True))
         self.conv_cls = nn.Conv2d(self.feat_channels, self.cls_out_channels, 1)
         self.conv_reg = nn.Conv2d(self.feat_channels,
                                   self.num_anchors * self.box_code_size, 1)
@@ -321,6 +344,10 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
             tuple[torch.Tensor]: Contain score of each class, bbox
                 regression and direction classification predictions.
         """
+
+        if self.shared_stem:
+            stem = self.shared_stem_layer(x)
+            x = x + self.shared_stem_residual_scale * stem
 
         cls_score = self.conv_cls(x)
         bbox_pred = self.conv_reg(x)
