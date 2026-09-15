@@ -3704,3 +3704,97 @@ Overall -0.4724
 仍是唯一主模型，结果成功（`40.42 +/- 0.51`）。stage1 fixed `epoch_7.pth` + `A alpha=0.75`
 仅在论文消融或应用明确重视 Ped strict 时报告。test set / 最终提交只优先跑 clean RSSM；
 不再训练任何新结构，不再调整 alpha。
+
+---
+
+## 40. 恢复预训练 Cross-Modal Fusion 的 seed0 门控（未通过，已停止）
+
+### 40.1 实验动机与唯一配置改动
+
+当前主配置此前使用随机初始化的 `ConcatConvFusion`，但 `checkpoints/pretrained_tj4d.pth`
+是在 `TJ4D-R4Det_pretrain_N4_2x4_12e.py` 下训练的，融合模块为
+`Cross_Modal_Fusion`。预训练 checkpoint 中包含完整的
+`cross_attention.att_img`、`cross_attention.att_radar` 和
+`cross_attention.reduce_mixBEV` 权重，而旧的 concat fusion 配置不会加载这些权重。
+该融合位于 RSSM 前方，会影响全部四类，因此先恢复它比继续修改 Ped/Truck head 更贴近
+“提升整个网络”的目标，且改动最小。
+
+唯一配置改动：
+`configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head.py`
+中的 `RCFusion.type: ConcatConvFusion -> Cross_Modal_Fusion`。其余固定项未变：
+N4、`hidden_dim=128`、BPTT1、`kl_scale=1.0`、`free_nats=1.0`、
+`samples_per_gpu=2`、`cumulative_iters=2`（有效 batch 12）、AdamW
+`lr=1.5e-4`、24 epoch、`checkpoint_interval=1`、seed0、deterministic、
+GPU 5/6/7、`load_from=checkpoints/pretrained_tj4d.pth`。
+
+相关提交：`2cd85fc config: restore pretrained cross-modal fusion`。
+
+### 40.2 预训练融合权重加载证明
+
+启动日志：
+`/data/lurui/work_dirs/crossmodal_fusion_N4_2x4_24e_seed0/20260914_151155.log`。
+
+- `load checkpoint from local path: checkpoints/pretrained_tj4d.pth`
+- 模型结构日志包含 `(cross_attention): Cross_Modal_Fusion(...)`
+- `missing keys in source state_dict` 中不包含任何 `cross_attention.*`；
+  missing keys 只包含未变化的 `pts_bbox_head.conv_iou.*` 和
+  `temporal_fusion.*` 等本实验不会从预训练模型加载的新模块。
+
+因此本次 seed0 确实使用了预训练融合权重，不是从随机初始化的
+`ConcatConvFusion` 重训。
+
+### 40.3 训练设置与停止口径
+
+命令：
+
+```bash
+source .envrc
+CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
+  configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head.py \
+  3 --seed 0 --deterministic \
+  --work-dir /data/lurui/work_dirs/crossmodal_fusion_N4_2x4_24e_seed0
+```
+
+工作目录：`/data/lurui/work_dirs/crossmodal_fusion_N4_2x4_24e_seed0`。
+日志：`20260914_151155.log`、`20260914_151155.log.json`。
+训练在 ep16 验证写入并完成门控判定后停止，未继续跑到 24 epoch，
+也未启动 seed1/2。停止后 GPU 5/6/7 已释放。
+
+### 40.4 ep12-16 门控结果
+
+基线（完整 RSSM seed0 ep12-16 mean）：
+
+| 指标 | 基线 | CrossModal seed0 ep12-16 mean | Δ |
+|---|---:|---:|---:|
+| Overall 3D moderate | 38.3902 | 37.9789 | -0.4113 |
+| Overall BEV moderate | 46.9612 | 46.3749 | -0.5863 |
+| Car 3D moderate strict | 47.8027 | 45.7627 | -2.0400 |
+| Truck 3D moderate strict | 28.2149 | 31.4858 | +3.2709 |
+| Cyclist 3D moderate loose | 48.6271 | 48.9808 | +0.3537 |
+| Pedestrian 3D moderate loose | 28.9160 | 25.6864 | -3.2296 |
+
+逐 epoch 明细：
+
+| epoch | Overall 3D | Overall BEV | Car strict | Truck strict | Cyclist loose | Ped loose |
+|---:|---:|---:|---:|---:|---:|---:|
+| 12 | 38.0084 | 46.8464 | 46.9644 | 30.4760 | 48.5425 | 26.0507 |
+| 13 | 37.5784 | 46.0572 | 43.7610 | 33.0847 | 48.2254 | 25.2427 |
+| 14 | 38.9041 | 47.1531 | 47.5680 | 32.2926 | 49.2393 | 26.5165 |
+| 15 | 36.1203 | 44.6835 | 43.0773 | 30.1687 | 48.4840 | 22.7510 |
+| 16 | 39.2835 | 47.1344 | 47.4430 | 31.4070 | 50.4128 | 27.8710 |
+
+### 40.5 门控判定
+
+| 条件 | 结果 | 判定 |
+|---|---:|---|
+| Overall 3D moderate >= 38.8900 | 37.9789 | fail |
+| 四个组成项均不得下降超过 1.0 | Car -2.0400, Ped -3.2296 | fail |
+| 至少两个类别提升 >= 0.5 | Truck +3.2709, Cyclist +0.3537 | fail |
+| Overall BEV moderate 提升 >= 0.5 | -0.5863 | fail |
+
+**结论：恢复预训练 Cross-Modal Fusion 的 seed0 门控未通过，不启动 seed1/2，
+不进入 24 epoch 完整训练。** 该改动确实加载了被浪费的预训练融合权重，且 Truck strict
+有明确提升，但 Car strict、Ped loose 与 Overall/BEV 均回退，说明预训练融合权重与当前
+RSSM/head 训练组合没有形成稳定的全网收益。下一步若继续主线，才考虑用户预设的
+“共享 stem + 四类独立 prediction tower / 梯度平衡”，不在本次实验中展开。
+
