@@ -4059,3 +4059,92 @@ max600 相对 max300 的配对变化全部接近 0：
 - 保留 clean RSSM 为主模型；shared stem 仍是综合增益但未过 Cyclist 红线候选。
 - 下一步若继续诊断，应按用户预设做“阈值正确的一对一匹配 + Cyclist PR 曲线”，区分几何未命中与
   “有合格框但排在 FP 后面”；不要先加 score bias、PCGrad 或四类 tower。
+
+---
+
+## 43. Cyclist 离线误差分解：oracle recall 与 41 点 PR（只读诊断）
+
+### 43.1 目的与口径
+
+第 41 节用 quick-recall 脚本统计 Cyclist 漏检，但它允许任意 `IoU>0` 的框先占用 GT，
+与正式评估的 `IoU>=0.25` 一一匹配口径不同；第 42 节又排除了 `nms_pre` / `max_num`
+的输出预算主因。本节按用户预设做**阈值正确**的离线分解，只使用已有 clean ep16、
+shared stem ep14/ep16 预测 dump，不训练、不改模型、不加 score bias。
+
+新增只读脚本 `tools/cyc_error_decomposition.py`，复用正式评估语义：
+
+- 从各自训练目录的配置快照读取 `TJ4D_infos_val.pkl`；dump 中的 LiDAR 框按旧版
+  `tools/test_vod.py` 约定转 camera 框；
+- 用 VOD evaluator 的 CPU rotate IoU（`rotate_iou_cpu.rotate_iou_eval`）作为
+  `d3_box_overlap`，保证与正式 `IoU>=0.25` 口径一致；
+- 统计 moderate、Cyclist、3D 的 oracle recall（不看分数，一一匹配）与正式 41 点 PR，
+  并给出分数字段的 TP/FP/FN。
+
+复现门控：脚本内置三个 dump 的期望 AP40（clean ep16 `50.4709`、stem ep14 `45.3136`、
+stem ep16 `41.9200`），复评必须逐项匹配，否则直接退出。本次运行三项全部 `OK`，
+与正式 `tools/test_vod.py` 记录值一致。
+
+### 43.2 oracle recall vs 正式 AP
+
+moderate Cyclist GT 分母（difficulty 累积，`range<=70`）为 `2143`。
+
+| 模型 | oracle recall | 一一匹配 GT | 正式 3D AP40 | AP vs clean |
+|---|---:|---:|---:|---:|
+| clean ep16 | 0.7611 | 1631 / 2143 | 50.4709 | — |
+| stem ep14 | 0.7485 | 1604 / 2143 | 45.3136 | -5.1573 |
+| stem ep16 | 0.7448 | 1596 / 2143 | 41.9200 | -8.5509 |
+
+- oracle recall 只小幅下降：stem ep14 比 clean 低 `0.0126`（少 27 个可命中 GT），
+  stem ep16 低 `0.0163`（少 35 个）。
+- 正式 AP 下降远大于 oracle recall 损失：`-5.16` / `-8.55`。
+
+### 43.3 41 点 PR 关键行
+
+三个模型的 recall 在整条曲线基本停在各自的 oracle recall 平台（~0.75），
+差别集中在平台上的精度衰减速度：
+
+| PR 索引 | clean P | stem14 P | stem16 P |
+|---:|---:|---:|---:|
+| 0 | 1.0000 | 1.0000 | 1.0000 |
+| 10 | 0.9926 | 0.9745 | 0.9354 |
+| 15 | 0.9157 | 0.7376 | 0.5805 |
+| 20 | 0.4540 | 0.2519 | 0.1737 |
+| 25 | 0.0448 | 0.0440 | 0.0369 |
+| 31 | 0.0066 | 0.0000 | 0.0000 |
+
+clean 在 recall `0.76` 附近仍维持较高精度直到索引 ~15 才明显衰减；两个 stem
+checkpoint 在相同 recall 平台上精度更早、更快下滑。
+
+### 43.4 分数段 TP/FP/FN（same-class 一一匹配 IoU>=0.25）
+
+| 分数段 | clean TP/FP | stem14 TP/FP | stem16 TP/FP |
+|---|---:|---:|---:|
+| 0.00-0.05 | 294 / 162088 | 32 / 121663 | 201 / 166968 |
+| 0.05-0.10 | 329 / 63597 | 336 / 120139 | 368 / 62460 |
+| 0.10-0.20 | 236 / 17427 | 363 / 36854 | 305 / 18143 |
+| 0.20-0.30 | 112 / 2482 | 164 / 5284 | 118 / 3226 |
+| 0.30-0.50 | 97 / 978 | 162 / 1597 | 109 / 1307 |
+| 0.50-0.70 | 68 / 254 | 107 / 308 | 64 / 282 |
+| 0.70-1.00 | 495 / 314 | 440 / 242 | 431 / 161 |
+| FN | 512 | 539 | 547 |
+
+关键观察：
+
+- 未命中 GT（FN）只从 clean `512` 增到 stem14 `539`、stem16 `547`，与 oracle recall
+  的小幅下降一致，不是主因。
+- 高分段（`0.70-1.00`）命中 GT 反而减少：clean `495` → stem14 `440` → stem16 `431`。
+- 中低分段（`0.05-0.30`）stem 的 TP 更多，但 FP 也明显更多，说明合格框存在，
+  只是被排到大量低置信同/异类预测之后。
+
+### 43.5 判定
+
+- oracle recall 仅小幅下降（-0.0126 / -0.0163），说明**几何/候选层有少量损失**，
+  不是 Cyclist 候选整体消失。
+- 正式 AP 下降（-5.16 / -8.55）远大于 oracle recall 损失，且高分段 TP 减少、
+  中低分段 FP 增多，说明**主导是固定候选内 Cyclist 分数排序/分离质量下降**，
+  即“有合格框但排在 FP 后面”。
+- 这满足用户预设的第二分支（oracle recall 基本持平而 AP 下降）。下一步若继续，
+  唯一单变量是 **Cyclist 独立分类/score 分支**（保留 shared stem、RSSM、回归），
+  seed0 单变量门控；不要先做常数 Cyclist score bias（固定候选集内不改变自身排序），
+  也不先加 PCGrad 或四类 tower。
+- clean RSSM 继续作主模型；shared stem 仍是综合增益但未过 Cyclist 红线的候选。
