@@ -3798,3 +3798,106 @@ CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
 RSSM/head 训练组合没有形成稳定的全网收益。下一步若继续主线，才考虑用户预设的
 “共享 stem + 四类独立 prediction tower / 梯度平衡”，不在本次实验中展开。
 
+---
+
+## 41. 共享残差 Head Stem 的 seed0 门控（未通过，已停止）
+
+### 41.1 实验动机与唯一结构改动
+
+第 40 节说明 Cross-Modal Fusion 不是稳定全网收益：Truck 明显提升，但 Car、Ped 与
+Overall/BEV 回退。检测头此时仍是四个输出直接 `1x1 Conv` 读取同一 BEV 特征，缺少共享的
+局部空间上下文。为在不改变 RSSM、KL、BPTT、融合模块、anchor、loss 和 assigner 的前提下，
+先验证“共享 head stem”这一最小结构改动，恢复 `ConcatConvFusion` 基线并在
+`Anchor3DHead` 内加入默认关闭的共享残差 stem：
+
+```text
+RSSM fused BEV x
+  |
+  +-- shared stem:
+      Conv3x3 256->256
+      GroupNorm(32)
+      ReLU
+  |
+  x_head = x + 0.1 * stem(x)
+  |
+  +-- original conv_cls / conv_reg / conv_dir / conv_iou
+```
+
+配置：
+
+```python
+shared_stem=True
+shared_stem_channels=256
+shared_stem_kernel_size=3
+shared_stem_residual_scale=0.1
+norm_cfg=dict(type='GN', num_groups=32)
+```
+
+主配置唯一融合回退：
+`RCFusion.type: Cross_Modal_Fusion -> ConcatConvFusion`。其余固定项保持 N4、
+`hidden_dim=128`、BPTT1、`kl_scale=1.0`、`free_nats=1.0`、`samples_per_gpu=2`、
+`cumulative_iters=2`（有效 batch 12）、AdamW `lr=1.5e-4`、24 epoch、
+`checkpoint_interval=1`、seed0、deterministic、GPU 5/6/7、
+`load_from=checkpoints/pretrained_tj4d.pth`。旧模型路径 `shared_stem=False` 保持兼容。
+
+相关提交：`b4fd7be feat(head): add shared residual stem baseline`。
+
+### 41.2 训练设置与停止口径
+
+命令：
+
+```bash
+source .envrc
+CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
+  configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head.py \
+  3 --seed 0 --deterministic \
+  --work-dir /data/lurui/work_dirs/shared_stem_N4_2x4_24e_seed0
+```
+
+工作目录：`/data/lurui/work_dirs/shared_stem_N4_2x4_24e_seed0`。
+日志：`20260915_140142.log(.json)`、`20260915_160728.log(.json)`、`resume_from_ep1.log`。
+前 1 epoch 跑完后从中途暂停，之后从完整 `epoch_1.pth` 后台续训到 ep16。
+启动日志确认模型结构包含 `(shared_stem_layer): Sequential(...)`，且
+`missing keys in source state_dict` 只包含预期的
+`pts_bbox_head.shared_stem_layer.*`、`conv_iou.*`、`temporal_fusion.*` 等新增模块。
+训练在 ep16 验证写入并完成门控判定后停止，未继续跑到 24 epoch，也未启动 seed1/2。
+停止后 GPU 5/6/7 已释放。
+
+### 41.3 ep12-16 门控结果
+
+基线（完整 RSSM seed0 ep12-16 mean）：
+
+| 指标 | 基线 | SharedStem seed0 ep12-16 mean | Δ |
+|---|---:|---:|---:|
+| Overall 3D moderate | 38.3902 | 39.2738 | +0.8836 |
+| Overall BEV moderate | 46.9612 | 47.5756 | +0.6144 |
+| Car 3D moderate strict | 47.8027 | 50.9517 | +3.1490 |
+| Truck 3D moderate strict | 28.2149 | 31.6556 | +3.4407 |
+| Cyclist 3D moderate loose | 48.6271 | 43.9478 | -4.6793 |
+| Pedestrian 3D moderate loose | 28.9160 | 30.5398 | +1.6238 |
+
+逐 epoch 明细：
+
+| epoch | Overall 3D | Overall BEV | Car strict | Truck strict | Cyclist loose | Ped loose |
+|---:|---:|---:|---:|---:|---:|---:|
+| 12 | 39.1498 | 48.3258 | 49.1565 | 32.3175 | 44.0043 | 31.1207 |
+| 13 | 37.9782 | 47.0692 | 52.9902 | 30.0694 | 41.7074 | 27.1457 |
+| 14 | 40.3045 | 48.1600 | 51.6225 | 30.2040 | 45.3136 | 34.0779 |
+| 15 | 39.0903 | 46.8956 | 49.6405 | 31.2571 | 46.7937 | 28.6697 |
+| 16 | 39.8460 | 47.4272 | 51.3488 | 34.4300 | 41.9200 | 31.6850 |
+
+### 41.4 门控判定
+
+| 条件 | 结果 | 判定 |
+|---|---:|---|
+| Overall 3D moderate >= 38.8900 | 39.2738 | pass |
+| Overall BEV moderate >= 47.4600 | 47.5756 | pass |
+| 四个组成项均不得下降超过 1.0 | Cyclist loose -4.6793 | fail |
+| 至少两个类别提升 >= 0.5 | Car +3.1490, Truck +3.4407, Ped +1.6238 | pass |
+
+**结论：共享残差 Head Stem 的 seed0 门控未通过，不启动 seed1/2，不进入 24 epoch 完整训练。**
+该结构确实提高了 Overall、BEV、Car strict、Truck strict 和 Ped loose，但 Cyclist loose
+在 ep13/ep16 跌到 `41.71/41.92`，ep12-16 均值比基线低 `4.68`，超出「任一类别下降不得超过
+1.0」的限制。共享 stem 不是无收益改动，但它把类别间分配问题从 Truck/Car 转移并放大到
+Cyclist；按预设规则，下一步不应盲目继续堆 24 epoch 或多 seed，而应先测四类 loss 对 RSSM
+输出的梯度 cosine，再决定 `PCGrad`、class-balanced loss 或独立 tower。
