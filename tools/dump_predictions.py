@@ -19,7 +19,7 @@ warnings.filterwarnings('ignore')
 
 import torch
 import numpy as np
-from mmcv import Config
+from mmcv import Config, DictAction
 from mmcv.parallel import MMDataParallel
 from mmcv.runner import load_checkpoint
 
@@ -39,6 +39,8 @@ def parse_args():
     p.add_argument('--raw-nms', action='store_true', default=False,
                    help='bypass CenterHead NMS: save all decoded Ped boxes (circle r=0)')
     p.add_argument('--nms-thr', type=float, default=0.2, help='rotate NMS IoU thr when --rotate-nms')
+    p.add_argument('--cfg-options', nargs='+', action=DictAction,
+                   help='override config settings, e.g. test_cfg.pts.nms_pre=2000')
     return p.parse_args()
 
 
@@ -51,6 +53,8 @@ def main():
     torch.backends.cudnn.benchmark = False
 
     cfg = Config.fromfile(args.config)
+    if args.cfg_options is not None:
+        cfg.merge_from_dict(args.cfg_options)
     if args.limit > 0:
         cfg.data.val.ann_file = cfg.data.val.ann_file  # unchanged
     cfg.model.pretrained = None
