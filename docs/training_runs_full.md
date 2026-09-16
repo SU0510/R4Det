@@ -3901,3 +3901,79 @@ CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
 1.0」的限制。共享 stem 不是无收益改动，但它把类别间分配问题从 Truck/Car 转移并放大到
 Cyclist；按预设规则，下一步不应盲目继续堆 24 epoch 或多 seed，而应先测四类 loss 对 RSSM
 输出的梯度 cosine，再决定 `PCGrad`、class-balanced loss 或独立 tower。
+
+### 41.5 Cyclist 漏检诊断
+
+诊断只使用推理 dump 和最后一个训练 checkpoint 的 CPU/GPU 只读分析，不启动新训练。
+clean baseline 使用其训练目录内保存的配置快照和 `epoch_16.pth`；shared stem 使用
+`epoch_14.pth`、`epoch_16.pth`。两套配置均保持 `ConcatConvFusion`、RSSM/N=4/BPTT=1 不变。
+
+预测 dump：
+
+| 模型 | checkpoint | nms_pre | dump |
+|---|---:|---:|---|
+| clean seed0 | ep16 | 1000 | `/data/lurui/work_dirs/diag_dumps/shared_stem_cyc/clean_seed0_ep16.pkl` |
+| shared stem seed0 | ep14 | 1000 | `/data/lurui/work_dirs/diag_dumps/shared_stem_cyc/stem_seed0_ep14.pkl` |
+| shared stem seed0 | ep16 | 1000 | `/data/lurui/work_dirs/diag_dumps/shared_stem_cyc/stem_seed0_ep16.pkl` |
+
+`tools/cyc_drop_analysis.py` 的 same-class greedy quick recall：
+
+| 模型 | Cyclist GT | loose recall | strict recall | pred/sample |
+|---|---:|---:|---:|---:|
+| clean ep16 | 2153 | 0.505 | 0.235 | 131.67 |
+| stem ep14 | 2153 | 0.526 | 0.221 | 153.53 |
+| stem ep16 | 2153 | 0.482 | 0.222 | 129.15 |
+
+这说明 ep14 的 Cyclist loose quick recall 实际高于 clean，ep16 才下降。没有出现
+“Cyclist 候选完全消失”的现象；三个模型的 `samples_with_0_cyc_pred` 都是 0。
+
+`tools/cyc_drop_diagnosis.py` 进一步检查跨类重叠和最终输出上限：
+
+| 模型 | same-class loose | any-label loose | 漏检中跟他类 loose 重叠 | final preds/sample | 打满 300 |
+|---|---:|---:|---:|---:|---:|
+| clean ep16 | 0.505 | 0.740 | 63 / 1066 | 294.85 | 1895 / 2040 |
+| stem ep14 | 0.526 | 0.730 | 39 / 1020 | 299.08 | 2010 / 2040 |
+| stem ep16 | 0.482 | 0.707 | 48 / 1116 | 298.43 | 1960 / 2040 |
+
+跨类吸走只占 Cyclist 漏检的小部分，且 stem ep16 主要是 same-class loose recall 下降和
+any-label 重叠下降。最终输出几乎全部打满 `max_num=300`，因此按预设规则做了唯一推理消融：
+clean 与 shared stem 都只把 `nms_pre` 从 `1000` 调到 `2000`，其余 checkpoint/config 不变。
+
+| 模型 | nms_pre=1000 loose | nms_pre=2000 loose | 变化 | pred/sample @2000 |
+|---|---:|---:|---:|---:|
+| clean ep16 | 0.505 | 0.510 | +0.005 | 176.45 |
+| stem ep14 | 0.526 | 0.533 | +0.007 | 201.40 |
+| stem ep16 | 0.482 | 0.497 | +0.015 | 172.81 |
+
+`nms_pre=2000` 对所有模型都只有小幅 quick-recall 改善，stem ep16 相对 clean 仍有
+`-0.013` 的 same-class loose quick recall 差距；lost/gained 配对仍是净损失目标
+(`lost=227, gained=198`)，且 lost 目标中只有 5 个在 new dump 里被其他类 loose 重叠。
+因此 pre-NMS 候选截断有贡献，但不能解释 Cyclist loose 的主缺口，不能把修复目标限定为
+提高 `nms_pre`。
+
+最后用 `tools/class_grad_cosine.py` 检查四类 loss 对 shared BEV/RSSM 输出特征的梯度方向。
+验证集前 500 个样本中最后一帧没有任何 Pedestrian 正样本，因此 Pedestrian 无正样本的列只作背景
+参考；关键看 Cyclist/Car/Truck。两个 stem ep16 窗口（samples 491-492、501-502）的分类梯度：
+
+| 窗口 | Cyclist-Ped | Cyclist-Car | Cyclist-Truck | Cyclist vs mean |
+|---|---:|---:|---:|---:|
+| 491-492 | +0.896 | +0.036 | +0.811 | +0.902 |
+| 501-502 | +0.968 | +0.198 | +0.942 | +0.970 |
+
+加入 bbox loss 后（`cls_bbox`）仍为正：
+
+| 窗口 | Cyclist-Ped | Cyclist-Car | Cyclist-Truck | Cyclist vs mean |
+|---|---:|---:|---:|---:|
+| 491-492 | +0.700 | +0.033 | +0.578 | +0.722 |
+| 501-502 | +0.899 | +0.153 | +0.840 | +0.906 |
+
+clean ep16 在同一窗口 491-492 的方向也相同：Cyclist-Ped `+0.886`、Cyclist-Car `+0.012`、
+Cyclist-Truck `+0.825`。当前证据不支持「反复出现负向梯度冲突导致 Cyclist 被 Car/Truck/Ped
+抵消」；更符合观测的解释是共享 stem 让 Cyclist 自身响应/排序下降，或学习过程把 Cyclist 的
+少量鲁棒性能换给了 Car/Truck/Ped，而不是单纯 `PCGrad` 能解决的符号冲突。
+
+**41.5 结论：** `nms_pre=2000` 不恢复骨干问题，四类 loss 对共享特征的梯度 cosine 也不是
+负冲突。下一步不应先上 `PCGrad`；应保留 clean RSSM 为主模型，把 shared stem 保留为候选，
+并针对 Cyclist 单独定位“分数下降/排序被挤”的来源。可选的下一个单变量是 Cyclist score/rank
+诊断（例如 per-class score calibration 或只在推理阶段检查 Cyclist score bias），而不是同时
+引入四类 tower 和梯度平衡。
