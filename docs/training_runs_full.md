@@ -3977,3 +3977,85 @@ Cyclist-Truck `+0.825`。当前证据不支持「反复出现负向梯度冲突�
 并针对 Cyclist 单独定位“分数下降/排序被挤”的来源。可选的下一个单变量是 Cyclist score/rank
 诊断（例如 per-class score calibration 或只在推理阶段检查 Cyclist score bias），而不是同时
 引入四类 tower 和梯度平衡。
+
+---
+
+## 42. `max_num=300 -> 600` 推理消融（未恢复 Cyclist loose，已停止）
+
+### 42.1 动机与唯一变量
+
+第 41 节已经排除了 `nms_pre=1000 -> 2000` 是 Cyclist loose 缺口的主因，但还存在一个更直接的
+输出预算变量：`model.test_cfg.pts.max_num`。`box3d_multiclass_nms` 先逐类 NMS，再按跨类分数排序，
+最后用 `max_num` 截断；因此 `nms_pre` 不是最终输出上限。shared stem 的 ep14/ep16 在 max300 下
+分别有 `2010/2040`、`1960/2040` 帧打满，clean ep16 也有 `1895/2040` 帧打满，所以本次只做一个
+单变量推理消融：
+
+```text
+model.test_cfg.pts.max_num: 300 -> 600
+```
+
+其余完全不变：`nms_pre=1000`、NMS 阈值、checkpoint、各自训练目录中的配置快照、正式
+`tools/test_vod.py --eval bbox` 管线。未启动训练，未改模型结构或 loss。
+
+复评命令模板：
+
+```bash
+source .envrc
+CUDA_VISIBLE_DEVICES=5 python tools/test_vod.py \
+  --config <训练目录配置快照> \
+  --checkpoint <ckpt> \
+  --gpu-id 0 --eval bbox \
+  --out /data/lurui/work_dirs/diag_dumps/shared_stem_cyc_max600/<run>_max600.pkl \
+  --saveoutput /data/lurui/work_dirs/diag_dumps/shared_stem_cyc_max600/<run>_max600.json \
+  --cfg-options model.test_cfg.pts.max_num=600
+```
+
+### 42.2 正式 KITTI moderate AP
+
+| 模型 | Overall 3D | Overall BEV | Cyclist 3D loose | Cyclist BEV loose | Car strict | Truck strict | Ped loose |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| clean ep16 max300 | 39.8802 | 47.6956 | 50.4709 | 53.5793 | 49.9772 | 30.4303 | 28.6426 |
+| clean ep16 max600 | 39.8811 | 47.6938 | 50.4659 | 53.5903 | 49.9769 | 30.4158 | 28.6657 |
+| stem ep14 max300 | 40.3045 | 48.1600 | 45.3136 | 47.8553 | 51.6225 | 30.2040 | 34.0779 |
+| stem ep14 max600 | 40.3017 | 48.1504 | 45.3115 | 47.8518 | 51.6219 | 30.1826 | 34.0907 |
+| stem ep16 max300 | 39.8460 | 47.4272 | 41.9200 | 44.5349 | 51.3488 | 34.4300 | 31.6850 |
+| stem ep16 max600 | 39.8451 | 47.4309 | 41.9173 | 44.5321 | 51.3485 | 34.4177 | 31.6970 |
+
+max600 相对 max300 的配对变化全部接近 0：
+
+| 模型 | Δ Overall 3D | Δ Overall BEV | Δ Cyclist 3D loose | Δ Cyclist BEV loose |
+|---|---:|---:|---:|---:|
+| clean ep16 | +0.0009 | -0.0018 | -0.0050 | +0.0110 |
+| stem ep14 | -0.0028 | -0.0096 | -0.0021 | -0.0035 |
+| stem ep16 | -0.0009 | +0.0037 | -0.0027 | -0.0028 |
+
+同口径与 clean ep16 max600 相比：
+
+| 模型 | Δ Overall 3D | Δ Overall BEV | Δ Cyclist 3D loose | Δ Cyclist BEV loose | Δ Car strict | Δ Truck strict | Δ Ped loose |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| stem ep14 | +0.4206 | +0.4566 | -5.1544 | -5.7385 | +1.6450 | -0.2332 | +5.4250 |
+| stem ep16 | -0.0360 | -0.2629 | -8.5486 | -9.0582 | +1.3716 | +4.0019 | +3.0313 |
+
+### 42.3 输出上限占用
+
+加载三个 max600 `.pkl`，按每个样本 `pts_bbox` 的输出数量统计：
+
+| 模型 | mean preds/sample | min | max | 打满 600 | 打满 300 |
+|---|---:|---:|---:|---:|---:|
+| clean ep16 | 524.63 | 64 | 600 | 1151 / 2040 | 1895 / 2040 |
+| stem ep14 | 557.56 | 179 | 600 | 1385 / 2040 | 2010 / 2040 |
+| stem ep16 | 536.86 | 97 | 600 | 1132 / 2040 | 1960 / 2040 |
+
+`max_num=600` 仍然大量打满，但正式 AP 几乎不变；这说明固定 300 不是当前 Cyclist loose 缺口的
+瓶颈，或者说仅在最终预算上扩容不能恢复 Cyclist 的排序质量。
+
+### 42.4 判定
+
+- `max_num=600` 对 clean、stem ep14、stem ep16 的 Overall、BEV、Cyclist loose 都只有 `|Δ| < 0.02`
+  的变化。
+- stem ep14 相对 clean 的 Cyclist 3D loose 缺口仍为 `-5.15`，stem ep16 仍为 `-8.55`。
+- 按预设停止规则，两个 stem checkpoint 的 Cyclist 缺口都没有明显收窄，因此不继续复评 stem ep12-16，
+  也不用 max600 重算 clean 窗口，不启动 seed1/2。
+- 保留 clean RSSM 为主模型；shared stem 仍是综合增益但未过 Cyclist 红线候选。
+- 下一步若继续诊断，应按用户预设做“阈值正确的一对一匹配 + Cyclist PR 曲线”，区分几何未命中与
+  “有合格框但排在 FP 后面”；不要先加 score bias、PCGrad 或四类 tower。
