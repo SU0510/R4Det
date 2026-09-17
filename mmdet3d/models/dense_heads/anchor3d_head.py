@@ -86,6 +86,9 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                  shared_stem_channels=256,
                  shared_stem_kernel_size=3,
                  shared_stem_residual_scale=0.1,
+                 cyc_cls_branch=False,
+                 cyc_cls_branch_channels=64,
+                 cyc_cls_branch_class=1,
                  norm_cfg=dict(type='GN', num_groups=32),
                  **kwargs):
         super().__init__(init_cfg=init_cfg)
@@ -117,6 +120,9 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         self.shared_stem_channels = shared_stem_channels
         self.shared_stem_kernel_size = shared_stem_kernel_size
         self.shared_stem_residual_scale = shared_stem_residual_scale
+        self.cyc_cls_branch = cyc_cls_branch
+        self.cyc_cls_branch_channels = cyc_cls_branch_channels
+        self.cyc_cls_branch_class = cyc_cls_branch_class
         self.norm_cfg = norm_cfg
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
@@ -227,6 +233,20 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                 inds.append(a * self.box_code_size + d)
         return inds
 
+    def _class_logit_channel_inds(self, class_token):
+        """Resolve conv_cls channel indices for one class across all anchors.
+
+        conv_cls uses the ``[anchor * num_classes + class]`` layout, so each
+        anchor contributes exactly one channel for the requested class.  Every
+        anchor slot keeps its own logit; this is not restricted to the anchors
+        whose base size is dedicated to that class.
+        """
+        class_token = int(class_token)
+        return [
+            a * self.num_classes + class_token
+            for a in range(self.num_anchors)
+        ]
+
     def _init_layers(self):
         """Initialize neural network layers of the head."""
         self.cls_out_channels = self.num_anchors * self.num_classes
@@ -317,6 +337,26 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
             nn.init.constant_(self.ped_refine_conv[-1].weight, 0.0)
             nn.init.constant_(self.ped_refine_conv[-1].bias, 0.0)
 
+        # --- Cyclist-specific classification residual branch ---
+        # Adds a learned residual to the Cyclist logit channel of every anchor
+        # (12 anchors -> 12 Cyclist logits), giving Cyclist its own 3x3 context
+        # without touching other classes, regression, or the shared conv_cls.
+        # The final 1x1 is zero-initialized so the branch starts as identity.
+        self._cyc_cls_branch_inds = None
+        if self.cyc_cls_branch:
+            self._cyc_cls_branch_inds = self._class_logit_channel_inds(
+                self.cyc_cls_branch_class)
+            n_out = len(self._cyc_cls_branch_inds)
+            cyc_layers = [
+                nn.Conv2d(self.feat_channels, self.cyc_cls_branch_channels, 3,
+                          padding=1),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(self.cyc_cls_branch_channels, n_out, 1),
+            ]
+            self.cyc_cls_branch_conv = nn.Sequential(*cyc_layers)
+            nn.init.constant_(self.cyc_cls_branch_conv[-1].weight, 0.0)
+            nn.init.constant_(self.cyc_cls_branch_conv[-1].bias, 0.0)
+
     def init_weights(self):
         super().init_weights()
         # init_cfg applies Normal over every Conv2d in super().init_weights(),
@@ -333,6 +373,9 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         if self.ped_refine:
             nn.init.constant_(self.ped_refine_conv[-1].weight, 0.0)
             nn.init.constant_(self.ped_refine_conv[-1].bias, 0.0)
+        if self.cyc_cls_branch:
+            nn.init.constant_(self.cyc_cls_branch_conv[-1].weight, 0.0)
+            nn.init.constant_(self.cyc_cls_branch_conv[-1].bias, 0.0)
 
     def forward_single(self, x):
         """Forward function on a single-scale feature map.
@@ -351,6 +394,13 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
 
         cls_score = self.conv_cls(x)
         bbox_pred = self.conv_reg(x)
+
+        if self.cyc_cls_branch:
+            cyc_res = self.cyc_cls_branch_conv(x)  # [B, num_anchors, H, W]
+            inds = torch.tensor(self._cyc_cls_branch_inds, device=x.device,
+                                dtype=torch.long)
+            cls_score = cls_score.clone()
+            cls_score.index_add_(1, inds, cyc_res)
 
         if self.truck_tower:
             tower = self.truck_tower_conv(x)  # [B, n_out, H, W]
