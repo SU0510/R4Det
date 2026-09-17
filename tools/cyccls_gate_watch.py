@@ -98,6 +98,16 @@ def window_complete(recs, start, end):
     return True
 
 
+def checkpoint_ready(run_dir, end_epoch):
+    """Guard so a kill-on-fail never deletes the endpoint checkpoint.
+
+    In this runner the epoch-N checkpoint is written before the epoch-N
+    validation record (verified on the shared-stem and Cyclist-branch runs), so
+    requiring the file is a cheap extra safety net before stopping the session.
+    """
+    return (Path(run_dir) / f'epoch_{end_epoch}.pth').exists()
+
+
 def window_means(recs, start, end):
     out = {}
     n = end - start + 1
@@ -154,7 +164,9 @@ def main():
           f'ep{args.start_epoch}-{args.end_epoch} validation window')
     while True:
         recs = read_val_records(args.log_json)
-        if window_complete(recs, args.start_epoch, args.end_epoch):
+        if window_complete(recs, args.start_epoch, args.end_epoch) \
+                and checkpoint_ready(Path(args.log_json).parent,
+                                     args.end_epoch):
             break
         time.sleep(args.poll_sec)
 
