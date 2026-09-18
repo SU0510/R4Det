@@ -4148,3 +4148,130 @@ checkpoint 在相同 recall 平台上精度更早、更快下滑。
   seed0 单变量门控；不要先做常数 Cyclist score bias（固定候选集内不改变自身排序），
   也不先加 PCGrad 或四类 tower。
 - clean RSSM 继续作主模型；shared stem 仍是综合增益但未过 Cyclist 红线的候选。
+
+---
+
+## 44. Cyclist 独立分类分支（保留 shared stem）seed0 完整 24 epoch（门控近似踩线，判定未通过）
+
+### 44.1 动机与唯一结构改动
+
+第 43 节的离线分解显示：shared stem 相对 clean 只少命中 27/35 个 Cyclist GT（oracle
+recall 仅降 0.0126/0.0163），正式 AP 却低 5.16/8.55；第 42 节扩大输出数量几乎不改变
+AP。因此假设痛点在**固定候选内的 Cyclist 分数排序/分离**，而不是候选数量或回归。
+
+本次只加一个默认关闭的 Cyclist 分类残差分支，其余全部不动：
+
+```text
+RSSM fused BEV x -> shared stem(3x3,GN,ReLU, +0.1 residual)
+  -> conv_cls (48ch = 12 anchors x 4 classes)   [原样]
+  -> Cyclist 分支: 3x3 Conv(256->64) + ReLU + 1x1 Conv(64->12), 末层零初始化
+  -> cls_score[Cyclist 通道] += 分支输出
+```
+
+关键点：
+
+- `conv_cls` 布局是 `[anchor * num_classes + class]`，所以 Cyclist 通道是
+  `[1,5,9,...,45]`，即**12 个 anchor 各自的 Cyclist logit**，不是只改 Cyclist 专属 anchor。
+- 末层 1x1 零初始化，训练起点与 shared stem 基线完全一致（已验证 zero-init identity）。
+- 只改 Cyclist 分类通道；其他类别 logit、回归、方向、RSSM、KL、融合、loss、
+  `nms_pre=1000`、`max_num=300` 全部不变。
+
+新增配置：`configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_cyccls.py`
+（shared stem 配置 + `cyc_cls_branch=True, cyc_cls_branch_channels=64, cyc_cls_branch_class=1`，
+与 stem 配置逐行 diff 仅这 3 行）。相关提交：
+
+- `69e2072 feat(head): add Cyclist classification residual branch`
+- `50fbd1d tools: add Cyclist gate watcher for ep12-16 window`
+- `99727a5 tools: guard gate watcher on endpoint checkpoint`
+
+### 44.2 接线验证（启动前）
+
+在 GPU 5 上对三种输入做了单元级验证：
+
+- head 从新配置构建成功：`num_anchors=12`、`num_classes=4`、分支 12 个输出；
+- 零初始化 identity：共享权重拷贝后，分支与基线 `cls_score/bbox/dir` 逐元素完全一致；
+- 扰动分支后，只有 12 个 Cyclist 通道变化（class idx 集合 = `{1}`），其他类别通道零变化；
+- 反向验证：分支末层、共享 `conv_cls`、shared stem 都收到非零梯度。
+
+### 44.3 训练设置
+
+```bash
+source .envrc
+CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
+  configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_cyccls.py \
+  3 --seed 0 --deterministic \
+  --work-dir /data/lurui/work_dirs/cyccls_branch_N4_2x4_24e_seed0
+```
+
+从原预训练权重 `checkpoints/pretrained_tj4d.pth` 重新训练（不是接 stem ep16 续训），
+跑到完整 **24 epoch**（未提前终止）。日志
+`20260917_032423.log(.json)`，约 1.44 s/iter，ep24 于 UTC 2026-09-18 02:05 保存、
+02:16 写出验证。启动日志确认模型结构含 `(cyc_cls_branch_conv): Sequential(...)`，
+missing keys 只包含预期新增模块（`shared_stem_layer.*`、`conv_iou.*`、
+`cyc_cls_branch_conv.*`、`temporal_fusion.*` 等），`conv_cls` 从预训练正常加载。
+
+### 44.4 ep12-16 门控（预注册口径）
+
+与 clean full-RSSM seed0 ep12-16 均值对照：
+
+| 指标 | clean | CycCls seed0 ep12-16 mean | Δ |
+|---|---:|---:|---:|
+| Overall 3D moderate | 38.3902 | 39.5670 | +1.1768 |
+| Overall BEV moderate | 46.9612 | 47.4584 | +0.4972 |
+| Cyclist 3D moderate loose | 48.6271 | 47.9115 | -0.7156 |
+| Pedestrian 3D moderate loose | 28.9160 | 29.8735 | +0.9575 |
+| Car 3D moderate strict | 47.8027 | 50.7300 | +2.9273 |
+| Truck 3D moderate strict | 28.2149 | 29.7530 | +1.5381 |
+
+逐 epoch 明细：
+
+| epoch | Overall 3D | Overall BEV | Cyclist loose | Ped loose | Car strict | Truck strict |
+|---:|---:|---:|---:|---:|---:|---:|
+| 12 | 40.63 | 48.27 | 49.62 | 30.08 | 51.68 | 31.17 |
+| 13 | 40.01 | 47.90 | 47.29 | 29.87 | 53.08 | 29.78 |
+| 14 | 39.48 | 47.21 | 50.36 | 31.64 | 48.26 | 27.64 |
+| 15 | 37.70 | 46.19 | 46.73 | 26.37 | 48.22 | 29.46 |
+| 16 | 40.02 | 47.73 | 45.55 | 31.41 | 52.42 | 30.72 |
+
+门控判定：
+
+| 条件 | 结果 | 判定 |
+|---|---:|---|
+| Overall 3D moderate >= 38.8900 | 39.5670 | pass |
+| Overall BEV moderate >= 47.4600 | 47.4584 | **fail（差 0.0016）** |
+| Cyclist loose >= 47.6300 | 47.9115 | pass |
+| 四个组成项均不得下降超过 1.0 | Cyclist -0.7156，其余均为正 | pass |
+| 至少两个类别提升 >= 0.5 | Ped +0.9575, Car +2.9273, Truck +1.5381 | pass |
+
+**结论：按预注册规则，ep12-16 门控未通过，且唯一失败项是 BEV `47.4584` vs 门控线
+`47.4600`，差 `0.0016`。** Cyclist 红线本身已经修复（相对 shared stem 的 -4.68 变为
+-0.72，红线内），Overall 和三个类别都在涨；这是"数值上踩线"的失败，不是明显退化。
+
+### 44.5 ep20-24 与最佳点（24 epoch 未带来额外收益）
+
+| 窗口 | Overall 3D | Overall BEV | Cyclist loose | Ped loose | Car strict | Truck strict |
+|---|---:|---:|---:|---:|---:|---:|
+| clean ep12-16 | 38.3902 | 46.9612 | 48.6271 | 28.9160 | 47.8027 | 28.2149 |
+| CycCls ep12-16 | 39.5670 | 47.4584 | 47.9115 | 29.8735 | 50.7300 | 29.7530 |
+| CycCls ep12-18 | 39.6209 | 47.5145 | 47.9145 | 30.1960 | 50.5044 | 29.8689 |
+| CycCls ep20-24 | 38.2125 | 46.3303 | 47.5959 | 27.1196 | 46.6311 | 31.5037 |
+
+- ep20-24 相对 clean 已经整体转负（Overall -0.18、BEV -0.63、Cyclist -1.03、Ped -1.80、
+  Car -1.17），只有 Truck 明显更高（+3.29）。**跑满 24 epoch 没有带来额外收益**，
+  后段主要是在 Truck 上继续涨、其他类别回落。
+- 全 24 epoch 各指标最佳点：Overall/BEV 在 ep12，Cyclist 在 ep10，Ped 在 ep14，
+  Car 在 ep13，Truck 在 ep20。最佳点分散，说明后段不是单调改进。
+- 若把窗口放宽到 ep12-18，BEV 从 `47.4584` 升到 `47.5145`，刚好越过 `47.46`；但这是
+  事后选窗，不能当作预注册门控通过，只作为"该结构有综合增益潜力"的旁证。
+
+### 44.6 判定与下一步
+
+- 按预注册口径：**seed0 ep12-16 门控 FAIL（仅 BEV 踩线差 0.0016）**，因此不启动 seed1/2，
+  不再用 24 epoch 选点补救。
+- 相对 shared stem，这个 Cyclist 分类分支把 Cyclist loose 从 `43.95`（-4.68）拉回
+  `47.91`（-0.72），同时保住 Overall/BEV 正增益，说明"独立 Cyclist 分类头"方向是对的；
+  但 Overall BEV 没有稳定越线，收益仍不足以成为新的主模型。
+- 保留 clean RSSM 为主模型；Cyclist 分类分支作为"已接近门控、方向有效"的候选结构保留。
+- 不建议加常数 Cyclist score bias 或 PCGrad。下一步若继续，按用户预设检验 **Cyclist 是否
+  需要绕开共享 stem**（例如给 Cyclist 走独立 stem/特征旁路），而不是继续在 24 epoch 或
+  分数偏置上打磨。
