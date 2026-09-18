@@ -27,22 +27,23 @@ METRIC_KEYS = {
     'Trk_s': 'pts_bbox/KITTI/Truck_3D_moderate_strict',
 }
 
-# clean full-RSSM seed0 ep12-16 means (docs/training_runs_full.md sec 41.3).
-# NOTE: these are the shared-stem comparison baselines: Overall3D 38.3902 and
-# BEV3D 46.9612 are the Overall/BEV means; the per-class rows are the four
-# Overall component metrics.
+# clean full-RSSM seed0 ep12-16 means (docs/training_runs_full.md sec 44).
+# The earlier 46.9612 BEV value was a copy from the KL=0 ablation run; the
+# clean full-RSSM seed0 value verified from the raw log is 46.5193.
 CLEAN_BASELINE = {
     'Overall3D': 38.3902,
-    'BEV3D': 46.9612,
+    'BEV3D': 46.5193,
     'Cyc_l': 48.6271,
     'Ped_l': 28.9160,
     'Car_s': 47.8027,
     'Trk_s': 28.2149,
 }
 
-# Pre-registered gate floors. Cyclist floor encodes the "no class may drop by
-# more than 1.0" rule as an absolute number (48.6271 - 1.0 -> 47.63); Overall
-# and BEV floors are the clean means + 0.5.
+# Pre-registered gate floors. These are intentionally frozen at the values
+# registered before the run; do not retune them after correcting the clean
+# baseline above. Cyclist floor encodes the "no class may drop by more than
+# 1.0" rule as an absolute number (48.6271 - 1.0 -> 47.63); Overall and BEV
+# floors were the originally registered 38.89 / 47.46.
 CLEAN_FLOORS = {
     'Overall3D': 38.89,
     'BEV3D': 47.46,
