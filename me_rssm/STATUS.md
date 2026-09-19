@@ -68,3 +68,8 @@
 - 单 seed 的 Overall +0.6~1.2 在平台噪声 ±1.5 内；任何判定用固定窗口
   均值 + 多 seed，不用单点 BEST。
 - checkpoint 保留规则：每 run 只留 best+last（第 17 节）。
+- **复现事故防护**：主线配置仍残留 `shared_stem=True`（audit U7）——复跑
+  clean 基线一律用快照 `me_rssm/configs/TJ4D-R4Det_clean_N4_2x4_24e_
+  pretrained_v2_head_snapshot.py`；`BEVRSSMTemporalFusion.forward` 缺
+  return（99c74ff 潜伏 bug，report 3.3）——复跑 Run 2 需补丁副本，原类
+  不可直接用。

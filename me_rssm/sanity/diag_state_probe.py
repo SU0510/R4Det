@@ -53,8 +53,8 @@ from mmdet3d.models import build_model  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--config', default=os.path.join(
-    _REPO, 'configs/r4det',
-    'TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head.py'))
+    _REPO, 'me_rssm/configs',
+    'TJ4D-R4Det_clean_N4_2x4_24e_pretrained_v2_head_snapshot.py'))
 ap.add_argument('--checkpoint', default=os.path.join(
     _REPO, 'work_dirs/run10_headv2_multiseed/seed_0/epoch_16.pth'))
 ap.add_argument('--indices', type=int, nargs='+',
@@ -68,9 +68,8 @@ cfg.model.update(meta_info=dict(
     figures_path=tempfile.mkdtemp(prefix='me_rssm_probe_fig_'),
     project_name='tj4d_state_probe'))
 cfg.model.pretrained = None
-# The committed mainline config still carries shared_stem=True from the
-# closed section-41 experiment (audit U7); Run 10 multiseed trained with
-# shared_stem=False, so match it or the head keys won't load.
+# default config is the clean snapshot (shared_stem=False, matching the
+# Run 10 multiseed training); an explicit override for custom configs:
 cfg.model.pts_bbox_head.shared_stem = False
 cfg.data.test.test_mode = True
 model = build_model(cfg.model, test_cfg=cfg.get('test_cfg'))
