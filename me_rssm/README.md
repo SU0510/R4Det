@@ -42,7 +42,8 @@ me_rssm/
 │   ├── test_grad_paths.py           # GPU：G1-G6 梯度/状态/回退语义
 │   ├── test_config_build.py         # CPU：配置/构建/预训练键兼容/参数计量
 │   ├── test_flops.py                # GPU：静态 MACs
-│   └── test_state_init.py           # CPU 逐位 + GPU 梯度：P1 状态初始化（07）
+│   ├── test_state_init.py           # CPU 逐位 + GPU 梯度：P1 状态初始化（07）
+│   └── viz_doppler_evidence.py      # 零训练出图：Doppler 证据画布（08）
 └── docs/
     ├── 01_architecture_map.md   # 数据流/tensor shape/信息流（file:line 逐条核验）
     ├── 02_problems.md           # 研究目标 14 项结构检查的逐项回答
@@ -50,7 +51,8 @@ me_rssm/
     ├── 04_design_me_rssm.md     # 设计规范/数学形式/成本/消融网格/相关工作
     ├── 05_sanity_report.md      # 验证结果与复现方式
     ├── 06_second_layer.md       # 第二层审查：遗留问题与后续循环路线
-    └── 07_p1_state_init.md      # P1 观测引导状态初始化：设计/验证/环境发现
+    ├── 07_p1_state_init.md      # P1 观测引导状态初始化：设计/验证/环境发现
+    └── 08_doppler_evidence_viz.md # 数据检查：Doppler ego 主导性/4 帧结构/稀疏证据
 ```
 
 ## 使用（供后续公平实验；本包自身不执行训练）
