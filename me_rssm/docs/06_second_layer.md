@@ -8,6 +8,10 @@
 
 ### P1 · 状态初始化仍为死状态（02 #7 未解，维持原判）
 
+> **2026-09-19 更新：已实现（`state_init='obs'`，零初始化 1×1 conv 从首帧
+> 观测 bootstrap h_0/z_0 + reset_for_samples pending 语义），sanity 13/13
+> 全绿，详见 docs/07。未训练——严格排在主线 seed0 判定之后。**
+
 h_0=z_0=0（rssm_fusion.py:666-670）。N=4 时第一历史帧的转移从零状态出发，
 其 deform align 作用于零张量、GRU 候选仅由 z_a=0 驱动——第一帧观测基本只通过
 当帧 posterior 进入。改进方向（已在基线接口内可实现的两种）：

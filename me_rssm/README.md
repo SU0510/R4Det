@@ -30,22 +30,27 @@ me_rssm/
 ├── radar_motion_chain.py        # RadarPillarFeatureNetMotion + PointPillarsScatterMotion
 ├── stash_fusion.py              # ConcatConvFusionStash（基线融合 + 发布输入）
 ├── motion_evidence_rssm.py      # MotionEvidenceRSSMFusion（核心模块）
+│                                #   含 state_init='obs'（P1 可学习初始状态，见 docs/07）
+├── queue_me_rssm_seed0.sh       # 训练队列：等 GPU 空闲后自动启动主线 seed0
 ├── configs/
 │   ├── TJ4D-R4Det_me_rssm_N4_24e_pretrained_v2_head.py   # 主线（继承 clean mainline）
-│   └── ..._abl_{no_motion_offsets,no_reliability_gain,no_dynamic_gate,no_modality_obs}.py
-├── sanity/                      # 5 个验证脚本（05 报告可一键复现）
+│   ├── ..._abl_{no_motion_offsets,no_reliability_gain,no_dynamic_gate,no_modality_obs}.py
+│   └── ..._v2_head_stateinit.py                          # P1 变体（唯一变量 state_init）
+├── sanity/                      # 验证脚本（05/07 报告可一键复现）
 │   ├── test_radar_motion_chain.py   # CPU：Doppler 链数值正确性
 │   ├── test_equivalence.py          # GPU：E1-E4 基线等价性
 │   ├── test_grad_paths.py           # GPU：G1-G6 梯度/状态/回退语义
 │   ├── test_config_build.py         # CPU：配置/构建/预训练键兼容/参数计量
-│   └── test_flops.py                # GPU：静态 MACs
+│   ├── test_flops.py                # GPU：静态 MACs
+│   └── test_state_init.py           # CPU 逐位 + GPU 梯度：P1 状态初始化（07）
 └── docs/
     ├── 01_architecture_map.md   # 数据流/tensor shape/信息流（file:line 逐条核验）
     ├── 02_problems.md           # 研究目标 14 项结构检查的逐项回答
     ├── 03_candidates.md         # 12 个候选设计的筛选矩阵与取舍论证
     ├── 04_design_me_rssm.md     # 设计规范/数学形式/成本/消融网格/相关工作
     ├── 05_sanity_report.md      # 验证结果与复现方式
-    └── 06_second_layer.md       # 第二层审查：遗留问题与后续循环路线
+    ├── 06_second_layer.md       # 第二层审查：遗留问题与后续循环路线
+    └── 07_p1_state_init.md      # P1 观测引导状态初始化：设计/验证/环境发现
 ```
 
 ## 使用（供后续公平实验；本包自身不执行训练）

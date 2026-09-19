@@ -105,6 +105,19 @@ class MotionEvidenceRSSMFusion(MotionAlignedRSSMFusion):
             ~0.88 at init.
         dyn_init_bias (float): bias of the dynamic-evidence conv; sigmoid
             (-2) ~0.12, i.e. most cells start "mostly static".
+        state_init (str): how the recurrent state is initialized at a
+            sequence start (h_state is None or batch size changed) and for
+            samples reset by ``reset_for_samples``:
+              - 'zero' (default): h_0 = z_0 = 0, exactly the baseline
+                semantics; the module adds no parameters.
+              - 'obs': two zero-init 1x1 convs produce h_0 / z_0 from the
+                current observation encoding e_fused ("learnable initial
+                state", 06_second_layer P1). Zero weights make the initial
+                behaviour bitwise-identical to 'zero'; the convs learn to
+                bootstrap the filter from the first frame instead of the
+                dead h_0 = GRU(0, 0) state. Samples reset mid-sequence are
+                re-initialized from their own current observation at the
+                next forward step (see reset_for_samples).
     """
 
     def __init__(
@@ -139,6 +152,7 @@ class MotionEvidenceRSSMFusion(MotionAlignedRSSMFusion):
         gain_init_bias=4.0,
         conf_init_bias=2.0,
         dyn_init_bias=-2.0,
+        state_init='zero',
         init_cfg=None,
     ):
         super().__init__(
@@ -171,6 +185,7 @@ class MotionEvidenceRSSMFusion(MotionAlignedRSSMFusion):
         self.gain_init_bias = gain_init_bias
         self.conf_init_bias = conf_init_bias
         self.dyn_init_bias = dyn_init_bias
+        self.state_init = state_init
 
         # ---- observation encoders (modality-specific) -------------------
         self.motion_encoder = nn.Sequential(
@@ -214,6 +229,22 @@ class MotionEvidenceRSSMFusion(MotionAlignedRSSMFusion):
         else:
             self.motion_offset_z = None
 
+        # ---- learnable initial state (state_init='obs', 06 P1) ----------
+        # Zero-init convs: at load time h_0 = z_0 = 0, i.e. bitwise the
+        # baseline sequence start; training turns them into an
+        # observation-bootstrapped filter initialization. in_channels is
+        # the width of e_fused (encoder(feat) output == feat width).
+        if state_init == 'obs':
+            self.h_init_conv = nn.Conv2d(in_channels, self.channels, 1)
+            self.z_init_conv = nn.Conv2d(in_channels, self.latent_dim, 1)
+        else:
+            self.h_init_conv = None
+            self.z_init_conv = None
+        # Samples flagged by reset_for_samples and waiting for an
+        # observation-guided re-initialization at the next forward step.
+        # None = nothing pending. Kept aligned with h_state's batch dim.
+        self._pending_obs_init = None
+
         self._init_me_weights()
 
     # ------------------------------------------------------------------
@@ -226,6 +257,7 @@ class MotionEvidenceRSSMFusion(MotionAlignedRSSMFusion):
         the confidence convs. Biases: gain bias high (trust observation,
         baseline behaviour), confidence biases moderately positive,
         dynamic bias negative (mostly static), dyn_beta exactly 0.
+        The state_init='obs' convs are zero-init as well (identity start).
         Re-running is idempotent (constants, not distributions).
         """
         for m in [self.obs_proj, self.gain_conv, self.dyn_conv,
@@ -235,6 +267,11 @@ class MotionEvidenceRSSMFusion(MotionAlignedRSSMFusion):
         if self.motion_offset_z is not None:
             nn.init.zeros_(self.motion_offset_z.weight)
             nn.init.zeros_(self.motion_offset_z.bias)
+        if self.h_init_conv is not None:
+            nn.init.zeros_(self.h_init_conv.weight)
+            nn.init.zeros_(self.h_init_conv.bias)
+            nn.init.zeros_(self.z_init_conv.weight)
+            nn.init.zeros_(self.z_init_conv.bias)
         with torch.no_grad():
             self.gain_conv.bias.fill_(self.gain_init_bias)
             self.conf_cam.bias.fill_(self.conf_init_bias)
@@ -251,6 +288,52 @@ class MotionEvidenceRSSMFusion(MotionAlignedRSSMFusion):
         super().init_weights()
         if hasattr(self, 'obs_proj'):
             self._init_me_weights()
+
+    # ------------------------------------------------------------------
+    # state resets (state_init='obs' overrides; 'zero' inherits baseline)
+    # ------------------------------------------------------------------
+    def reset_state(self):
+        """Reset the recurrent state (call at sequence boundaries).
+
+        With state_init='obs' the next forward step bootstraps h_0/z_0
+        from that step's observation (the full-init branch of forward);
+        'zero' keeps the baseline None -> zeros semantics.
+        """
+        super().reset_state()
+        self._pending_obs_init = None
+
+    def reset_for_samples(self, mask):
+        """Reset state for specific samples (e.g. invalid prev frames).
+
+        state_init='zero': identical to the baseline (in-place zeroing).
+        state_init='obs': the baseline zeroing is kept verbatim so any
+        reader between reset and forward sees baseline semantics, but the
+        zeroed rows are flagged pending and re-initialized from their own
+        current observation at the next forward step. If the pending flag
+        is ever lost (batch-size/device mismatch corner case), the result
+        degrades to the baseline zeros -- never to a stale state.
+        """
+        if self.h_init_conv is None:
+            super().reset_for_samples(mask)
+            return
+        if self.h_state is None or not mask.any():
+            # h_state None: forward's full-init branch covers every sample.
+            return
+        mask = mask.to(device=self.h_state.device, dtype=torch.bool)
+        keep = ~mask
+        self.h_state = torch.where(
+            keep[:, None, None, None], self.h_state,
+            torch.zeros_like(self.h_state))
+        self.z_state = torch.where(
+            keep[:, None, None, None], self.z_state,
+            torch.zeros_like(self.z_state))
+        if (self._pending_obs_init is None
+                or self._pending_obs_init.shape[0] != self.h_state.shape[0]
+                or self._pending_obs_init.device != self.h_state.device):
+            self._pending_obs_init = torch.zeros(
+                self.h_state.shape[0], dtype=torch.bool,
+                device=self.h_state.device)
+        self._pending_obs_init = self._pending_obs_init | mask
 
     # ------------------------------------------------------------------
     # context
@@ -364,13 +447,42 @@ class MotionEvidenceRSSMFusion(MotionAlignedRSSMFusion):
         else:
             velocity_map = None
 
-        # ---- state init (inherited semantics: zeros at sequence start) --
+        # ---- observation encoding (moved above state init so that
+        # sequence starts can be bootstrapped from the current frame;
+        # encoder(feat) has no state dependency, outputs unchanged) -----
+        e_fused = self.encoder(feat)
+
+        # ---- state init -------------------------------------------------
+        # state_init='zero': baseline semantics, h_0 = z_0 = 0.
+        # state_init='obs': h_0/z_0 from zero-init convs on e_fused
+        # (bitwise zeros until trained; see reset_for_samples for the
+        # mid-sequence pending path).
         if self.h_state is None or self.h_state.shape[0] != B:
-            self.h_state = torch.zeros(
-                B, self.channels, H, W, device=feat.device, dtype=feat.dtype)
-            self.z_state = torch.zeros(
-                B, self.latent_dim, H, W, device=feat.device,
-                dtype=feat.dtype)
+            if self.h_init_conv is not None:
+                self.h_state = self.h_init_conv(e_fused).to(dtype=feat.dtype)
+                self.z_state = self.z_init_conv(e_fused).to(dtype=feat.dtype)
+            else:
+                self.h_state = torch.zeros(
+                    B, self.channels, H, W, device=feat.device,
+                    dtype=feat.dtype)
+                self.z_state = torch.zeros(
+                    B, self.latent_dim, H, W, device=feat.device,
+                    dtype=feat.dtype)
+            self._pending_obs_init = None
+        elif (self._pending_obs_init is not None
+                and self.h_init_conv is not None
+                and self._pending_obs_init.shape[0] == B
+                and self._pending_obs_init.device == feat.device
+                and self._pending_obs_init.any()):
+            h_boot = self.h_init_conv(e_fused).to(dtype=feat.dtype)
+            z_boot = self.z_init_conv(e_fused).to(dtype=feat.dtype)
+            self.h_state = torch.where(
+                self._pending_obs_init[:, None, None, None], h_boot,
+                self.h_state)
+            self.z_state = torch.where(
+                self._pending_obs_init[:, None, None, None], z_boot,
+                self.z_state)
+        self._pending_obs_init = None
 
         # ---- 1. motion-aware alignment of the historical state ----------
         e_mot = ctx['e_mot'] if have_ctx else None
@@ -402,8 +514,8 @@ class MotionEvidenceRSSMFusion(MotionAlignedRSSMFusion):
         mu_p = self.prior_mu(h_t)
         logstd_p = self.prior_logstd(h_t)
 
-        # ---- 4. observation: fused appearance + gated modality streams --
-        e_fused = self.encoder(feat)
+        # ---- 4. observation: appearance + gated modality streams --------
+        # (e_fused = encoder(feat) was computed before state init)
         if have_ctx:
             gated = torch.cat(
                 [ctx['c_cam'] * ctx['e_cam'], ctx['c_mot'] * ctx['e_mot']],
