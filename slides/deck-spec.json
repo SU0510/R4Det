@@ -1,0 +1,332 @@
+{
+  "paper": {
+    "title": "R4Det+RSSM：BEV 时序融合网络进展汇报",
+    "citation": "R4Det+RSSM 项目内部实验记录（docs/training_runs_full.md，2026-07 至 2026-09，数字均经 work_dirs 日志与 checkpoint 复核）",
+    "doi": "",
+    "source_pdf": "无论文 PDF；证据来源为项目仓库代码、work_dirs 训练日志与实验记录文档"
+  },
+  "meeting": {
+    "duration_minutes": 15,
+    "target_seconds": 900,
+    "type": "网络进展组会",
+    "meta": "汇报约 15 分钟 · 19 页 · 每页页脚标注证据出处"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "estimated_seconds": 40,
+      "section": "背景",
+      "title": "R4Det+RSSM：BEV 时序融合网络进展",
+      "body": "预训练骨干 + N=4 帧运动对齐 RSSM + 检测头 v2 的完整演进、机制拆解与失败分析",
+      "kpi": [
+        {"value": "40.42 ± 0.51", "label": "主线三 seed 均值（Overall 3D moderate）"},
+        {"value": "+4.83", "label": "较同配置 No-Temporal 35.59"},
+        {"value": "40+", "label": "训练实验 · 全部经日志复算核验"}
+      ],
+      "bullets": ["项目周期 2026-07 至 2026-09 · 44 节实验记录 · 结论全部可追溯"],
+      "source": "报告 §1/§11"
+    },
+    {
+      "type": "narrative",
+      "estimated_seconds": 30,
+      "section": "议程",
+      "title": "汇报流程：从口径到结论的四段结构",
+      "agenda": [
+        {"name": "背景与评估口径", "desc": "任务、数据分布、Overall 指标的真实构成（P3–4）"},
+        {"name": "网络结构与 RSSM 机制", "desc": "双路 BEV 架构、演进链、h/z 状态机与训练配方（P5–8）"},
+        {"name": "主结果与逐类别明细", "desc": "三 seed 复现、逐类别 strict/loose、机制消融（P9–12）"},
+        {"name": "失败分析与下一步", "desc": "Truck 零和、Ped 物理瓶颈、Cyclist 分支与计划（P13–19）"}
+      ],
+      "source": "报告目录"
+    },
+    {
+      "type": "figure",
+      "estimated_seconds": 45,
+      "section": "背景与口径",
+      "title": "任务与数据：四类 3D 检测，Pedestrian 最稀少也最难",
+      "asset": "assets/fig_dataset.png",
+      "figure_label": "图A｜TJ4D 类别分布",
+      "panel_scope": "train/val 两个划分下 Ped/Cyc/Car/Truck 的 3D 框数量对比",
+      "pdf_page": 1,
+      "bullets": [
+        "TJ4D：train 5706 / val 2040 帧，雷达+单目相机",
+        "Car 占 48.4%，Pedestrian 仅 13.5%（val 999 框）",
+        "数据集无 ego 位姿/速度 → action 分支无真实信号"
+      ],
+      "caveat": "类别计数由 info pkl 实测；雷达点 5 通道（xyz+径向速度+SNR）。",
+      "crop_review": {"named_panel_matches": true, "axes_and_legend_legible": true, "article_prose_removed": true},
+      "image_aspect": 1.386,
+      "source": "数据 pkl 实测 · 报告 §1.2"
+    },
+    {
+      "type": "narrative",
+      "estimated_seconds": 55,
+      "section": "背景与口径",
+      "title": "读数前提：Overall 是 Car/Truck strict 加 Ped/Cyc loose 的均值",
+      "body": "主指标 Overall 3D moderate 的真实构成（eval.py 拼接后取均值），读任何数字都要按此理解。",
+      "bullets": [
+        "KITTI 式 AP40：easy / moderate / hard 三档",
+        "strict：Car 0.7、Ped/Cyc 0.5；loose：统一 0.25",
+        "按使用频率加权的口径会改变方案排名（备份可讲）"
+      ],
+      "source": "eval.py:925-937 · 报告 §1.3"
+    },
+    {
+      "type": "figure",
+      "estimated_seconds": 60,
+      "section": "网络与机制",
+      "title": "架构：两路 BEV 在 0.32m 网格融合，再进 RSSM 与检测头",
+      "asset": "assets/fig_arch.png",
+      "figure_label": "图B｜网络总体架构",
+      "panel_scope": "雷达/相机两路特征到融合、RSSM 时序模块与检测头的数据流",
+      "pdf_page": 4,
+      "bullets": [
+        "雷达：0.16m pillar → SECOND+FPN → 384ch BEV",
+        "相机：ResNet50+深度 72bins+LSS → 256ch BEV",
+        "融合 256ch（216×248）→ N=4 帧时序 → 检测头 v2"
+      ],
+      "caveat": "形状按主线配置断言值标注；深度监督/2D 头等支路已全部关闭。",
+      "crop_review": {"named_panel_matches": true, "axes_and_legend_legible": true, "article_prose_removed": true},
+      "image_aspect": 1.387,
+      "source": "R4Det.py 前向 · 报告 §4.2"
+    },
+    {
+      "type": "figure",
+      "estimated_seconds": 60,
+      "section": "网络与机制",
+      "title": "两次跃迁把 34 分档抬进 40 分档：预训练与检测头 v2",
+      "asset": "assets/fig_evolution.png",
+      "figure_label": "图C｜主指标演进链",
+      "panel_scope": "GRU 基线到最终主线各关键节点的 BEST Overall 3D moderate",
+      "pdf_page": 6,
+      "bullets": [
+        "RSSM v1→v3 踩坑修复后与 GRU 同档（34 上下）",
+        "预训练 +3.23（34.71→37.94，Car strict +12.6）",
+        "head-v2 后 39.65；三 seed 40.42±0.51 定稿"
+      ],
+      "caveat": "18e 无预训练时代与 24e+pretrain 时代配置不同，本图只做趋势对比。",
+      "crop_review": {"named_panel_matches": true, "axes_and_legend_legible": true, "article_prose_removed": true},
+      "image_aspect": 2.606,
+      "source": "work_dirs 日志复算 · 报告 §6-§7"
+    },
+    {
+      "type": "figure",
+      "estimated_seconds": 70,
+      "section": "网络与机制",
+      "title": "h/z 双状态 + 先验/后验：训练走 KL 与采样，推理只用后验均值",
+      "asset": "assets/fig_rssm.png",
+      "figure_label": "图D｜RSSM 机制与代码对应",
+      "panel_scope": "状态传播、对齐、prior/posterior、KL、重建与残差输出的完整机制",
+      "pdf_page": 5,
+      "bullets": [
+        "transition：ConvGRU + deform 对齐（零初始化起步）",
+        "KL：free-bits clamp + warmup 0→1.0（ep0-10）",
+        "输出 = output_proj(z) + feat 残差；截断 BPTT=1"
+      ],
+      "caveat": "推理路径不经过 prior；历史帧 no_grad，仅最近 1 帧保留梯度。",
+      "crop_review": {"named_panel_matches": true, "axes_and_legend_legible": true, "article_prose_removed": true},
+      "image_aspect": 1.545,
+      "source": "rssm_fusion.py · 报告 §5"
+    },
+    {
+      "type": "method",
+      "estimated_seconds": 45,
+      "section": "网络与机制",
+      "title": "训练配方：所有 24e 主线 run 共享，仅种子与结构开关不同",
+      "body": "保证横向对比干净：超参、数据管线、评估口径完全一致，变量唯一。",
+      "kpi": [
+        {"value": "AdamW 1.5e-4", "label": "Cosine 退火 · min_lr 1e-5 · grad clip 35"},
+        {"value": "batch 12", "label": "3 卡 × 2 × 累积 2；RepeatDataset ×2"},
+        {"value": "KL warmup 10ep", "label": "kl_scale 0→1.0 线性；free_nats 1.0"},
+        {"value": "BPTT = 1", "label": "仅最近 1 帧回传；interval=1 评估"}
+      ],
+      "bullets": [
+        "Run10 曾因 interval=2 丢失峰值 ep11=40.60 → 此后全部逐 epoch 存盘",
+        "推理 deterministic：z 取后验均值，历史帧 no_grad"
+      ],
+      "source": "主配置与快照 · 报告 §3.3/附录B"
+    },
+    {
+      "type": "figure",
+      "estimated_seconds": 50,
+      "section": "主结果",
+      "title": "主线结果：40.42±0.51，峰值集中在 ep12–16",
+      "asset": "assets/fig_seed.png",
+      "figure_label": "图E｜三 seed 复现",
+      "panel_scope": "seed0/1/2 各自 BEST 与均值线、No-Temporal 参考线",
+      "pdf_page": 7,
+      "bullets": [
+        "s0 39.88 / s1 40.51 / s2 40.88（deterministic）",
+        "较无时序基线 35.59 高出 4.83",
+        "seed2 ep14=40.88 为 released checkpoint 候选"
+      ],
+      "caveat": "单点 BEST 仅附录口径；主表报三 seed 均值±标准差。",
+      "crop_review": {"named_panel_matches": true, "axes_and_legend_legible": true, "article_prose_removed": true},
+      "image_aspect": 1.335,
+      "source": "run10 multiseed 日志 · 报告 §19"
+    },
+    {
+      "type": "method",
+      "estimated_seconds": 55,
+      "section": "主结果",
+      "title": "逐类别明细：Ped strict 归零横跨全部 seed，Car loose 波动最大",
+      "table": {
+        "cols": ["类别 · 3D moderate", "seed0 (ep16)", "seed1 (ep15)", "seed2 (ep14)", "三 seed 均值"],
+        "col_widths": [280, 200, 200, 200, 256],
+        "rows": [
+          ["Pedestrian · strict", "0.10", "0.15", "0.12", "0.12"],
+          ["Pedestrian · loose", "28.64", "30.39", "31.32", "30.12"],
+          ["Cyclist · strict", "23.17", "26.64", "28.07", "25.96"],
+          ["Cyclist · loose", "50.47", "49.36", "50.09", "49.97"],
+          ["Car · strict", "49.98", "47.49", "51.35", "49.60"],
+          ["Car · loose", "69.20", "72.57", "75.77", "72.52"],
+          ["Truck · strict", "30.43", "34.79", "30.76", "31.99"],
+          ["Truck · loose", "49.44", "51.58", "52.01", "51.01"],
+          ["Overall", "39.88", "40.51", "40.88", "40.42"]
+        ]
+      },
+      "bullets": [
+        "Ped strict 0.10–0.15：三个 seed 一致归零（物理瓶颈，见 P14）",
+        "Car loose 69.2→75.8（±3.3）：seed 间最大方差来源",
+        "Truck strict 均值 31.99：后续 Truck 专项门控红线的基准"
+      ],
+      "caveat": "各 seed 取 BEST epoch；Overall=Car/Trk strict + Ped/Cyc loose 的均值。",
+      "source": "multiseed 日志逐类键复算 · 报告 §19"
+    },
+    {
+      "type": "figure",
+      "estimated_seconds": 60,
+      "section": "主结果",
+      "title": "机制拆解：确定性传播约 +2.4，随机建模再 +1.9，共同必需",
+      "asset": "assets/fig_ablation.png",
+      "figure_label": "图F｜RSSM 机制消融",
+      "panel_scope": "六种时序配置的窗口均值 Overall 3D moderate 对比",
+      "pdf_page": 8,
+      "bullets": [
+        "No-Temporal 34.65 → Deterministic 37.08",
+        "完整 RSSM 窗口 39.00；KL=0 单 seed 曾 40.35",
+        "KL=0 三 seed 37.94（seed2 −4.03）→ 保留 KL"
+      ],
+      "caveat": "窗口=ep12-16 均值；Deterministic/FixedNoise/Learnable-std 为删组件变体。",
+      "crop_review": {"named_panel_matches": true, "axes_and_legend_legible": true, "article_prose_removed": true},
+      "image_aspect": 1.587,
+      "source": "各消融日志 · 报告 §20-§25"
+    },
+    {
+      "type": "narrative",
+      "estimated_seconds": 45,
+      "section": "主结果",
+      "title": "KL「死亡」是稳态而非病灶：prior 退化为后验复制品",
+      "body": "所有完整 RSSM run 收敛后 KL 被 free-nats 钳住、梯度归零，但推理不走 prior，因此对当前 AP 中性偏正。",
+      "bullets": [
+        "stat_clamped_ratio → 99–100%",
+        "μ_diff² → 0.008–0.04，prior/posterior 几乎重合",
+        "删 KL 的代价由三 seed 证实：37.94 vs 39.00"
+      ],
+      "source": "stat_* 日志 · 报告 §5.3/§25"
+    },
+    {
+      "type": "figure",
+      "estimated_seconds": 55,
+      "section": "失败分析",
+      "title": "共享特征下类别专属回归是零和：Truck 涨则 Cyclist 跌",
+      "asset": "assets/fig_truck.png",
+      "figure_label": "图G｜Truck 专项三轮",
+      "panel_scope": "三种 Truck 回归改动相对 clean 基线的逐类别 Δ",
+      "pdf_page": 10,
+      "bullets": [
+        "三轮全部破 Cyclist −4.0 门控红线",
+        "detach 版否证『梯度回流干扰』假设",
+        "根因：共享 BEV 特征容量被零和瓜分"
+      ],
+      "caveat": "Δ 为窗口口径差值；Truck 首要问题是定位（长轴 3.02m）而非分类。",
+      "crop_review": {"named_panel_matches": true, "axes_and_legend_legible": true, "article_prose_removed": true},
+      "image_aspect": 1.316,
+      "source": "§26-§28 日志 · 报告 §8.6"
+    },
+    {
+      "type": "narrative",
+      "estimated_seconds": 60,
+      "section": "失败分析",
+      "title": "Pedestrian strict≈0 是物理瓶颈：anchor 几何 + BEV 分辨率",
+      "body": "换检测头、加 anchor、独立 CenterHead、高分辨率支线七轮尝试全部未过门控，诊断证据一致指向输入端上限。",
+      "bullets": [
+        "λ-recall@0.5 仅 4.5%：anchor 几何卡死上限",
+        "宽度误差 0.31m（行人框宽仅 0.4–0.7m）",
+        "隔离实验证明 0.32m BEV 特征本身不足"
+      ],
+      "source": "§29-§39 诊断与 dump · 报告 §8.7"
+    },
+    {
+      "type": "narrative",
+      "estimated_seconds": 55,
+      "section": "失败分析",
+      "title": "Cyclist 分支 seed0 成功、seed1 失败：等 seed2 定论",
+      "body": "近两周结构门控（cross-modal fusion、共享 stem、Cyclist 分类分支）均以 Cyclist 红线或复现失败收场。",
+      "bullets": [
+        "共享 stem：Overall +0.88 但 Cyc −4.68，未过",
+        "CycCls seed0 +1.18（Cyc 仅 −0.72）",
+        "seed1 四项 fail；跨 seed 唯一稳健信号 Car strict +2.9"
+      ],
+      "source": "§40-§44 门控记录 · 报告 §8.8"
+    },
+    {
+      "type": "synthesis",
+      "estimated_seconds": 60,
+      "section": "结论与计划",
+      "title": "结论：主线冻结为 pretrained + N4 RSSM + head-v2",
+      "body": "收益分解干净可复现，负结果均已归因；以下三个数字构成汇报主 takeaway。",
+      "kpi": [
+        {"value": "40.42 ± 0.51", "label": "三 seed 主线成绩（deterministic）"},
+        {"value": "+4.35", "label": "时序融合净贡献（窗口 39.00 vs 34.65）"},
+        {"value": "2.43 + 1.92", "label": "确定性传播 + 随机建模（窗口口径）"}
+      ],
+      "bullets": [
+        "KL/prior 不可删：三 seed 证据（37.94 vs 39.00）",
+        "共享头零和效应与 Ped 物理瓶颈已定论",
+        "单 seed 峰值不进结论；主表一律 mean±std"
+      ],
+      "source": "报告 §11"
+    },
+    {
+      "type": "narrative",
+      "estimated_seconds": 40,
+      "section": "结论与计划",
+      "title": "四个未解问题：Ped strict、Car-Truck 混淆、Cyc 排序、随机性价值",
+      "body": "这些问题都有明确诊断，但当前架构内无解，需要下一阶段的投入决策。",
+      "bullets": [
+        "Ped strict≈0：全部架构手段试尽，需换输入范式",
+        "Car-Truck 混淆与 Truck 定位（长轴 3.02m）未解",
+        "Cyc 瓶颈在排序质量；posterior collapse 下随机性未兑现"
+      ],
+      "source": "报告 §12"
+    },
+    {
+      "type": "questions",
+      "estimated_seconds": 50,
+      "section": "结论与计划",
+      "title": "下一步：CycCls seed2 定论、仓库卫生、论文口径",
+      "body": "三条已排期动作 + 一个需要今天讨论的决策。",
+      "bullets": [
+        "等 seed2 → 三 seed 配对均值，正式定性 CycCls 分支",
+        "主配置回退 clean（shared_stem=False）+ 修 GRU 基线 return",
+        "讨论：Truck 类分离 tower 与 Ped 换范式是否立项"
+      ],
+      "source": "报告 §12/§13"
+    },
+    {
+      "type": "synthesis",
+      "closing": true,
+      "estimated_seconds": 25,
+      "section": "结论与计划",
+      "title": "谢谢 · 欢迎讨论",
+      "body": "主线已冻结：pretrained + N4 RSSM + head-v2 · 40.42 ± 0.51",
+      "bullets": [
+        "CycCls seed2 出分后的定性标准？",
+        "Truck 类分离 tower 是否立项？",
+        "Ped 换范式的成本与预期？"
+      ],
+      "source": "Closing"
+    }
+  ]
+}
