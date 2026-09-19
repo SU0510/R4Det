@@ -29,3 +29,6 @@ data/
 .memsearch/
 .tokensave/
 .agents/
+
+# generated slide previews
+slides/preview/
