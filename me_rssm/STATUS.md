@@ -6,10 +6,24 @@
 
 ## 正在运行 / 已排队
 
+> **2026-09-19 15:25 UTC 更新：应用户要求，本轮挂的后台等待任务与两个
+> 自动化 tmux（`me_rssm_queue`、`verdict_watch`）已全部拆除。**
+> ME-RSSM seed0 **不再自动排队**——seed2 结束后需手动启动：
+> ```bash
+> tmux new-session -d -s me_rssm_queue 'bash me_rssm/queue_me_rssm_seed0.sh'
+> # 或直接：
+> CUDA_VISIBLE_DEVICES=5,6,7 bash tools/dist_train.sh \
+>   me_rssm/configs/TJ4D-R4Det_me_rssm_N4_24e_pretrained_v2_head.py 3 \
+>   --seed 0 --deterministic --work-dir /data/lurui/work_dirs/me_rssm_N4_2x4_24e_seed0
+> ```
+> 三 seed 终判数字届时手动运行：`python3 tools/verdict_window.py --base
+> work_dirs/run10_headv2_multiseed --cand work_dirs/cyccls_branch_N4_2x4_24e_multiseed
+> --window 12 16`。
+
 | 项 | 状态 | 位置 |
 |---|---|---|
-| CycCls seed2（44.7 补跑） | 训练中 ep13/24，预计 2026-09-19 ~24:00 UTC 结束 | tmux `cyccls_seed2`，GPU 5,6,7，work_dir `/data/lurui/work_dirs/cyccls_branch_N4_2x4_24e_multiseed/seed_2` |
-| ME-RSSM 主线 seed0 | **已排队**（队列脚本轮询，seed2 结束后自动启动，24e，约 22h） | tmux `me_rssm_queue`，脚本 `me_rssm/queue_me_rssm_seed0.sh`，日志 `/data/lurui/work_dirs/me_rssm_queue.log`，work_dir `/data/lurui/work_dirs/me_rssm_N4_2x4_24e_seed0` |
+| CycCls seed2（44.7 补跑） | 训练中 ep14/24（会话开始前已在跑，未受拆除影响） | tmux `cyccls_seed2`，GPU 5,6,7，work_dir `/data/lurui/work_dirs/cyccls_branch_N4_2x4_24e_multiseed/seed_2` |
+| ME-RSSM 主线 seed0 | **未排队**（自动化已按用户要求拆除，脚本保留待手动触发） | 脚本 `me_rssm/queue_me_rssm_seed0.sh`、日志 `/data/lurui/work_dirs/me_rssm_queue.log`（仅历史） |
 
 ## 本会话已完成（全部只新增文件，原项目零修改）
 
