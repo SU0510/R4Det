@@ -30,6 +30,20 @@
 
 ## 接下来的判定点（按时间顺序）
 
+0. **预注册：ME-RSSM 主线 seed0 的判定阈值**（写于任何 ME-RSSM 验证值
+   存在之前，2026-09-19 15:10 UTC）：
+   - 口径：ep12-16 窗口均值，与 clean seed0（`run10_headv2_multiseed/seed_0`）
+     配对；主指标 Overall 3D moderate，辅 BEV + 四组成项。
+   - 背景噪声：窗口内 epoch 间 σ≈1.5（44.7.4），5-epoch 窗口均值 σ≈0.7；
+     clean 多 seed 平台间 std ≈0.5（第 19 节）。
+   - **有效**（进入多 seed）：Overall Δ ≥ +0.7（≈1σ）且 BEV 同向，四组成
+     项无一项 < −1.0；**强有效**（直接定主模型候选）：Δ ≥ +1.2 且 ≥3 个
+     组成项为正；**无效**：|Δ| < 0.5 或方向不定 → 按失败模式走消融网格
+     （`--stats` 曲线先看 stat_gain/conf/dyn 是否偏离初值，机制死了就直接
+     读消融，不再burning GPU 于重复 seed）。
+   - 消融顺序（若主线无效）：no_modality_obs → no_reliability_gain →
+     no_dynamic_gate → no_motion_offsets（隔离哪个机制引入噪声）；
+     若机制活跃但 AP 平：P2 innovation-gain 优先于加 seed。
 1. **seed2 完成 → CycCls 三 seed 终判**（44.7.6 承诺）：
    ```bash
    python3 tools/verdict_window.py \
