@@ -43,6 +43,11 @@
      组成项为正；**无效**：|Δ| < 0.5 或方向不定 → 按失败模式走消融网格
      （`--stats` 曲线先看 stat_gain/conf/dyn 是否偏离初值，机制死了就直接
      读消融，不再burning GPU 于重复 seed）。
+   - **按类效应预注册**（依据 docs/08 GT 点级动态分数实测：Cyclist 0.488 >
+     Car 0.315 > Truck/背景 > Pedestrian 0.145——Doppler 证据只在运动目标
+     上有信息）：若 ME-RSSM 有效，预期 **Cyclist/Car 增益 > Truck > Ped**；
+     若有效但增益集中在 Ped（证据最弱的类），反而提示增益来自非运动通路
+     （如 camera obs 分支），需要 no_modality_obs 消融甄别。
    - 消融顺序（若主线无效）：no_modality_obs → no_reliability_gain →
      no_dynamic_gate → no_motion_offsets（隔离哪个机制引入噪声）；
      若机制活跃但 AP 平：P2 innovation-gain 优先于加 seed。
