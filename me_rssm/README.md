@@ -43,6 +43,7 @@ me_rssm/
 │   ├── test_config_build.py         # CPU：配置/构建/预训练键兼容/参数计量
 │   ├── test_flops.py                # GPU：静态 MACs
 │   ├── test_state_init.py           # CPU 逐位 + GPU 梯度：P1 状态初始化（07）
+│   ├── test_entry.py                # eval 入口验证：test_vod 路径 build+ckpt+真样本 forward
 │   └── viz_doppler_evidence.py      # 零训练出图：Doppler 证据画布（08）
 └── docs/
     ├── 01_architecture_map.md   # 数据流/tensor shape/信息流（file:line 逐条核验）
