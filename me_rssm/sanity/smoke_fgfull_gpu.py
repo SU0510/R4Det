@@ -1,8 +1,9 @@
-"""GPU smoke test for the fgfull config: real train step + val forward.
+"""GPU smoke test for the fgfull config family: real train step + val forward.
 
-Run:  CUDA_VISIBLE_DEVICES=4 python me_rssm/sanity/smoke_fgfull_gpu.py [n_iters]
+Run:  CUDA_VISIBLE_DEVICES=4 python me_rssm/sanity/smoke_fgfull_gpu.py \
+          [n_iters] [config path]
 
-Exercises, with the real batch size (samples_per_gpu=2) and the real N=4
+Exercises, with the real batch size (samples_per_gpu=2) and the configured
 temporal window:
   S1. train forward + full loss assembly + backward + optimizer step
       (2D branch training, IGDR fusion, msk2d/FRPN losses, fg-biased
@@ -36,12 +37,16 @@ CKPT = os.path.join(_REPO, 'checkpoints/pretrained_tj4d.pth')
 
 def main():
     n_iters = int(sys.argv[1]) if len(sys.argv) > 1 else 3
-    cfg = Config.fromfile(CFG)
+    cfg_path = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else CFG
+    print(f'SMOKE CONFIG: {cfg_path}')
+    cfg = Config.fromfile(cfg_path)
     cfg.model.update(meta_info=dict(
         figures_path=tempfile.mkdtemp(prefix='fgfull_smoke_fig_'),
         project_name='tj4d_fgfull_smoke'))
 
     model = build_model(cfg.model)
+    print(f'SMOKE seq_len={cfg.model.seq_len} '
+          f'hidden_dim={cfg.model.temporal_fusion.hidden_dim}')
     load_checkpoint(model, CKPT, map_location='cpu', strict=False, logger=None)
     optimizer = build_optimizer(model, cfg.optimizer)
     model = MMDataParallel(model.cuda().train(), device_ids=[0])

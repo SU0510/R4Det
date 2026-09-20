@@ -4847,3 +4847,34 @@ separate work dir:
 Crash handling is the same as the existing queue: retry up to 3 times and
 resume from `latest.pth` when present. Queue state is logged to
 `/data/lurui/work_dirs/fgfull_n3_queue.log`.
+
+### 46.9 N=3 GPU4 smoke test (2026-09-20)
+
+Before letting the relay queue take over, the N=3 config was exercised on the
+otherwise-free GPU 4. `me_rssm/sanity/smoke_fgfull_gpu.py` now takes an
+optional config path so the same train-step + val-forward smoke can target any
+fgfull variant.
+
+Command:
+
+```bash
+source .envrc
+CUDA_VISIBLE_DEVICES=4 python me_rssm/sanity/smoke_fgfull_gpu.py 2 \
+  configs/r4det/TJ4D-R4Det_fgfull_N3_2x4_24e_pretrained_v2_head.py
+```
+
+Resolved settings and result:
+
+| Item | Value |
+|---|---:|
+| `seq_len` | 3 |
+| `temporal_fusion.hidden_dim` | 64 |
+| iter 0 | `total_loss=10.758`, `1.7s` |
+| iter 1 | `total_loss=9.821`, `1.4s` |
+| peak memory | 18.75 GiB |
+| val forward | `300` boxes per sample |
+| verdict | `SMOKE: ALL OK` |
+
+Checkpoint warnings (mismatched detection-head keys, missing new temporal and
+IGDR keys) are the same expected ones seen for the N=4 smoke, because the
+external pretrained checkpoint predates these modules.
