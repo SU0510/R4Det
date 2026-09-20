@@ -760,8 +760,13 @@ class R4Det(MVXFasterRCNN):
 
     def extract_feat(self, points, img, img_metas, is_valid_mask=None, feat_or_dict=0,
                      rssm_detach_state=True, rssm_deterministic=None,
-                     rssm_history_losses=None):
-        """Extract features from images and points."""
+                     rssm_history_losses=None, curr_frame_supervision=True):
+        """Extract features from images and points.
+
+        curr_frame_supervision=False is used for history frames during
+        training. FRPN/MRF3Net/GT-BEV-mask preparation is only consumed by
+        current-frame losses, so history frames skip it.
+        """
         self._highres_radar_scatter = None
         # preparation of camera-geo-aware input
         if img.dim() == 3 and img.size(0) == 3: img = img.unsqueeze(0)
@@ -770,7 +775,8 @@ class R4Det(MVXFasterRCNN):
 
         img_metas, gt_bboxes_3d, gt_labels_3d, gt_bboxes_2d, gt_labels_2d, depth_comple, bbox_Mask, segmentation, radar_depth, cam_aware, \
             img_aug_matrix, lidar_aug_matrix, bda_rot, gt_depths, gt_bev_mask, final_lidar2img = self.preprocessing_information(
-            img_metas, img.device)
+            img_metas, img.device,
+            with_curr_frame_supervision=curr_frame_supervision)
 
         img_inputs = [img, cam_aware[0], cam_aware[1], cam_aware[2], cam_aware[3], cam_aware[4], bda_rot]
         img, rots, trans, intrins, post_rots, post_trans, bda = img_inputs[0:7]
@@ -807,7 +813,8 @@ class R4Det(MVXFasterRCNN):
         if self.lift_method == 'OFT': pass
         if self.lift_method == None: img_bev_feats = pts_bev_feats
         step2_time = end_time - start_time
-        if self.rangeview_foreground is not None and self.use_msk2d_supervision and context is not None:
+        if (curr_frame_supervision and self.rangeview_foreground is not None
+                and self.use_msk2d_supervision and context is not None):
             start_time = time.time()
             rangeview_logit = self.rangeview_foreground(context.squeeze(1))
             end_time = time.time()
@@ -865,7 +872,8 @@ class R4Det(MVXFasterRCNN):
         assert bev_feats.shape[3] == self.bev_w_
         step5_time = end_time - start_time
 
-        if self.proposal_layer_former is not None and self.use_props_supervision:
+        if (curr_frame_supervision and self.proposal_layer_former is not None
+                and self.use_props_supervision):
             bev_mask_logit_former = self.proposal_layer_former(bev_feats)
         else:
             bev_mask_logit_former = None
@@ -925,7 +933,8 @@ class R4Det(MVXFasterRCNN):
         else:
             bev_feats_refined = bev_feats
         step6_time = end_time - start_time
-        if self.proposal_layer_latter is not None and self.use_props_supervision:
+        if (curr_frame_supervision and self.proposal_layer_latter is not None
+                and self.use_props_supervision):
             bev_mask_logit_latter = self.proposal_layer_latter(bev_feats_refined)
         else:
             bev_mask_logit_latter = None
@@ -1112,7 +1121,8 @@ class R4Det(MVXFasterRCNN):
                 if valid_t.any():
                     with torch.no_grad():
                         self.extract_feat(frame_points[t], frame_img[t], frame_img_metas[t],
-                                          is_valid_mask=valid_t, feat_or_dict=0)
+                                          is_valid_mask=valid_t, feat_or_dict=0,
+                                          curr_frame_supervision=False)
                 if (~valid_t).any():
                     self.temporal_fusion.reset_for_samples(~valid_t)
 
@@ -1342,7 +1352,8 @@ class R4Det(MVXFasterRCNN):
                     self.extract_feat(
                         frame_points[t], frame_img[t], frame_img_metas[t],
                         is_valid_mask=valid_t, feat_or_dict=0,
-                        rssm_detach_state=False, rssm_history_losses=history_rssm_losses)
+                        rssm_detach_state=False, rssm_history_losses=history_rssm_losses,
+                        curr_frame_supervision=False)
                 if (~valid_t).any():
                     self.temporal_fusion.reset_for_samples(~valid_t)
 
@@ -1458,9 +1469,10 @@ class R4Det(MVXFasterRCNN):
 
         if self.with_rpn and self.with_roi_head and self.img_roi_head.with_mask and \
                 hasattr(self.img_roi_head, 'simple_test_with_intermediate'):
-            with torch.no_grad():
-                cur_img_metas = frame_img_metas[self.seq_len - 1]  # single-frame metas for the 2D branch (NOT N: reused above)
-                proposal_list_inf = self.img_rpn_head.simple_test_rpn(img_feats, cur_img_metas)
+            cur_img_metas = frame_img_metas[self.seq_len - 1]  # single-frame metas for the 2D branch (NOT N: reused above)
+            # forward_train already decoded proposals with the same
+            # img_rpn test/proposal cfg. Reuse them instead of rerunning RPN.
+            proposal_list_inf = [p.detach() for p in proposal_list]
             _b, _m, intermediate_2d = self.img_roi_head.simple_test_with_intermediate(
                 img_feats, proposal_list_inf, cur_img_metas, return_intermediate=True
             )
@@ -1666,7 +1678,8 @@ class R4Det(MVXFasterRCNN):
             coors_batch.append(coor_pad)
         coors_batch = torch.cat(coors_batch, dim=0)
         return voxels, num_points, coors_batch
-    def preprocessing_information(self, batch_img_metas, device):
+    def preprocessing_information(self, batch_img_metas, device,
+                                  with_curr_frame_supervision=True):
         if self.training:
             # all important informations
             batch_size = len(batch_img_metas)
@@ -1713,11 +1726,20 @@ class R4Det(MVXFasterRCNN):
                 gt_depths = torch.zeros((batch_size, 1, h, w))
             gt_depths = gt_depths.to(device)
 
-            # generate_bev_mask
-            gt_bboxes_3d_filtered = [gt_bboxes_3d[i][gt_labels_3d[i] != -1] for i in
-                                     range(batch_size)]  # filter out the ignored labels
-            gt_bev_mask = self.generate_bev_mask(gt_bboxes_3d_filtered, batch_size, device, occ_threshold=0.3)  # B H W
-            gt_bev_mask = gt_bev_mask.to(device)
+            # generate_bev_mask (current-frame FRPN loss only; expensive
+            # Shapely rasterization must not run for history frames)
+            if with_curr_frame_supervision:
+                gt_bboxes_3d_filtered = [gt_bboxes_3d[i][gt_labels_3d[i] != -1]
+                                         for i in range(batch_size)]
+                gt_bev_mask = self.generate_bev_mask(
+                    gt_bboxes_3d_filtered, batch_size, device,
+                    occ_threshold=0.3)  # B H W
+                gt_bev_mask = gt_bev_mask.to(device)
+            else:
+                gt_bev_mask = torch.zeros(
+                    (batch_size, 1, self.bev_grid_shape[0],
+                     self.bev_grid_shape[1]),
+                    dtype=torch.bool, device=device)
 
             # re-organize clearly to create NOW lidar2img for project convenience
             batch_img_metas = self.reorganize_lidar2img(batch_img_metas)

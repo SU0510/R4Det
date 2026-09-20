@@ -4726,3 +4726,39 @@ CUDA_VISIBLE_DEVICES=5,6,7 bash tools/dist_train.sh \
 
 数据管线修复 + 500 样本审计 + 100 iter DDP smoke 全部通过。FG-FULL 可以在干净目录
 `work_dirs/fgfull_N4_2x4_24e_seed0` 重新启动；本修复不改变正式 24e 配置的任何训练超参。
+
+### 46.6 FG-FULL redundancy removal (2026-09-20)
+
+User question: why is FG-FULL 53-55% slower when the 4-frame BEV path is
+already the baseline. ./R4Det.py stores the current-frame-only
+supervision inside the shared N-frame extract_feat loop, so three kinds of
+work were being repeated on history frames and one RPN pass was duplicated on
+the current frame.
+
+Changed in :
+
+1. Added  to  and
+    to .
+   Training history-frame calls now pass .
+2. History frames skip , FRPN former/latter, and the
+   Shapely-based . These tensors are only consumed by
+   current-frame losses, so the current-frame loss semantics are unchanged.
+3.  already returns decoded RPN proposals. The IGDR
+   intermediate path now reuses 
+   instead of rerunning .
+4. No config/hyperparameter change; the running formal job was not restarted.
+
+Verification:
+
+- : pass.
+- : pass.
+- :
+  ; train forward/backward, IGDR path, and val
+  forward all ran. Peak memory ~19.0 GiB.
+- Single-card smoke timing after the change: ~1.7-1.8 s/iter on the first
+  two iterations (the previous same smoke path was ~2.4 s/iter). This is a
+  smoke-level measurement, not the final 3-GPU DDP number.
+- Expected gain: most of the avoidable extra work is removed, but exact DDP
+  speedup still needs a fresh 100-iter / same-iteration comparison. Do not
+  claim the formal 53-55% gap is fully closed until that comparison is run.
+
