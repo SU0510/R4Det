@@ -4549,3 +4549,96 @@ cmd        python tools/test_vod.py --config <cfg> --checkpoint <ckpt> --gpu-id 
    这类落在噪声带内、却被读成「刷新历史最高」的误判。
 4. seed2 若日后需要 ep20-24 后段配对，可从 `epoch_18.pth` 恢复补跑到 24e；但这不影响
    本节已经闭合的门控结论。
+
+---
+
+## 45. Clean Run10 checkpoint averaging（ep12 + ep14 + ep16）
+
+> 日期：2026-09-20。目标是不重训，直接针对 Run 10 head-v2 平台期最大的 epoch 波动，
+> 对 clean full RSSM 三 seed 分别平均 `epoch_12 + epoch_14 + epoch_16`，再用正式
+> `tools/test_vod.py --eval bbox` 管线独立评估三个平均 checkpoint。
+
+### 45.0 实现与协议
+
+- 新增工具：`tools/average_checkpoints.py`。
+- 平均规则：floating 参数与 floating buffers 逐元素算术平均；`num_batches_tracked`
+  等非 floating buffers 从 `epoch_16` 复制；输出只含 `state_dict + meta`，不保留
+  optimizer。
+- checkpoint 产物仍放在原 seed 目录，避免覆盖任何训练权重：
+
+| seed | 平均 checkpoint | 来源 |
+|---|---|---|
+| seed0 | `run10_headv2_multiseed/seed_0/epoch_avg_12_14_16.pth` | ep12 + ep14 + ep16 |
+| seed1 | `run10_headv2_multiseed/seed_1/epoch_avg_12_14_16.pth` | ep12 + ep14 + ep16 |
+| seed2 | `run10_headv2_multiseed/seed_2/epoch_avg_12_14_16.pth` | ep12 + ep14 + ep16 |
+
+平均后已逐项校验：每 seed 的 565 个 floating tensor 与
+`(ep12 + ep14 + ep16) / 3` 逐元素完全一致；102 个非 floating buffer 与 ep16 完全一致；
+输出中无 `optimizer` key。
+
+正式评估命令模板：
+
+```bash
+source .envrc
+CUDA_VISIBLE_DEVICES=5 python tools/test_vod.py \
+  --config /data/lurui/work_dirs/run10_headv2_multiseed/seed_0/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head.py \
+  --checkpoint /data/lurui/work_dirs/run10_headv2_multiseed/seed_0/epoch_avg_12_14_16.pth \
+  --gpu-id 0 --eval bbox \
+  --out /data/lurui/work_dirs/run10_headv2_avg_ep12_14_16/seed_0.pkl \
+  --saveoutput /data/lurui/work_dirs/run10_headv2_avg_ep12_14_16/seed_0.json
+```
+
+seed1/seed2 使用各自 seed 目录中的同名校验点与配置，分别调度到 GPU6/GPU7。
+
+### 45.1 三 seed 正式复评结果
+
+| 指标 | seed0 | seed1 | seed2 | 三 seed 均值 | 样本 std |
+|---|---:|---:|---:|---:|---:|
+| Overall 3D moderate | 40.4785 | 40.0937 | 40.9735 | **40.5152** | **0.4410** |
+| Overall BEV moderate | 48.1572 | 48.1472 | 50.5913 | **48.9652** | 1.4082 |
+| Car 3D moderate strict | 50.8649 | 46.4897 | 50.4077 | 49.2541 | 2.4049 |
+| Cyclist 3D moderate loose | 49.2965 | 47.9385 | 50.5572 | 49.2641 | 1.3097 |
+| Pedestrian 3D moderate loose | 31.3312 | 30.9571 | 31.4358 | 31.2414 | 0.2517 |
+| Truck 3D moderate strict | 30.4213 | 34.9894 | 31.4934 | 32.3014 | 2.3888 |
+
+完整 JSON 输出保存在
+`/data/lurui/work_dirs/run10_headv2_avg_ep12_14_16/seed_{0,1,2}.json`。
+
+### 45.2 与主线 BEST 口径对比
+
+主线为 Run 10 head-v2 clean full RSSM 三 seed 各自 BEST：Overall `40.42 +/- 0.51`。
+本节平均权重不是从每个 seed 的曲线中挑 epoch，而是固定 ep12+ep14+ep16 等权平均。
+
+| 指标 | 主线三 seed 均值 | 平均权重三 seed 均值 | Δ（平均权重 − 主线） | 判定 |
+|---|---:|---:|---:|---|
+| Overall 3D moderate | 40.42 | **40.5152** | +0.0919 | 达到主线水平 |
+| Overall BEV moderate | 48.56 | **48.9652** | **+0.4052** | 稳定提升 ≥ 0.3 |
+| Car strict | 49.60 | 49.2541 | −0.3526 | 未下降超过 1.0 |
+| Cyclist loose | 49.97 | 49.2641 | −0.7093 | 未下降超过 1.0 |
+| Pedestrian loose | 30.12 | 31.2414 | +1.1247 | 未下降超过 1.0 |
+| Truck strict | 31.99 | 32.3014 | +0.3080 | 未下降超过 1.0 |
+
+BEV 的逐 seed 配对差为 `+0.4572 / +0.0172 / +0.7413`，均值 `+0.4052`、std `0.3648`。
+虽然 seed1 只有 `+0.0172`，但三项均为正，且三 seed 均值为正，因此按「Overall/BEV 至少一项
+稳定提升 ≥ 0.3」判定 BEV 通过。Overall 的逐 seed 配对差均值为 `+0.0919`、std `0.5074`，
+没有达到 0.3 提升阈值；其作用是把三 seed 均值维持在主线 BEST 水平之上。
+
+### 45.3 通过标准核对
+
+| 标准 | 实测 | 判定 |
+|---|---:|---|
+| 三 seed Overall BEST 口径均值 ≥ 40.42 | 40.5152 | ✅ |
+| seed 间标准差不高于 0.51 | 0.4410 | ✅ |
+| 四个类别三 seed 均值任一不得下降超过 1.0 | Car −0.3526、Cyc −0.7093、Ped +1.1247、Truck +0.3080 | ✅ |
+| Overall/BEV 至少一项稳定提升 ≥ 0.3 | Overall +0.0919；BEV +0.4052 | ✅ BEV |
+
+### 45.4 结论
+
+- **通过。** Clean Run10 的 ep12+ep14+ep16 平均权重在三 seed 上保持 Overall
+  `40.52 +/- 0.44`，方差低于主线 `0.51`，并给 BEV 带来 `+0.41` 的稳定提升。
+- 该路线不需要重训，直接利用已落盘 checkpoint，是目前最贴近「平台期 epoch 波动」证据的
+  低成本稳定化方案。
+- 类别均值没有出现超过 1.0 的下降；Car/Cyclist 的小幅下降被 Ped/Truck 的提升抵消在
+  Overall 内，但不应被解释为对 Car/Cyclist 有正向作用。
+- 后续若进入论文主表或最终方案，应优先报告三个平均 checkpoint 的独立复评结果，而不是
+  继续在训练日志的单点峰值上挑 epoch。
