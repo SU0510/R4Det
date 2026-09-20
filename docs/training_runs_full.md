@@ -5081,3 +5081,102 @@ logs), which masks the per-step GPU saving. The isolated benchmark is the
 cleaner measure of the model-side cost; the DDP numbers say the end-to-end
 wall-clock win will be smaller until the data pipeline stops being the
 bottleneck.
+
+### 46.11 FG-FULL N=4 vs the previous N=4 baseline (2026-09-20)
+
+This compares the running FG-FULL N=4 run against the previous strongest N=4
+model, Run 10 head-v2 multiseed (`work_dirs/run10_headv2_multiseed/seed_{0,1,2}`).
+
+The comparison is a clean single-variable change. Both runs share the
+snapshot base (`me_rssm/configs/TJ4D-R4Det_clean_N4_2x4_24e_pretrained_v2_head_snapshot.py`),
+the same `seq_len=4`, `hidden_dim=128`, `lr=1.5e-4`, 24 epochs, cumulative
+optimizer config and the same KL-scale hook. The only differences are the
+foreground supervision switches and the checkpoint interval:
+
+| Setting | run10 / N=4 baseline | fgfull N=4 |
+|---|---|---|
+| `use_msk2d_supervision` | off | on |
+| `use_props_supervision` | off | on |
+| `use_depth_supervision` | off | on (relative-only; abs/sam2 zeroed) |
+| `img_rpn_head` / `img_roi_head` | absent | present |
+| `rangeview_foreground` | absent | MRF3Net |
+| `proposal_layer` | absent | FRPN |
+| `igdr_fusion` | absent | built + active |
+| `checkpoint_config.interval` | 1 | 2 |
+| everything else | same | same |
+
+Per-epoch `Overall_3D_moderate` (`pts_bbox/KITTI/Overall_3D_moderate`):
+
+| ep | FG-FULL | run10 seed0 | run10 mean3 | delta vs mean3 |
+|---:|---:|---:|---:|---:|
+| 1 | 17.333 | 17.354 | 17.334 | -0.001 |
+| 2 | 27.770 | 24.447 | 25.779 | +1.991 |
+| 3 | 34.644 | 31.114 | 28.240 | +6.404 |
+| 4 | 33.686 | 28.927 | 29.779 | +3.907 |
+| 5 | 36.357 | 32.808 | 32.770 | +3.587 |
+| 6 | 39.017 | 33.510 | 34.846 | +4.172 |
+| 7 | 40.035 | 37.482 | 36.829 | +3.206 |
+| 8 | 36.287 | 34.356 | 35.173 | +1.115 |
+| 9 | 39.190 | 36.190 | 36.336 | +2.854 |
+
+Mean over ep3-9 (separating the epoch-1/2 warmup noise):
+
+| Metric | FG-FULL | run10 mean3 | delta |
+|---|---:|---:|---:|
+| Overall 3D moderate | 37.031 | 33.425 | +3.606 |
+| Overall 3D easy | 39.156 | 35.208 | +3.948 |
+| Overall 3D hard | 35.639 | 32.274 | +3.365 |
+| Overall BEV moderate | 45.526 | 42.665 | +2.861 |
+| Car strict | 51.415 | 44.465 | +6.949 |
+| Cyclist strict | 21.782 | 20.193 | +1.589 |
+| Pedestrian strict | 0.269 | 0.092 | +0.177 |
+| Truck strict | 25.924 | 21.364 | +4.560 |
+| Car loose | 73.432 | 68.803 | +4.630 |
+| Cyclist loose | 44.358 | 44.078 | +0.280 |
+| Pedestrian loose | 26.428 | 23.792 | +2.635 |
+| Truck loose | 51.577 | 43.841 | +7.736 |
+
+Late-epoch snapshot (raw per-class values at ep9):
+
+| Metric | FG-FULL ep9 | run10 mean3 ep9 | delta |
+|---|---:|---:|---:|
+| Overall 3D moderate | 39.19 | 36.34 | +2.85 |
+| Overall BEV moderate | 48.39 | 45.35 | +3.04 |
+| Car strict | 50.97 | 45.51 | +5.46 |
+| Cyclist strict | 21.03 | 23.22 | -2.19 |
+| Pedestrian strict | 0.06 | 0.13 | -0.07 |
+| Truck strict | 29.81 | 25.22 | +4.59 |
+| Car loose | 74.00 | 71.26 | +2.75 |
+| Cyclist loose | 49.68 | 46.74 | +2.94 |
+| Pedestrian loose | 26.30 | 27.87 | -1.58 |
+| Truck loose | 53.57 | 45.69 | +7.89 |
+
+Read:
+
+- FG-FULL leads on Overall in every epoch from 2 onward, by roughly +3 to +4
+  points at comparable epochs. The gain is stable, not a single-epoch spike.
+- The gain is concentrated in Car and Truck: Car strict +5.5 to +7.3, Truck
+  loose +5.9 to +7.9. Those are exactly the classes the foreground bias is
+  meant to help, so the mechanism appears to do what it was designed to do.
+- Pedestrian strict stays at noise level in both (0.06 vs 0.13). The added
+  supervision does not fix the known Pedestrian bottleneck, consistent with the
+  earlier finding that the limit is BEV resolution and point sparsity.
+- Cyclist is mixed: strict and loose swing +2.9/-2.2 and +0.3/-1.6 depending on
+  epoch. It is the known highest-variance class (section 10.7), so treat it as
+  unresolved rather than a win or loss.
+- run10's own full-run platform is 37.97 / 38.88 / 38.74 over ep12-24 for its
+  three seeds. FG-FULL has only reached ep9, but its ep7 value (40.04) already
+  exceeds every seed's ep12-24 mean. If that level persists, FG-FULL should
+  close clearly above the run10 platform.
+
+Caveats:
+
+- FG-FULL currently has only seed 0, while run10's platform is a 3-seed mean.
+  A single seed at ep9 is not directly comparable to a 24-epoch 3-seed mean;
+  the ep-by-ep table above is the fair comparison.
+- The ep3-9 window is early. run10 itself had a sharp dip at ep8 (all seeds)
+  and FG-FULL dipped at ep8 too, so the +3 to +4 gap should be rechecked in the
+  ep12-16 window.
+- `checkpoint_config.interval=2` in FG-FULL versus 1 in run10 only affects
+  which epochs are saved, not the metrics, but it does mean odd-epoch peaks are
+  not on disk.
