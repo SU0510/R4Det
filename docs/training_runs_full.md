@@ -4878,3 +4878,62 @@ Resolved settings and result:
 Checkpoint warnings (mismatched detection-head keys, missing new temporal and
 IGDR keys) are the same expected ones seen for the N=4 smoke, because the
 external pretrained checkpoint predates these modules.
+
+### 46.10 N=3 vs N=4 speed split: seq_len or hidden_dim (2026-09-20)
+
+The N=3 config changes two things at once relative to N=4 (`seq_len` 4->3 and
+`temporal_fusion.hidden_dim` 128->64), so the speed contribution of each was
+measured separately. To isolate them, a benchmark-only override
+`me_rssm/sanity/configs/fgfull_N4_hdim64_bench.py` keeps `seq_len=4` but drops
+`hidden_dim` to 64.
+
+Controlled single-GPU benchmark on GPU 3 (idle), same dataset/loader/batch as
+training (`me_rssm/sanity/bench_fgfull_speed.py`, 2 warmup + 5 timed iters,
+CUDA-synchronized):
+
+```bash
+source .envrc
+CUDA_VISIBLE_DEVICES=3 python me_rssm/sanity/bench_fgfull_speed.py 2 5 \
+  configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head.py \
+  me_rssm/sanity/configs/fgfull_N4_hdim64_bench.py \
+  configs/r4det/TJ4D-R4Det_fgfull_N3_2x4_24e_pretrained_v2_head.py
+```
+
+| Config | T1 train (s/iter) | T2 inference (s/sample) |
+|---|---:|---:|
+| N4, hidden_dim=128 (current N4) | 1.404 | 0.271 |
+| N4, hidden_dim=64 (isolates seq_len) | 1.347 | 0.241 |
+| N3, hidden_dim=64 (current N3) | 1.176 | 0.197 |
+
+Derived speedups:
+
+| Comparison | Train | Inference |
+|---|---:|---:|
+| N3/h64 vs N4/h128 (the runs actually launched) | 1.19x (+16.2% time saved) | 1.37x (+27.2%) |
+| N4/h64 vs N4/h128 (hidden_dim alone) | 1.04x (+4.0%) | 1.12x (+10.9%) |
+| N3/h64 vs N4/h64 (seq_len alone, from the two rows) | ~1.15x (~13%) | ~1.22x (~18%) |
+
+Conclusions:
+
+- The inference gap is mostly a real sequence-length effect: fewer frames to
+  run through the BEV + temporal path. N3 gives ~1.2-1.4x.
+- The training gap is much smaller than inference because the train step is
+  dominated by the 2D/foreground supervision branches, which run on the
+  current frame only and are unchanged by `seq_len`.
+- `hidden_dim` 128->64 buys only ~4% train / ~11% inference by itself, so most
+  of the N3 config's advantage comes from dropping the 4th frame.
+
+Cross-check against the live 3-GPU DDP logs at this point in training:
+
+| Run | Steady-state s/iter (median) |
+|---|---:|
+| N3 (GPUs 0/1/2) | 1.824 (last 30 logs) |
+| N4 (GPUs 5/6/7) | 1.925 (last 60 logs) |
+
+That is only ~1.05x on the formal 3-GPU runs, far below the isolated
+single-GPU ratio. The likely cause is that both jobs are currently throttled by
+shared host/CPU dataloader throughput (note the `data_time` growth in both
+logs), which masks the per-step GPU saving. The isolated benchmark is the
+cleaner measure of the model-side cost; the DDP numbers say the end-to-end
+wall-clock win will be smaller until the data pipeline stops being the
+bottleneck.
