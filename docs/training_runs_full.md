@@ -4762,3 +4762,47 @@ Verification:
   speedup still needs a fresh 100-iter / same-iteration comparison. Do not
   claim the formal 53-55% gap is fully closed until that comparison is run.
 
+### 46.7 Formal 3-GPU resume and measured speedup (2026-09-20)
+
+After epoch 2 checkpointing and validation completed, the old-code FG-FULL
+process was stopped and the formal run was resumed from `epoch_2.pth` with the
+redundancy-removal commit active.
+
+Resume command:
+
+```bash
+source .envrc
+CUDA_VISIBLE_DEVICES=5,6,7 bash tools/dist_train.sh \
+  configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head.py 3 \
+  --seed 0 --deterministic \
+  --work-dir /data/lurui/work_dirs/fgfull_N4_2x4_24e_seed0 \
+  --resume-from /data/lurui/work_dirs/fgfull_N4_2x4_24e_seed0/epoch_2.pth
+```
+
+Loaded checkpoint state:
+
+- `load checkpoint from local path: .../epoch_2.pth`
+- `resumed epoch 2, iter 3804`
+- GPU 5/6/7 occupied; no other GPU used.
+
+Measured epoch-3 logging before/after the resume:
+
+| Iter | Old code `time` (s/iter) | New code resumed from epoch2 `time` (s/iter) |
+|---:|---:|---:|
+| 50 | 2.479 | 2.369 |
+| 100 | 2.080 | 1.905 |
+| 150 | 2.115 | 1.947 |
+| 200 | 2.103 | 1.935 |
+| 250 | 2.141 | 1.989 |
+| 300 | 2.127 | pending |
+| 350 | 2.042 | pending |
+| 400 | 2.094 | pending |
+
+Steady-state comparison over 100-250 iters is about 1.94-1.99 s/iter after
+the fix versus 2.08-2.14 s/iter before, i.e. roughly 8% faster on the formal
+3-GPU run. This is a partial reduction of the earlier 53-55% gap, not a claim
+that the entire gap is closed.
+
+Running log:
+
+`/data/lurui/work_dirs/fgfull_N4_2x4_24e_seed0/train_stdout_resume_after_ep2_20260920.log`
