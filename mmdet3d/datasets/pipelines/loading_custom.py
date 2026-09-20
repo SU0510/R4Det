@@ -237,15 +237,56 @@ class LoadVLSAMAnnotations(object):
                  ann_root_path='/data/tangyousen/TJ4DRadSet_4DRadar/annotations/',
                  mask_root_path='/data/tangyousen/TJ4DRadSet_4DRadar/',
                  class_map={'Pedestrian': 0, 'Cyclist': 1, 'Car': 2, 'Truck': 3},
-                 iou_threshold=0.1):
+                 iou_threshold=0.1,
+                 save_vis=False):
         self.ann_root_path = ann_root_path
         self.mask_root_path = mask_root_path
         self.class_map = class_map
         self.iou_threshold = iou_threshold
+        self.save_vis = save_vis
         print(f"Initialized Custom LoadVLSAMAnnotations with IoU threshold: {self.iou_threshold}")
 
+    def _match_official_to_vlsam(self, official_bboxes, official_labels,
+                                 vlsam_bboxes, vlsam_labels):
+        """Class-aware, thresholded, one-to-one greedy matching.
+
+        Candidate pairs are considered class-by-class and assigned globally in
+        descending IoU order. Each VLSAM mask and each official GT can be used
+        at most once.
+        """
+        num_official_gts = len(official_bboxes)
+        num_vlsam_preds = len(vlsam_bboxes)
+        matches = np.full(num_official_gts, -1, dtype=np.int64)
+        match_ious = np.zeros(num_official_gts, dtype=np.float32)
+
+        if num_official_gts == 0 or num_vlsam_preds == 0:
+            return matches, match_ious
+
+        iou_matrix = bbox_overlaps(official_bboxes, vlsam_bboxes)
+        candidates = []
+        for gt_idx in range(num_official_gts):
+            for pred_idx in range(num_vlsam_preds):
+                if official_labels[gt_idx] != vlsam_labels[pred_idx]:
+                    continue
+                iou = float(iou_matrix[gt_idx, pred_idx])
+                if iou >= self.iou_threshold:
+                    candidates.append((iou, gt_idx, pred_idx))
+
+        candidates.sort(key=lambda x: (-x[0], x[1], x[2]))
+        used_gts = set()
+        used_preds = set()
+        for iou, gt_idx, pred_idx in candidates:
+            if gt_idx in used_gts or pred_idx in used_preds:
+                continue
+            matches[gt_idx] = pred_idx
+            match_ious[gt_idx] = iou
+            used_gts.add(gt_idx)
+            used_preds.add(pred_idx)
+
+        return matches, match_ious
+
     def __call__(self, results):
-        debug_save_path='/data/tangyousen/TJ4DRadSet_4DRadar/debug_matched_masks/'
+        debug_save_path = '/data/tangyousen/TJ4DRadSet_4DRadar/debug_matched_masks/'
         if 'gt_bboxes' not in results or 'gt_labels' not in results:
             raise KeyError("Official 'gt_bboxes' and 'gt_labels' not found in results. "
                            "Ensure LoadAnnotations3D runs before this pipeline step and with_bbox/with_label is True.")
@@ -294,40 +335,24 @@ class LoadVLSAMAnnotations(object):
         vlsam_bboxes = np.array(vlsam_bboxes_list, dtype=np.float32).reshape(-1, 4)
         num_vlsam_preds = len(vlsam_bboxes)
         aligned_masks_list = []
+        matched_indices = np.full(num_official_gts, -1, dtype=np.int64)
+        match_ious = np.zeros(num_official_gts, dtype=np.float32)
         if num_vlsam_preds > 0:
-            iou_matrix = bbox_overlaps(official_bboxes, vlsam_bboxes)
-
-            vlsam_mask_used = [False] * num_vlsam_preds
-
+            matched_indices, match_ious = self._match_official_to_vlsam(
+                official_bboxes, official_labels, vlsam_bboxes, vlsam_labels)
             for i in range(num_official_gts):
-                gt_label = official_labels[i]
-                best_iou = -1.0
-                best_match_idx = -1
-
-                for j in range(num_vlsam_preds):
-                    if gt_label == vlsam_labels[j]:
-                        if iou_matrix[i, j] > best_iou:
-                            best_iou = iou_matrix[i, j]
-                            best_match_idx = j
-
-                is_match_found = best_match_idx != -1
-                is_iou_high = is_match_found #and best_iou >= self.iou_threshold
-                is_available = is_match_found and not vlsam_mask_used[best_match_idx]
-
-
-
-                #if is_match_found and is_iou_high and is_available:
-
-                matched_mask = vlsam_masks_list[best_match_idx]
-                aligned_masks_list.append(matched_mask)
-                vlsam_mask_used[best_match_idx] = True
-                if debug_save_path:
+                best_match_idx = int(matched_indices[i])
+                if best_match_idx >= 0:
+                    matched_mask = vlsam_masks_list[best_match_idx]
+                    aligned_masks_list.append(matched_mask)
+                else:
+                    matched_mask = np.zeros((h, w), dtype=np.uint8)
+                    aligned_masks_list.append(matched_mask)
+                if self.save_vis:
                     sample_save_dir = os.path.join(debug_save_path, base_filename)
                     os.makedirs(sample_save_dir, exist_ok=True)
                     save_filename = f"gt_{i}_matched_to_vlsam_{best_match_idx}.png"
                     cv2.imwrite(os.path.join(sample_save_dir, save_filename), matched_mask * 255)
-                #else:
-                #    aligned_masks_list.append(np.zeros((h, w), dtype=np.uint8))
         else:
             for _ in range(num_official_gts):
                 aligned_masks_list.append(np.zeros((h, w), dtype=np.uint8))
@@ -336,6 +361,18 @@ class LoadVLSAMAnnotations(object):
         results['gt_masks'] = BitmapMasks(final_gt_masks_np, h, w)
         if 'mask_fields' not in results: results['mask_fields'] = []
         if 'gt_masks' not in results['mask_fields']: results['mask_fields'].append('gt_masks')
+        matched_count = int((matched_indices >= 0).sum())
+        results['vlsam_match_debug'] = dict(
+            num_gt=num_official_gts,
+            num_vlsam=num_vlsam_preds,
+            matched=matched_count,
+            unmatched=num_official_gts - matched_count,
+            match_rate=float(matched_count / num_official_gts) if num_official_gts else 0.0,
+            mean_matched_iou=float(match_ious[matched_indices >= 0].mean())
+            if matched_count else 0.0,
+            matched_indices=matched_indices.copy(),
+            match_ious=match_ious.copy(),
+        )
 
 
         return results

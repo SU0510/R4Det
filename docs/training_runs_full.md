@@ -4642,3 +4642,87 @@ BEV 的逐 seed 配对差为 `+0.4572 / +0.0172 / +0.7413`，均值 `+0.4052`、
   Overall 内，但不应被解释为对 Car/Cyclist 有正向作用。
 - 后续若进入论文主表或最终方案，应优先报告三个平均 checkpoint 的独立复评结果，而不是
   继续在训练日志的单点峰值上挑 epoch。
+
+---
+
+## 46. FG-FULL 数据管线修复与 500 样本审计（2026-09-20）
+
+### 46.1 背景
+
+FG-FULL 正式 run 在 `fgfull_N4_2x4_24e_seed0` 启动后被发现数据管线存在两个真实问题，
+因此主动停止该 run（当时尚未落盘任何 checkpoint，不会污染已有结果）：
+
+- `LoadVLSAMAnnotations` 每个 GT 无条件写调试图 PNG，约 15 分钟已写 16663 个文件，
+  调试目录累积到 21617 文件 / 107M。
+- 更严重：无同类匹配时仍可能使用 `best_match_idx=-1` 的最后一个 mask；同一个 mask 也可
+  重复分配给多个 GT，`iou_threshold` 与 `is_available` 实际未生效，2D mask / IGDR 监督
+  可能被错误标签污染。
+
+### 46.2 修复内容
+
+`mmdet3d/datasets/pipelines/loading_custom.py`：
+
+1. `LoadVLSAMAnnotations` 新增 `save_vis=False`，默认完全禁止写调试图；只有显式
+   `save_vis=True` 才落 PNG。
+2. 新增 `_match_official_to_vlsam()`：同类别、IoU 阈值（`iou >= iou_threshold`）、
+   按 IoU 降序的一对一贪心匹配。
+3. 未匹配 GT 填零 mask，禁止 `-1` 索引。
+4. 已使用的 VLSAM mask 与 GT 均不得再次分配。
+5. 输出 `results['vlsam_match_debug']`，记录 `num_gt`、`num_vlsam`、`matched`、
+   `unmatched`、`match_rate`、`mean_matched_iou`、`matched_indices`、`match_ious`。
+
+### 46.3 500 样本审计
+
+审计脚本 `me_rssm/sanity/audit_vlsam_matching.py` 包装 live pipeline 的匹配函数，
+在看到真实增广前 GT box/label 与 VLSAM box/label 的前提下统计匹配行为。命令：
+
+```bash
+export PATH="/home/lurui/envs/miniforge3/envs/r4det/bin:$PATH"
+CUDA_VISIBLE_DEVICES=5 python me_rssm/sanity/audit_vlsam_matching.py --num-samples 500 \
+  2>&1 | tee /data/lurui/work_dirs/fgfull_N4_2x4_24e_seed0/vlsam_match_audit_500.log
+```
+
+实测结果（日志：`/data/lurui/work_dirs/fgfull_N4_2x4_24e_seed0/vlsam_match_audit_500.log`）：
+
+| 统计项 | 数值 |
+|---|---:|
+| Audited samples | 500 |
+| Recorded matching calls | 1985 |
+| GT targets | 23646 |
+| Matched GT | 14359 |
+| Unmatched GT | 9287 |
+| Match rate | 0.6072 |
+| Mean sample match rate | 0.6084 |
+| Duplicate assignments | 0 |
+| Cross-class matches | 0 |
+| Below-threshold matches | 0 |
+| Mean matched IoU | 0.6015 |
+| Median matched IoU | 0.6280 |
+| Min / Max matched IoU | 0.1006 / 0.9495 |
+
+判定：`==== AUDIT: PASS ====`。
+
+### 46.4 100 iter DDP smoke
+
+为绕开 `train_vod.py`（未走 `compat_cfg`）继承 `runner.max_epochs` 的问题，新增验证用配置
+`me_rssm/sanity/fgfull_smoke_100iter.py`，用 `_delete_=True` 把 runner 直接替换为
+`IterBasedRunner(max_iters=100)`。正式 24e 配置未改动。
+
+```bash
+source .envrc
+CUDA_VISIBLE_DEVICES=5,6,7 bash tools/dist_train.sh \
+  me_rssm/sanity/fgfull_smoke_100iter.py 3 --seed 0 --deterministic \
+  --work-dir /data/lurui/work_dirs/fgfull_smoke_100iter_patched
+```
+
+结果：
+
+- `Iter [50/100]` 与 `Iter [100/100]` 均正常，loss 无 NaN，无 OOM。
+- 显存峰值约 18.3 GiB（单卡 log 口径），3 卡 DDP 稳定。
+- `Saving checkpoint at 100 iterations` -> `iter_100.pth`（813M）已落盘。
+- 期间 debug PNG 文件数保持 `21617` 不变，默认禁止写图生效。
+
+### 46.5 结论
+
+数据管线修复 + 500 样本审计 + 100 iter DDP smoke 全部通过。FG-FULL 可以在干净目录
+`work_dirs/fgfull_N4_2x4_24e_seed0` 重新启动；本修复不改变正式 24e 配置的任何训练超参。
