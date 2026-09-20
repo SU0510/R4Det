@@ -162,7 +162,9 @@ class GeometryDepth_Net(BaseModule):
         depth_loss_abs = self.loss_abs_weight * depth_loss_abs
         return dict(depth_loss_prob=depth_loss_prob, depth_loss_abs=depth_loss_abs)
         '''
-        depth_loss_sam2=0.0
+        # zero tensor (not python float): _parse_losses rejects non-tensor
+        # entries when the sam2 branch is skipped (loss_abs_weight == 0)
+        depth_loss_sam2 = precise_depth.sum() * 0.0
         if self.loss_abs_weight > 0 and my_gt_depth is not None:
             mask = (my_gt_depth > self.cam_depth_range[0]) & \
                    (my_gt_depth < self.cam_depth_range[1])

@@ -1143,11 +1143,12 @@ class R4Det(MVXFasterRCNN):
             if hasattr(self.img_roi_head, 'simple_test_with_intermediate'):
 
                 img_feats_list = list(img_feats) if isinstance(img_feats, (tuple, list)) else [img_feats]
-                proposal_list_2d = self.img_rpn_head.simple_test_rpn(img_feats_list, img_metas)
+                cur_img_metas = frame_img_metas[self.seq_len - 1]  # single-frame metas for the 2D branch
+                proposal_list_2d = self.img_rpn_head.simple_test_rpn(img_feats_list, cur_img_metas)
 
                 bbox_results_2d, mask_results_2d, intermediate_2d = \
                     self.img_roi_head.simple_test_with_intermediate(
-                        img_feats_list, proposal_list_2d, img_metas, rescale=rescale, return_intermediate=True
+                        img_feats_list, proposal_list_2d, cur_img_metas, rescale=rescale, return_intermediate=True
                     )
 
                 if intermediate_2d is not None:
@@ -1202,7 +1203,7 @@ class R4Det(MVXFasterRCNN):
                 result_dict['pts_bbox'] = pts_bbox
 
         if img_feats and self.with_rpn and self.with_roi_head:  # img means 2D detection
-            results = self.simple_test_img(img_feats, img_metas, rescale=rescale)
+            results = self.simple_test_img(img_feats, frame_img_metas[self.seq_len - 1], rescale=rescale)
             bbox_img, mask_img = zip(*results)
             for result_dict, img_bbox, img_mask in zip(bbox_list, bbox_img, mask_img):
                 result_dict['img_bbox'] = img_bbox
@@ -1394,9 +1395,13 @@ class R4Det(MVXFasterRCNN):
         if self.with_rpn:
             proposal_cfg = self.train_cfg.get('rpn_proposal',
                                               self.test_cfg.img_rpn)
+            # 2D branch expects single-frame (current) metas; the temporal
+            # wrapper keeps img_metas per-frame (old→new). Only active when
+            # img_rpn_head is configured (with_rpn), which no baseline
+            # config does.
             rpn_losses, proposal_list = self.img_rpn_head.forward_train(
                 img_feats,
-                img_metas,
+                frame_img_metas[self.seq_len - 1],
                 gt_bboxes,
                 gt_labels=None,
                 gt_bboxes_ignore=gt_bboxes_ignore,
@@ -1454,9 +1459,10 @@ class R4Det(MVXFasterRCNN):
         if self.with_rpn and self.with_roi_head and self.img_roi_head.with_mask and \
                 hasattr(self.img_roi_head, 'simple_test_with_intermediate'):
             with torch.no_grad():
-                proposal_list_inf = self.img_rpn_head.simple_test_rpn(img_feats, img_metas)
+                cur_img_metas = frame_img_metas[self.seq_len - 1]  # single-frame metas for the 2D branch (NOT N: reused above)
+                proposal_list_inf = self.img_rpn_head.simple_test_rpn(img_feats, cur_img_metas)
             _b, _m, intermediate_2d = self.img_roi_head.simple_test_with_intermediate(
-                img_feats, proposal_list_inf, img_metas, return_intermediate=True
+                img_feats, proposal_list_inf, cur_img_metas, return_intermediate=True
             )
 
             if intermediate_2d is not None:
@@ -1502,9 +1508,11 @@ class R4Det(MVXFasterRCNN):
             losses.update(losses_pts)
         if self.use_depth_supervision and self.depth_net is not None:
 
+            # get_depth_loss expects single-frame (current) metas for
+            # sample_idx/segmentation; img_metas here is per-frame (old->new)
             loss_depth = self.depth_net.get_depth_loss(gt_depths, pd_depths, precise_depth,
                                                        rangeview_logit.sigmoid().detach(), my_gt_depth=my_gt_depth,
-                                                       img_metas=img_metas)  # .detach()
+                                                       img_metas=frame_img_metas[self.seq_len - 1])  # .detach()
             losses.update(loss_depth)
         if self.use_props_supervision is not None and self.proposal_layer_former is not None:
             if bev_mask_logit['former'] is not None:

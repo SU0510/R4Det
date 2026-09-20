@@ -94,3 +94,42 @@
   pretrained_v2_head_snapshot.py`；`BEVRSSMTemporalFusion.forward` 缺
   return（99c74ff 潜伏 bug，report 3.3）——复跑 Run 2 需补丁副本，原类
   不可直接用。
+
+## 2026-09-19 晚新增：FG-FULL 实验（前景监督 + IGDR 全开）
+
+> 应用户要求，在 clean mainline（run10 seed_0 协议）上新增一组实验：把预训练
+> 中用到的全部前景监督与 IGDR 前景门控在检测期全部打开，对照主线看最高准确率。
+
+- **新配置**：`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head.py`
+  （继承 clean snapshot，训练超参与 seed_0 完全一致：seed 0、deterministic、
+  3 卡、24e、interval=2）。开启项：
+  1. `img_rpn_head + img_roi_head`（2D 分支联合训练，权重从预训练热启动
+     6/6+20/20 键）→ 自动构建 `igdr_fusion`（论文 IGDR Foreground-Gated
+     Fusion，ckpt 无键 → 零初始化恒等起步，131,593 参数）；
+  2. `use_msk2d_supervision` → MRF3Net range-view 前景监督（452/452 热启动）；
+  3. `use_props_supervision` → FRPN BEV 前景 mask 监督（10/10 热启动）；
+  4. `use_depth_supervision` + pipeline 补回 `my_gt_depth`/`segmentation` →
+     前景偏置 Structural Ranking 损失在检测期激活（`loss_depth_relative`，
+     w_edge=1.5/w_global=0.5；abs/sam2 权重置 0 以隔离前景项）。
+- **数据**：`/data/TJ4D/training/depth_npy_predict` → 符号链接指向
+  `/data/yanzexin/TJ4D/training/depth_npy_predict`（36GB，磁盘仅余 46GB，
+  硬链接被 protected_hardlinks 拒绝；如需物理复制请先腾空间）。
+  VLSAM gt_masks 仍读 `/data/yanzexin/TJ4D/{annotations,masks}`（tangyousen
+  默认路径在本机不存在，已在配置中覆盖）。
+- **必要的既有文件补丁**（均只影响此前从未激活的代码路径，主线/基线零影响）：
+  - `R4Det.py`：2D 分支与深度损失调用改传当前帧 meta（原代码为单帧约定，
+    时序模型下必崩）；改用 `self.seq_len-1` 索引（N 被 mask 块复用覆盖）。
+  - `GeometryDepth_Net.py`：`depth_loss_sam2` 由 python float 改零张量
+    （`loss_abs_weight=0` 时 `_parse_losses` 拒绝 float）。
+- **验证**：`me_rssm/sanity/test_fgfull_config.py`（配置合并/构建/热启动键
+  覆盖/pipeline 全链路，ALL OK）+ 单卡 MMDataParallel 冒烟（3 iter + 2 个
+  val 样本，峰值 18.94 GiB）+ 1-rank DDP 冒烟（650 iter 零错误，18.3 GiB，
+  rssm_recon 0.33→0.045 正常下降）。顺带修掉 `dist_train.sh` 依赖 conda
+  PATH 的坑（队列脚本已显式 export）。
+- **接力队列**：tmux `fgfull_queue`，脚本 `me_rssm/queue_fgfull_after_seed2.sh`，
+  日志 `/data/lurui/work_dirs/fgfull_queue.log`。逻辑：轮询
+  `cyccls_branch.../seed_2/epoch_18.pth` 落盘（ep18 验证完即杀，不等 ep24，
+  用户指定）→ pkill（模式 `pretrained_v2_head_cyccls.py`，不影响他人任务）
+  → 等 GPU 5/6/7 排空（上限 30min）→ 预检 → 启动
+  `work_dirs/fgfull_N4_2x4_24e_seed0`，崩溃自动重试 ≤3 次（有 latest.pth
+  则断点续训）。判定窗口暂定与主线一致 ep12-16，跑完后手动 verdict。
