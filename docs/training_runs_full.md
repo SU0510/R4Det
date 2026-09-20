@@ -4913,8 +4913,55 @@ CUDA_VISIBLE_DEVICES=4 python me_rssm/sanity/bench_fgfull_speed.py 2 5 \
 
 So the pure frame-count ablation gives **1.28x train (+21.6% time saved)** and
 **1.25x inference (+20.0%)**. Peak memory is essentially identical
-(19.07 GiB both), because the activated memory is dominated by the
-current-frame branches, not the history frames.
+(19.07 GiB both). Why that is not a contradiction is explained below.
+
+#### Why more history frames do not cost activation memory
+
+The reason is that this model truncates backprop-through-time. `R4Det.forward_train`
+(`mmdet3d/models/detectors/R4Det.py`) computes:
+
+```python
+history_steps = N - 1
+grad_steps = min(rssm_bptt_steps, history_steps)   # default rssm_bptt_steps=1
+burn_in = history_steps - grad_steps
+```
+
+Frames in the burn-in window are run under `torch.no_grad()`, so their
+activations are released as soon as that forward returns. Only the single most
+recent history frame runs with `rssm_detach_state=False` and keeps its graph,
+plus the current frame. Concretely:
+
+| Run | burn-in (`no_grad`) frames | grad-carrying history frames | current frame |
+|---|---:|---:|---:|
+| N=3 | 1 | 1 | 1 |
+| N=4 | 2 | 1 | 1 |
+
+So N=4's extra frame is a detached forward: it costs time, not peak memory. The
+peak comes from the current frame's backward through the 2D / FRPN / MRF3Net /
+IGDR branches, which is identical in both configs. That is why the two peak
+numbers differ by only ~0.1 GiB and the time differs by ~25%.
+
+Measured confirmation (same single-GPU harness, batch=2, peak
+`max_memory_allocated`):
+
+| Config | `rssm_bptt_steps` | Peak | Result |
+|---|---:|---:|---|
+| N=4 | 1 (default) | 18.96 GiB | OK |
+| N=4 | 2 | > 24 GiB | OOM |
+| N=4 | 3 | > 24 GiB | OOM |
+| N=4 | -1 (full) | > 24 GiB | OOM |
+| N=3 | 1 (default) | 18.84 GiB | OK |
+| N=3 | 2 | > 24 GiB | OOM |
+| N=3 | -1 (full) | > 24 GiB | OOM |
+
+Two things follow. First, the flat memory is a property of the BPTT
+truncation, not of the model being insensitive to frame count: the moment
+`rssm_bptt_steps` is raised to 2, the history activations do have to be kept
+and both N=3 and N=4 immediately exceed a 24 GiB card. Second, the current
+`rssm_bptt_steps=1` setting means the RSSM receives gradient from only one
+history step; the older frames shape the state forward-only. If longer-range
+gradient flow is wanted later, it cannot be done at batch=2 on a 24 GiB card
+without gradient checkpointing or smaller batches.
 
 The three-way hdim split was measured earlier on GPU 3, against the superseded
 N3/hdim64 config (that config has since been corrected to hdim128, so only the

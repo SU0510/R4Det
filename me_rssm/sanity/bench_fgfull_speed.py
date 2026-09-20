@@ -53,9 +53,10 @@ def build(cfg_path):
 
 def train_batches(cfg, n):
     ds = build_dataset(cfg.data.train)
+    spg = cfg.data.samples_per_gpu
     dl = DataLoader(ds, batch_size=cfg.data.samples_per_gpu, shuffle=False,
                     num_workers=2,
-                    collate_fn=lambda x: collate(x, samples_per_gpu=2))
+                    collate_fn=lambda x: collate(x, samples_per_gpu=spg))
     it = iter(dl)
     return [next(it) for _ in range(n)]
 
