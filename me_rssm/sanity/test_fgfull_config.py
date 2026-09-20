@@ -1,6 +1,6 @@
-"""Pre-flight validation for the fgfull config (CPU only).
+"""Pre-flight validation for the fgfull config family (CPU only).
 
-Run:  python me_rssm/sanity/test_fgfull_config.py
+Run:  python me_rssm/sanity/test_fgfull_config.py [config path]
 
 Checks
 ------
@@ -32,6 +32,8 @@ from mmdet3d.datasets import build_dataset
 
 CFG = os.path.join(_REPO, 'configs/r4det/'
                    'TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head.py')
+if len(sys.argv) > 1:
+    CFG = os.path.abspath(sys.argv[1])
 CKPT = os.path.join(_REPO, 'checkpoints/pretrained_tj4d.pth')
 
 
@@ -65,6 +67,8 @@ def main():
     print('F1 temporal_fusion type =', model_cfg.temporal_fusion.type,
           '(expect MotionAlignedRSSMFusion)')
     ok &= model_cfg.temporal_fusion.type == 'MotionAlignedRSSMFusion'
+    print('F1 model.seq_len =', model_cfg.seq_len)
+    print('F1 temporal_fusion.hidden_dim =', model_cfg.temporal_fusion.hidden_dim)
 
     # F2: model build on CPU (inject meta_info exactly like tools/train_vod.py)
     import tempfile

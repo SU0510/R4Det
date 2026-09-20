@@ -4735,24 +4735,24 @@ supervision inside the shared N-frame extract_feat loop, so three kinds of
 work were being repeated on history frames and one RPN pass was duplicated on
 the current frame.
 
-Changed in :
+Changed in `mmdet3d/models/detectors/R4Det.py`:
 
-1. Added  to  and
-    to .
-   Training history-frame calls now pass .
-2. History frames skip , FRPN former/latter, and the
-   Shapely-based . These tensors are only consumed by
+1. Added `curr_frame_supervision` to `extract_feat` and
+   `with_curr_frame_supervision` to `preprocessing_information`.
+   Training history-frame calls now pass `curr_frame_supervision=False`.
+2. History frames skip `rangeview_foreground`, FRPN former/latter, and the
+   Shapely-based `generate_bev_mask`. These tensors are only consumed by
    current-frame losses, so the current-frame loss semantics are unchanged.
-3.  already returns decoded RPN proposals. The IGDR
-   intermediate path now reuses 
-   instead of rerunning .
+3. `img_rpn_head.forward_train` already returns decoded RPN proposals. The IGDR
+   intermediate path now reuses `[p.detach() for p in proposal_list]`
+   instead of rerunning `img_rpn_head.simple_test_rpn`.
 4. No config/hyperparameter change; the running formal job was not restarted.
 
 Verification:
 
-- : pass.
-- : pass.
-- :
+- `python -m py_compile mmdet3d/models/detectors/R4Det.py`: pass.
+- `git diff --check`: pass.
+- `python me_rssm/sanity/smoke_fgfull_gpu.py 2`
   ; train forward/backward, IGDR path, and val
   forward all ran. Peak memory ~19.0 GiB.
 - Single-card smoke timing after the change: ~1.7-1.8 s/iter on the first
@@ -4806,3 +4806,44 @@ that the entire gap is closed.
 Running log:
 
 `/data/lurui/work_dirs/fgfull_N4_2x4_24e_seed0/train_stdout_resume_after_ep2_20260920.log`
+
+### 46.8 FG-FULL N=3 relay queue (2026-09-20)
+
+The running N=4 FG-FULL job is a clean comparison point for a shorter sequence,
+and the historical N-frame ablation (section 8) showed the capacity/frame
+matching rule: N=3 works best with `hidden_dim=64`, while `hidden_dim=128`
+only paid off at N=4. A N=3 variant was therefore prepared without stopping
+the current N=4 run.
+
+New config:
+
+`configs/r4det/TJ4D-R4Det_fgfull_N3_2x4_24e_pretrained_v2_head.py`
+
+Merged settings:
+
+| Setting | Value |
+|---|---:|
+| `model.seq_len` | 3 |
+| `model.temporal_fusion.hidden_dim` | 64 |
+| train/val/test dataset `seq_len` | 3 |
+| `samples_per_gpu` | 2 |
+| `cumulative_iters` | 2 |
+| `max_epochs` | 24 |
+
+The preflight tool `me_rssm/sanity/test_fgfull_config.py` now accepts an
+optional config path so the same F1-F4 checks can be reused for the N=3
+configuration.
+
+Relay queue:
+
+`me_rssm/queue_fgfull_n3_after_n4.sh`
+
+The queue waits for the current N=4 `train_vod.py` process to exit, drains
+GPUs 5/6/7, reruns the preflight for the N=3 config, then launches into the
+separate work dir:
+
+`/data/lurui/work_dirs/fgfull_N3_2x4_24e_seed0`
+
+Crash handling is the same as the existing queue: retry up to 3 times and
+resume from `latest.pth` when present. Queue state is logged to
+`/data/lurui/work_dirs/fgfull_n3_queue.log`.
