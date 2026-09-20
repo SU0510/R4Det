@@ -4963,6 +4963,50 @@ history step; the older frames shape the state forward-only. If longer-range
 gradient flow is wanted later, it cannot be done at batch=2 on a 24 GiB card
 without gradient checkpointing or smaller batches.
 
+#### What the forward-only history frames actually contribute
+
+The older frames are not dead weight even without gradient. In
+`MotionAlignedRSSMFusion.forward` each frame performs:
+
+1. deformably align `h_{t-1}` / `z_{t-1}` to the current BEV feature,
+2. `h_t = ConvGRU(z_aligned, h_aligned)`,
+3. `z_t ~ q(z_t | h_t, encoder(feat_t))`,
+4. store `(h_t, z_t)` as the state for the next frame.
+
+Because `h_state` / `z_state` are carried forward as plain tensors (detached,
+but numerically real), an older frame's *output* state still conditions every
+later frame's prior, posterior and GRU gates. What it cannot do is receive
+credit assignment: gradients never reach that frame's encoder, alignment
+layers, or BEV backbone. So it contributes:
+
+- a longer, motion-aligned context window: three history frames instead of one
+  when going N=2 -> N=4, giving the GRU a state built from more observations;
+- more robust state initialization, e.g. surviving a momentarily empty or
+  degenerate frame;
+- nothing in terms of learning those frames' features, since no gradient
+  flows there.
+
+This also means the frame-count ablation is measuring "longer forward context"
+plus "more cost", not "longer learned temporal credit assignment". Those are
+different questions, and only the second one needs multi-step BPTT.
+
+#### Consequence for the historical N-frame ablation (section 8)
+
+This matters for how section 8 should be read. `rssm_bptt_steps` was introduced
+in `094d663` (2026-08-19). Before that commit, every history frame was rolled
+under `torch.no_grad()` unconditionally. The section 8 configs
+`..._N3_2x3_12e.py`, `..._N4_2x4_12e.py`, `..._N3_hdim128_2x4_12e.py` and
+`..._N4_hdim64_2x4_12e.py` were created on 2026-08-09 and never set
+`rssm_bptt_steps`, so they all ran with zero gradient through history.
+
+So the section 8 conclusion "N=3 -> N=4 gives no gain, the marginal frame is
+exhausted" is a statement about *forward-only context*, not about truncated
+BPTT. The later Run 14 tested `rssm_bptt_steps=1` on top of N=4/hdim128 and was
+a net loss (37.84 vs 39.65 stored). Nobody in this history has tested an N=4
+model whose history frames actually receive gradient. If the question of
+interest is "do more frames help the RSSM learn temporal structure", section 8
+does not answer it.
+
 The three-way hdim split was measured earlier on GPU 3, against the superseded
 N3/hdim64 config (that config has since been corrected to hdim128, so only the
 numbers are reproduced here):
