@@ -4300,46 +4300,68 @@ clean 基线 `46.9612 + 0.5` 写死的，**不能事后改成按正确基线 `46
   红线、并呈现配对的 Overall/BEV 增益，再考虑定为可替换主模型。
 - 暂不做 Cyclist 绕行 stem；不加常数 Cyclist score bias 或 PCGrad。
 
-### 44.7 seed1 复现结果（未通过，seed2 另跑均值口径）
+### 44.7 多 seed 复现结果（三 seed 完成，未通过；seed2 停在 ep18）
 
-> 日期：2026-09-18 ~ 2026-09-19。承接 44.6 的「方向成功，进入多 seed 复现」，
-> 用 `SEEDS='1 2'` 在同一 BASE_DIR 下顺序跑 seed1/seed2，与**同 seed 的 clean
-> full-RSSM**（第 19 节 Run 10 多 seed）做配对比较。本节记录 seed1 已完成的判据结果、
-> 两 seed 的峰值排名，以及 seed1 中止、seed2 单独补跑的决定。
+> 日期：2026-09-17 ~ 2026-09-19。承接 44.6 的「方向成功，进入多 seed 复现」，在
+> `cyccls_branch_N4_2x4_24e_seed0` 之外顺序补跑 seed1/seed2，与**同 seed 的 clean
+> full-RSSM**（第 19 节 Run 10 多 seed）做配对比较。本节记录三个 seed 的最终训练事实、
+> ep12-16 门控的逐 seed 与三 seed 均值两套口径、峰值排名，以及补充跑的 ep18 单点复评。
 
-#### 44.7.1 训练设置与中止口径
+#### 44.7.1 训练设置与最终中止口径
 
 | 项 | seed0（44.3） | seed1 | seed2 |
 |---|---|---|---|
-| work_dir | `cyccls_branch_N4_2x4_24e_seed0` | `cyccls_branch_N4_2x4_24e_multiseed/seed_1` | `cyccls_branch_N4_2x4_24e_multiseed/seed_2` |
-| 日志 | `20260917_032423` | `20260918_051529` | 2026-09-19 02:36 启动，进行中 |
+| work_dir | `cyccls_branch_N4_2x4_24e_seed0` | `..._multiseed/seed_1` | `..._multiseed/seed_2` |
+| 日志 | `20260917_032423` | `20260918_051529` | `20260919_023629` |
 | GPUs | 5,6,7 | 5,6,7 | 5,6,7 |
 | 有效 batch | 12 | 12 | 12 |
-| 状态 | 完整 24e | ep22 验证完成、ep23 约 1000 iter 后中止 | 完整 24e（进行中） |
+| 落盘 checkpoint | ep1-24 | ep1-22 | ep1-18 |
+| 状态 | 完整 24e | ep22 验证完成、ep23 约 1000 iter 后主动中止 | ep18 验证开始时外部中止（非本人 kill） |
 
-- seed1 于 2026-09-19 02:18 由 tmux `cyccls_multiseed` 队列中止；`epoch_1..22.pth`
-  与 `latest.pth` 均已落盘，ep23/24 未保存。
-- **中止依据**：门控在固定的 ep12-16 窗口判定，该窗口在 seed1 上已完整闭合。
-- **seed2 单独补跑的依据**：44.6 的判据存在两种口径。**逐 seed 口径**下 seed1 已证伪，
-  seed2 无补足作用；但 **三 seed 均值口径**下 seed2 仍会改变均值结论。为不放弃后者，
-  于 2026-09-19 02:36 UTC 另起新会话 `cyccls_seed2`，只跑 seed2，保持原 24e 配置与
-  `--deterministic`。seed1 未恢复 ep23/24。注意 kill 原 `cyccls_multiseed` 队列时，
-  未启动的 seed2 一并被终止，因此 seed2 是本次单独重启，而非原队列继续。
+- 三 seed 均使用同一份配置 `TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_cyccls.py`、
+  同一 BASE_DIR 与 `--deterministic`，除 seed 外无差异。
+- **seed0**：唯一完整跑满 24 epoch 的 seed，44.3-44.6 的全部结论以它为准。
+- **seed1**：于 2026-09-19 02:18 由 tmux `cyccls_multiseed` 队列主动中止。`epoch_1..22.pth`
+  与 `latest.pth` 均已落盘，ep23/24 未保存。中止依据：门控判定在**固定的 ep12-16 窗口**，
+  该窗口在 seed1 上已完整闭合，后段不再改变门控结论。
+- **seed2**：2026-09-19 02:36 UTC 另起会话 `cyccls_seed2` 单独补跑（原 `cyccls_multiseed`
+  队列中止时未启动的 seed2 一并被终止，故此处为重启而非续跑）。2026-09-19 19:26 UTC
+  前后 seed2 在 **ep18 验证阶段被外部中止**，原因未定位：`dmesg` 无 OOM/内核报错记录、
+  未由本人 kill、GPU 当时无抢占迹象。`epoch_1..18.pth` 与 `latest.pth -> epoch_18.pth`
+  均已落盘，训练循环的 `log.json` 只写入了 ep1-17 的验证行，ep18 的验证未写回日志。
+- **seed2 是否补跑**：补跑目标已达成。seed2 的作用是补全三 seed 均值口径，而 ep18 中止
+  发生在门控窗口 ep12-16 **之外**，ep12-16 已完整闭合，故 ep19-24 不影响本节任何门控
+  判定。若日后需要三 seed 的 ep20-24 后段配对，才需要从 `epoch_18.pth` 恢复。
 
-#### 44.7.2 ep12-16 门控（逐 seed 口径，seed1）
+#### 44.7.2 ep12-16 门控（逐 seed 配对）
 
-与**同 seed** clean full-RSSM 的 ep12-16 均值配对：
+各 seed 取自身与**同 seed clean full-RSSM** 在 ep12-16 五 epoch 的窗口均值配对：
 
-| 指标 | clean seed1 | CycCls seed1 ep12-16 mean | Δ | seed0 Δ（44.4） |
-|---|---:|---:|---:|---:|
-| Overall 3D moderate | 39.1994 | 38.2093 | **-0.9901** | +1.1768 |
-| Overall BEV moderate | 46.8477 | 46.1478 | **-0.6999** | +0.9391 |
-| Cyclist 3D moderate loose | 47.6034 | 47.5981 | -0.0053 | -0.7156 |
-| Pedestrian 3D moderate loose | 30.1997 | 26.4170 | **-3.7827** | +0.9575 |
-| Car 3D moderate strict | 45.3952 | 48.2530 | +2.8578 | +2.9273 |
-| Truck 3D moderate strict | 33.5993 | 30.5689 | **-3.0304** | +1.5381 |
+| 指标 | s0 Δ | s1 Δ | s2 Δ | 三 seed 均值 Δ | 三 seed Δ 标准差 |
+|---|---:|---:|---:|---:|---:|
+| Overall 3D moderate | +1.1768 | -0.9901 | -1.1368 | **-0.3167** | 1.30 |
+| Overall BEV moderate | +0.9391 | -0.6999 | -2.1310 | **-0.6306** | 1.54 |
+| Cyclist 3D moderate loose | -0.7156 | -0.0053 | -2.1335 | **-0.9515** | 1.08 |
+| Pedestrian 3D moderate loose | +0.9576 | -3.7827 | -1.4779 | **-1.4343** | 2.37 |
+| Car 3D moderate strict | +2.9273 | +2.8578 | -3.2056 | **+0.8598** | 3.52 |
+| Truck 3D moderate strict | +1.5381 | -3.0304 | +2.2698 | **+0.2591** | 2.87 |
 
-逐 epoch 明细：
+（Δ = CycCls − clean，同 seed 同窗口。逐 seed 绝对值见下表。）
+
+三 seed 的 ep12-16 绝对均值与离散度：
+
+| 指标 | CycCls 三 seed mean ± std | clean 三 seed mean ± std |
+|---|---:|---:|
+| Overall 3D moderate | 38.6795 ± 0.77 | **38.9962 ± 0.53** |
+| Overall BEV moderate | 46.6034 ± 0.74 | **47.2340 ± 0.97** |
+| Cyclist loose | 47.1233 ± 1.10 | **48.0748 ± 0.52** |
+| Pedestrian loose | 28.4657 ± 1.82 | **29.9000 ± 0.87** |
+| Car strict | **48.2508 ± 2.48** | 47.3910 ± 1.83 |
+| Truck strict | **30.8780 ± 1.31** | 30.6189 ± 2.74 |
+
+各 seed 的 ep12-16 逐 epoch 明细：
+
+seed0（44.4 已列，此处略）；seed1：
 
 | epoch | Overall 3D | Overall BEV | Cyclist loose | Ped loose | Car strict | Truck strict |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -4349,31 +4371,48 @@ clean 基线 `46.9612 + 0.5` 写死的，**不能事后改成按正确基线 `46
 | 15 | 39.71 | 47.09 | 49.14 | 27.27 | 51.13 | 31.30 |
 | 16 | 37.06 | 43.89 | 45.39 | 25.79 | 46.63 | 30.44 |
 
-预注册门控判定（同一套绝对门槛）：
+seed2：
 
-| 条件 | 结果 | 判定 |
-|---|---:|---|
-| Overall 3D moderate >= 38.8900 | 38.2093 | **fail** |
-| Overall BEV moderate >= 47.4600 | 46.1478 | **fail** |
-| Cyclist loose >= 47.6300 | 47.5981 | **fail（差 0.0319）** |
-| 四个组成项均不得下降超过 1.0 | Ped -3.7827, Truck -3.0304 | **fail** |
-| 至少两个类别提升 >= 0.5 | Car +2.8578 | **fail（仅 1 类）** |
+| epoch | Overall 3D | Overall BEV | Cyclist loose | Ped loose | Car strict | Truck strict |
+|---:|---:|---:|---:|---:|---:|---:|
+| 12 | 38.05 | 46.34 | 47.17 | 28.49 | 45.75 | 30.77 |
+| 13 | 37.27 | 45.04 | 43.86 | 26.42 | 45.63 | 33.20 |
+| 14 | 40.16 | 48.55 | 46.97 | 30.12 | 49.61 | 33.95 |
+| 15 | 37.58 | 44.26 | 44.19 | 30.20 | 45.51 | 30.42 |
+| 16 | 38.25 | 46.83 | 47.12 | 30.32 | 42.35 | 33.22 |
 
-**结论：seed1 逐 seed 口径下全面未通过。** 与 seed0「只差 BEV 0.0016、其余全过」不同，
-seed1 是五项里四项失败，Ped/Truck 的跌幅（-3.78 / -3.03）远超「任何类别下降不超过 1.0」
-的红线。Cyclist 红线勉强保住（-0.0053），但也没有增益。
+预注册门控判定（逐 seed 与三 seed 均值）：
 
-seed1 后段（ep20-22，ep23/24 未产出）3-epoch 部分窗口同 seed 配对：
+| 条件 | seed0 | seed1 | seed2 | 三 seed 均值 | 判定 |
+|---|---:|---:|---:|---:|---|
+| Overall 3D moderate >= 38.8900 | 39.5670 pass | 38.2093 fail | 38.2622 fail | 38.6795 fail | **fail** |
+| Overall BEV moderate >= 47.4600 | 47.4584 fail | 46.1478 fail | 46.2039 fail | 46.6034 fail | **fail** |
+| Cyclist loose >= 47.6300 | 47.9115 pass | 47.5981 fail | 45.8605 fail | 47.1233 fail | **fail** |
+| 四个组成项均不得下降超过 1.0 | 全过 | Ped -3.78 / Truck -3.03 fail | Cyc -2.13 / Ped -1.48 / Car -3.21 fail | Ped -1.43 fail | **fail** |
+| 至少两个类别提升 >= 0.5 | Car +2.93 / Trk +1.54 pass | 仅 Car +2.86 fail | 仅 Trk +2.27 fail | 仅 Car fail | **fail** |
 
-| 窗口 ep20-22 | Overall 3D | Overall BEV | Cyclist loose | Ped loose | Car strict | Truck strict |
-|---|---:|---:|---:|---:|---:|---:|
-| clean seed1 | 38.8222 | 46.3103 | 45.6443 | 32.6747 | 42.5639 | 34.4061 |
-| CycCls seed1 | 38.6410 | 46.0784 | 44.8291 | 28.0583 | 48.6984 | 32.9784 |
-| Δ | -0.1812 | -0.2319 | -0.8152 | **-4.6164** | **+6.1345** | -1.4276 |
+**结论：逐 seed 口径与三 seed 均值口径都未通过。** seed0「只差 BEV 0.0016、其余全过」
+是三 seed 中的最好特例，不能代表该分支：seed1 五项里四项失败，seed2 五项里五项失败，
+三 seed 均值在 Overall/BEV/Cyclist/Ped 上全为负。
 
-后段依旧是同一个模式：Car 大幅受益、Ped 大幅受损、整体基本持平略降。
+#### 44.7.3 Car strict 信号的稳健性检查
 
-#### 44.7.3 两 seed BEST 与全局峰值排名
+44.4 曾把 Car strict 视为唯一跨 seed 方向一致的正向效应（seed0 +2.93 / seed1 +2.86）。
+加入 seed2 后该结论被推翻：
+
+| 口径 | s0 | s1 | s2 | 三 seed 方向 |
+|---|---:|---:|---:|---|
+| Car strict ep12-16 Δ | +2.9273 | +2.8578 | **-3.2056** | 2/3 为正、均值 +0.86、std 3.52 |
+| Car strict BEST Δ | +1.7017 | +3.6425 | **-1.7345** | 2/3 为正 |
+
+- seed2 的 Car strict 在 ep12-16 与 BEST 两个口径下都是**负**，且 ep12-16 的 -3.21
+  超过了「单类下降不超过 1.0」红线。
+- 三 seed 的 Car Δ 均值为 +0.86，但标准差 3.52 比均值大 4 倍，2/3 为正不足以支撑
+  「该分支稳定提升 Car」的判断。
+- 因此 Car strict 只能记为「**两个 seed 上为正、不是跨三个 seed 稳健的效应**」，不再作为
+  支持该分支保留的依据。
+
+#### 44.7.4 BEST 与全局峰值排名
 
 各 run 取自身 BEST（max `Overall_3D_moderate`）：
 
@@ -4381,87 +4420,132 @@ seed1 后段（ep20-22，ep23/24 未产出）3-epoch 部分窗口同 seed 配对
 |---|---:|---:|---:|---:|---:|---:|---:|
 | CycCls seed0 | 12 | 40.6350 | 48.2658 | 49.6157 | 30.0768 | 51.6789 | 31.1687 |
 | CycCls seed1 | 15 | 39.7104 | 47.0907 | 49.1415 | 27.2706 | 51.1331 | 31.2962 |
+| CycCls seed2 | 14 | 40.1627 | 48.5545 | 46.9717 | 30.1160 | 49.6118 | 33.9513 |
 | clean seed0 | 16 | 39.8802 | 47.6956 | 50.4709 | 28.6426 | 49.9772 | 30.4303 |
 | clean seed1 | 15 | 40.5073 | 48.1272 | 49.3553 | 30.3896 | 47.4906 | 34.7938 |
+| clean seed2 | 14 | 40.8800 | 49.8510 | 50.0905 | 31.3235 | 51.3463 | 30.7597 |
 
-**seed0 − seed1（CycCls 两 seed 自身的峰值差）**：
+**CycCls 三 seed 自身峰值（Overall）**：40.6350 / 39.7104 / 40.1627。
 
-| 指标 | Δ (s0 − s1) |
-|---|---:|
-| Overall 3D | +0.92 |
-| Overall BEV | +1.18 |
-| Cyclist loose | +0.47 |
-| Ped loose | +2.81 |
-| Car strict | +0.55 |
-| Truck strict | -0.13 |
+| 指标 | Δ (s0 − s1) | Δ (s0 − s2) | Δ (s1 − s2) |
+|---|---:|---:|---:|
+| Overall 3D | +0.92 | +0.47 | -0.45 |
+| Overall BEV | +1.18 | -0.29 | -1.46 |
+| Cyclist loose | +0.47 | +2.64 | +2.17 |
+| Ped loose | +2.81 | -0.04 | -2.85 |
+| Car strict | +0.55 | +2.07 | +1.52 |
+| Truck strict | -0.13 | -2.78 | -2.66 |
 
-- 两 seed 峰值相差约 **Overall +0.92 / BEV +1.18**，而平台期 Overall 的 epoch 间
-  标准差本身就有 ±1.5（见 44.7.4），差距不足一个 sigma。
-- 注意 **clean 基线本身 seed1 强于 seed0**（Overall 40.5073 vs 39.8802，差 +0.63），
-  所以 seed1 上 CycCls 相对 clean 变差，一部分是 clean 起点更高、更难被超越。
+- 三 seed Overall 峰值极差 `0.92`，而平台期 Overall 的 epoch 间标准差本身就有 ±1.5
+  （见 44.7.5），**seed 间峰值差小于单个 seed 内部的 epoch 抖动**。
+- BEV/Cyclist/Ped/Car/Truck 的 seed 间峰值差普遍在 0.3~2.8，同样处在或低于对应单类
+  的 epoch 间噪声带内。
+- 因此「seed0 峰值明显高于 seed1」不能读成 seed 间存在结构性差异，更像是同一噪声分布里
+  的三个采样。
 
 全库 `Overall_3D_moderate` 峰值排名（扫描所有 `work_dirs/**/*.log.json`）：
 
 | 排名 | run | BEST @ep | Overall 3D |
 |---:|---|---:|---:|
 | 1 | KL0 消融 seed1（第 25 节，已被否决） | 20 | 41.0994 |
-| 2 | Run10 head-v2 seed2 | 14 | 40.8800 |
+| 2 | Run10 head-v2 seed2（主线） | 14 | 40.8800 |
 | 3 | **CycCls seed0** | 12 | **40.6350** |
 | 4 | Run10 原单次（ep11，未存盘） | 11 | 40.5950 |
 | 5 | Run10 head-v2 seed1 | 15 | 40.5073 |
 | 6 | KL0 消融 seed0 | 22 | 40.3481 |
 | 7 | shared stem seed0（第 41 节） | 14 | 40.3045 |
-| 8 | **CycCls seed1** | 15 | **39.7104** |
+| 8 | seed1_ep15_restore | 15 | 40.2945 |
+| 9 | **CycCls seed2** | 14 | **40.1627** |
+| 10 | Run10 head-v2 seed0 | 16 | 39.8802 |
+| 11 | **CycCls seed1** | 15 | **39.7104** |
 
 **是否超过历史最高**：
 
-- CycCls seed0 `40.6350` 仅比 Run10 原始单次峰值 `40.5950` 高 **+0.04**，**低于** Run10
-  head-v2 的 released 最优 seed2 `40.8800`，更低于 KL0 seed1 的 `41.0994`。
-- CycCls seed1 `39.7104` 低于所有参考点，包括 Run10 三 seed 中最低的 `39.8802`。
-- 按第 19 节既定口径（comparison 用平台/固定窗口均值，不用单点 BEST），
-  `40.6350` 落在 Run10 三 seed BEST 分布 `40.42 ± 0.51` 的一个标准差内，
-  **不能算刷新历史最高**。主线（Run10 head-v2）历史最高单点仍是 seed2 ep14 `40.88`。
+- CycCls 三 seed 中最高的是 seed0 `40.6350`，仅比 Run10 原始单次峰值 `40.5950` 高
+  **+0.04**，**低于**主线 Run10 head-v2 的 released 最优 seed2 `40.8800`，更低于 KL0
+  seed1 的 `41.0994`。
+- CycCls seed1 `39.7104` 低于 Run10 三 seed 中最低的 `39.8802`；CycCls seed2 `40.1627`
+  也低于 Run10 三 seed 的最低值之上不多，位于 Run10 分布下半区。
+- 按第 19 节既定口径（comparison 用平台/固定窗口均值，不用单点 BEST），`40.6350`
+  落在 Run10 三 seed BEST 分布 `40.42 ± 0.51` 的一个标准差内，**不能算刷新历史最高**。
+  主线（Run10 head-v2）历史最高单点仍是 seed2 ep14 `40.88`。
 
-#### 44.7.4 平台期噪声量级（差距来源）
+#### 44.7.5 平台期噪声量级（差距来源）
 
 ep10-22 平台期每类的 epoch 间波动（标准差 / 极差）：
 
-| 指标 | cyc s0 std | cyc s1 std | 极差 s0 / s1 |
-|---|---:|---:|---:|
-| Overall 3D | 1.55 | 1.46 | 5.2 / 4.8 |
-| Overall BEV | 0.96 | 0.94 | 3.0 / 3.8 |
-| Cyclist loose | 1.50 | 1.71 | 5.5 / 5.6 |
-| Ped loose | 2.97 | 1.80 | 9.7 / 6.6 |
-| Car strict | 3.16 | 4.15 | 12.0 / 15.6 |
-| Truck strict | 1.95 | 2.13 | 8.1 / 8.3 |
+| 指标 | cyc s0 std | cyc s1 std | cyc s2 std | 极差 s0 / s1 / s2 |
+|---|---:|---:|---:|---:|
+| Overall 3D | 1.61 | 1.52 | 0.95 | 5.2 / 4.8 / 3.0 |
+| Overall BEV | 1.00 | 0.98 | 1.28 | 3.0 / 3.8 / 4.3 |
+| Cyclist loose | 1.56 | 1.78 | 1.97 | 5.5 / 5.6 / 5.0 |
+| Ped loose | 3.09 | 1.87 | 1.69 | 9.7 / 6.6 / 5.3 |
+| Car strict | 3.29 | 4.32 | 2.46 | 12.0 / 15.6 / 7.8 |
+| Truck strict | 2.03 | 2.22 | 1.68 | 8.1 / 8.3 / 4.8 |
 
-- 同一 run 内部 Overall 就抖 ±1.5，Car 抖 ±3~4，Ped 抖 ±2~3。
+- 同一 run 内部 Overall 就抖 ±1.5，Car 抖 ±2~4，Ped 抖 ±2~3。
 - CycCls 相对 clean 的增益量级（Overall +0.6~1.2）**小于或接近这个 epoch 间噪声**，
   因此 ep12-16 的窗口均值本身是在噪声上采样，seed0 的正增益不稳定。
 - seed0 与 seed1 的逐 epoch Overall 差：均值 +0.99，**逐 epoch 差的标准差 1.96**，
-  即两 seed 差异连一个 sigma 都不到。
+  即两 seed 差异连一个 sigma 都不到；加入 seed2 后三 seed Overall Δ 的窗口均值为
+  -0.32、标准差 1.30，同样落在噪声带内。
 
-#### 44.7.5 判定
+#### 44.7.6 补充：seed2 ep18 单点复评（门控窗口之外）
 
-- **逐 seed 口径：seed1 复现失败**，且不是踩线失败 —— 五项门控里四项明确不通过，
-  Ped/Truck 破了 -1.0 红线。
-- **唯一可复现的正向信号是 Car strict**：seed0 +2.93 / seed1 +2.86（ep12-16 窗口），
-  两 seed 方向一致、幅度接近；BEST 口径下也是 +1.70 / +3.64。这是唯一跨 seed 稳健的效应。
-- **Cyclist 两个 seed 都无增益**（-0.72 / -0.01），仅保住 -1.0 红线。观测数据只能支持
-  「该分支未在 Cyclist 上带来收益」这一条；至于 Car 受益与 Ped/Truck 受损是否由该分支的
-  结构设计导致，现有两个 seed 的结果不足以区分原因，本节不下此判断。
-- **Overall / BEV / Ped / Truck 不可复现**：seed0 与 seed1 方向相反，幅度都在噪声带内。
-  44.5 的「ep20-24 同窗全面不劣于 clean」只在 seed0 上成立，seed1 后段 Ped 反而
-  -4.62，同样不成立。
-- 因此截至 seed1：**CycCls 分支不能被定为可替换主模型**。seed2 的作用仅是补全三 seed
-  均值口径，不是为逐 seed 口径翻案。
+seed2 训练循环中止在 ep18 验证开始时，`log.json` 未写入 ep18 验证行。为补全 seed2
+的可用证据，用 `tools/test_vod.py` 对已落盘的 `epoch_18.pth` 做了一次**独立复评**
+（非训练循环内的 DistEvalHook）：
 
-#### 44.7.6 下一步
+```text
+config     cyccls_branch_N4_2x4_24e_multiseed/seed_2/..._head_cyccls.py
+checkpoint .../seed_2/epoch_18.pth
+cmd        python tools/test_vod.py --config <cfg> --checkpoint <ckpt> --gpu-id 0 \
+             --eval bbox --out /tmp/cyc_seed2_ep18.pkl
+```
 
-1. seed2 完成后，按 44.7.2 的口径补全三 seed 的 ep12-16 配对均值与峰值汇总，
-   在**同一次**判定里同时给出逐 seed 与三 seed 均值两种结论。
-2. 若三 seed 均值也无法支持该分支，则把 CycCls 分支记为「仅 Car strict 呈现跨 seed 正
-   向信号、整体 Overall 未被支持」并停止在主线上使用；主模型维持 Run 10 head-v2
-   `40.42 ± 0.51`，不再为整体 Overall 调整该分支。
+| 指标 | seed2 ep18 复评 | seed2 ep14（BEST） | clean seed2 ep18（同 seed 同 epoch） | Δ vs clean ep18 |
+|---|---:|---:|---:|---:|
+| Overall 3D moderate | 39.6956 | 40.1627 | 37.3955 | **+2.3001** |
+| Overall BEV moderate | 46.6615 | 48.5545 | 45.6212 | **+1.0403** |
+| Cyclist loose | 45.7119 | 46.9717 | 41.0076 | **+4.7043** |
+| Pedestrian loose | 30.3297 | 30.1160 | 29.3232 | +1.0065 |
+| Car strict | 47.6366 | 49.6118 | 48.7399 | -1.1033 |
+| Truck strict | 35.1044 | 33.9513 | 30.5113 | **+4.5931** |
+
+- 口径提醒：这是**单点、独立脚本复评**，与 44.7.2 的 ep12-16 五 epoch 窗口均值不可直接
+  比较；且 ep18 在预注册门控窗口 ep12-16 **之外**，只能作为补充证据，不参与门控判定。
+- 单看 ep18 这一天，seed2 的 CycCls 全面优于同 seed clean（Cyc +4.70、Trk +4.59、
+  Overall +2.30），与 ep12-16 窗口上 seed2 全面落后形成明显反差。这正好说明该 run 的
+  epoch 间抖动足以让单点结论翻转，不能用它翻案，也不能用它否定窗口结论。
+- 另需注意：clean seed2 在 ep18 本身处于自身低谷（Overall 37.40，低于其 ep12-16 均值
+  39.40），因此 ep18 的 +2.30 里含有「clean 当天偏低」的成分，不宜当作该分支的真实增益。
+
+#### 44.7.7 判定
+
+- **逐 seed 口径**：seed1、seed2 均复现失败，且都不是踩线失败。seed1 五项里四项不通过，
+  seed2 五项全部不通过，Ped/Car/Cyc 分别在不同 seed 上破了 -1.0 红线。
+- **三 seed 均值口径**：Overall `-0.32`、BEV `-0.63`、Cyclist `-0.95` 均为负，
+  Ped `-1.43` 破红线，仅 Car `+0.86` 为正但标准差 3.52，**三 seed 均值同样不支持该分支**。
+- **Cyclist 无增益**：三 seed Δ 为 -0.72 / -0.01 / -2.13，均值 -0.95、std 1.08，
+  三 seed 中两个为负、一个接近 0。观测数据只能支持「该分支未在 Cyclist 上带来收益」，
+  更不支持它作为「Cyclist 独立分类分支」的原始动机。
+- **Car strict 不稳健**：seed2 翻负，三 seed 2/3 为正但均值小于标准差。44.7.3 已指出，
+  不能再把 Car 记为跨 seed 稳健的正向效应。
+- **Overall / BEV / Ped / Truck 不可复现**：seed0 与 seed1/2 方向相反，幅度都在噪声带内。
+  44.5 的「ep20-24 同窗全面不劣于 clean」只在 seed0 上成立，seed1 后段 Ped 反而 -4.62，
+  同样不成立。
+- 至于 Car 受益与 Ped/Truck 受损是否由该分支的**结构设计**导致，现有三个 seed 的结果
+  仍不足以区分原因：seed 间方向不一致、幅度在噪声带内，本节不下因果判断。
+- 因此最终判定：**CycCls 分支在多 seed 复现下未被支持，不能定为可替换主模型。**
+  主线维持 Run 10 head-v2 `40.42 ± 0.51`。该分支记为「单 seed 上近似踩线、跨 seed 不可
+  复现」，不再为整体 Overall 调整，也不在主线上启用。
+
+#### 44.7.8 下一步
+
+1. 主模型维持 Run 10 head-v2（第 19 节）`40.42 ± 0.51`，不再为该分支投入训练。
+2. 若确实需要 Cyclist 专项改进，应换一条与分类残差不同的假设重新预注册（例如候选排序
+   之外的召回/回归方向），并直接按三 seed 均值 + ep12-16 固定窗口做门控，不先跑单 seed。
 3. 后续任何单点峰值都必须配平台/固定窗口均值一起报，避免再次出现 seed0 ep12 `40.6350`
    这类落在噪声带内、却被读成「刷新历史最高」的误判。
+4. seed2 若日后需要 ep20-24 后段配对，可从 `epoch_18.pth` 恢复补跑到 24e；但这不影响
+   本节已经闭合的门控结论。
