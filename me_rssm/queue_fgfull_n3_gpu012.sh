@@ -10,7 +10,7 @@
 set -u
 REPO=/home/lurui/workspace/R4Det
 N3_CFG=configs/r4det/TJ4D-R4Det_fgfull_N3_2x4_24e_pretrained_v2_head.py
-WORK_DIR=/data/lurui/work_dirs/fgfull_N3_2x4_24e_seed0
+WORK_DIR=/data/lurui/work_dirs/fgfull_N3_h128_2x4_24e_seed0
 GPU_LIST=0,1,2
 NPROC=3
 LOG=/data/lurui/work_dirs/fgfull_n3_gpu012_queue.log

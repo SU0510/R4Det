@@ -4810,10 +4810,16 @@ Running log:
 ### 46.8 FG-FULL N=3 relay queue (2026-09-20)
 
 The running N=4 FG-FULL job is a clean comparison point for a shorter sequence,
-and the historical N-frame ablation (section 8) showed the capacity/frame
-matching rule: N=3 works best with `hidden_dim=64`, while `hidden_dim=128`
-only paid off at N=4. A N=3 variant was therefore prepared without stopping
-the current N=4 run.
+and a N=3 variant was prepared without stopping the current N=4 run.
+
+Note on an earlier mistake: the first version of this config also dropped
+`hidden_dim` 128 -> 64, justified by the historical capacity/frame match in
+section 8. That was not what was requested. The request was a strict
+frame-count ablation. The config has been corrected to change `seq_len` only
+and keep `hidden_dim=128`. The mistake was caught at epoch 2 of the hdim64 run
+and that run was stopped before any checkpoint was written; its partial logs
+remain under `/data/lurui/work_dirs/fgfull_N3_2x4_24e_seed0/`. The corrected
+run uses a separate work dir, `/data/lurui/work_dirs/fgfull_N3_h128_2x4_24e_seed0/`.
 
 New config:
 
@@ -4824,7 +4830,7 @@ Merged settings:
 | Setting | Value |
 |---|---:|
 | `model.seq_len` | 3 |
-| `model.temporal_fusion.hidden_dim` | 64 |
+| `model.temporal_fusion.hidden_dim` | 128 (unchanged from N=4) |
 | train/val/test dataset `seq_len` | 3 |
 | `samples_per_gpu` | 2 |
 | `cumulative_iters` | 2 |
@@ -4881,53 +4887,67 @@ external pretrained checkpoint predates these modules.
 
 ### 46.10 N=3 vs N=4 speed split: seq_len or hidden_dim (2026-09-20)
 
-The N=3 config changes two things at once relative to N=4 (`seq_len` 4->3 and
-`temporal_fusion.hidden_dim` 128->64), so the speed contribution of each was
-measured separately. To isolate them, a benchmark-only override
-`me_rssm/sanity/configs/fgfull_N4_hdim64_bench.py` keeps `seq_len=4` but drops
-`hidden_dim` to 64.
+Two separate questions were measured here: what the corrected N=3 run
+(`seq_len` 4->3 only, `hidden_dim` kept at 128) actually costs, and how much of
+the speed difference comes from frame count versus `hidden_dim`. The latter
+uses a benchmark-only override `me_rssm/sanity/configs/fgfull_N4_hdim64_bench.py`
+that keeps `seq_len=4` but drops `hidden_dim` to 64.
 
-Controlled single-GPU benchmark on GPU 3 (idle), same dataset/loader/batch as
+Controlled single-GPU benchmark on an idle GPU, same dataset/loader/batch as
 training (`me_rssm/sanity/bench_fgfull_speed.py`, 2 warmup + 5 timed iters,
-CUDA-synchronized):
+CUDA-synchronized).
+
+Corrected N3 (`hidden_dim=128`, the run actually launched), on GPU 4:
 
 ```bash
 source .envrc
-CUDA_VISIBLE_DEVICES=3 python me_rssm/sanity/bench_fgfull_speed.py 2 5 \
+CUDA_VISIBLE_DEVICES=4 python me_rssm/sanity/bench_fgfull_speed.py 2 5 \
   configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head.py \
-  me_rssm/sanity/configs/fgfull_N4_hdim64_bench.py \
   configs/r4det/TJ4D-R4Det_fgfull_N3_2x4_24e_pretrained_v2_head.py
 ```
 
 | Config | T1 train (s/iter) | T2 inference (s/sample) |
 |---|---:|---:|
-| N4, hidden_dim=128 (current N4) | 1.404 | 0.271 |
+| N4, hidden_dim=128 | 1.580 | 0.299 |
+| N3, hidden_dim=128 (this run) | 1.238 | 0.239 |
+
+So the pure frame-count ablation gives **1.28x train (+21.6% time saved)** and
+**1.25x inference (+20.0%)**. Peak memory is essentially identical
+(19.07 GiB both), because the activated memory is dominated by the
+current-frame branches, not the history frames.
+
+The three-way hdim split was measured earlier on GPU 3, against the superseded
+N3/hdim64 config (that config has since been corrected to hdim128, so only the
+numbers are reproduced here):
+
+| Config | T1 train (s/iter) | T2 inference (s/sample) |
+|---|---:|---:|
+| N4, hidden_dim=128 | 1.404 | 0.271 |
 | N4, hidden_dim=64 (isolates seq_len) | 1.347 | 0.241 |
-| N3, hidden_dim=64 (current N3) | 1.176 | 0.197 |
+| N3, hidden_dim=64 (superseded) | 1.176 | 0.197 |
 
 Derived speedups:
 
 | Comparison | Train | Inference |
 |---|---:|---:|
-| N3/h64 vs N4/h128 (the runs actually launched) | 1.19x (+16.2% time saved) | 1.37x (+27.2%) |
+| N3/h128 vs N4/h128 (frame count alone) | 1.28x (+21.6%) | 1.25x (+20.0%) |
+| N3/h64 vs N4/h128 (superseded combo) | 1.19x (+16.2%) | 1.37x (+27.2%) |
 | N4/h64 vs N4/h128 (hidden_dim alone) | 1.04x (+4.0%) | 1.12x (+10.9%) |
-| N3/h64 vs N4/h64 (seq_len alone, from the two rows) | ~1.15x (~13%) | ~1.22x (~18%) |
 
 Conclusions:
 
-- The inference gap is mostly a real sequence-length effect: fewer frames to
-  run through the BEV + temporal path. N3 gives ~1.2-1.4x.
-- The training gap is much smaller than inference because the train step is
-  dominated by the 2D/foreground supervision branches, which run on the
-  current frame only and are unchanged by `seq_len`.
-- `hidden_dim` 128->64 buys only ~4% train / ~11% inference by itself, so most
-  of the N3 config's advantage comes from dropping the 4th frame.
+- Dropping the 4th frame alone buys ~1.25-1.28x on both train and inference.
+- `hidden_dim` 128->64 buys only ~4% train / ~11% inference by itself. It
+  shrinks inference time but barely touches the train step.
+- The two effects overlap, so the earlier N3/h64 combo (1.19x train, 1.37x
+  inference) was not simply the sum of its parts; on train it was actually
+  slower than the pure frame-count change measured later.
 
 Cross-check against the live 3-GPU DDP logs at this point in training:
 
 | Run | Steady-state s/iter (median) |
 |---|---:|
-| N3 (GPUs 0/1/2) | 1.824 (last 30 logs) |
+| N3 (GPUs 0/1/2, hdim64, superseded) | 1.824 (last 30 logs) |
 | N4 (GPUs 5/6/7) | 1.925 (last 60 logs) |
 
 That is only ~1.05x on the formal 3-GPU runs, far below the isolated
