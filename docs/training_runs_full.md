@@ -4965,6 +4965,39 @@ without gradient checkpointing or smaller batches.
 
 #### What the forward-only history frames actually contribute
 
+The two history loops in `forward_train` are distinct in three ways, not just
+one: gradient, supervision, and loss participation.
+
+| | burn-in frames (`range(burn_in)`) | grad frames (`range(burn_in, N-1)`) |
+|---|---|---|
+| call site | `torch.no_grad()` + default `detach_state=True` | `rssm_detach_state=False`, state kept in graph |
+| `curr_frame_supervision` | `True` (default arg) | `False` (explicit) |
+| detection losses | none (returns only `bev_feats`) | none (feat_or_dict=0) |
+| RSSM losses | none | `rssm_recon` + `kl` appended to `history_rssm_losses` |
+| state effect | advances `h/z` numerically for later frames | advances `h/z`, and the *path* is differentiable |
+
+Two consequences worth being explicit about:
+
+1. **Neither history loop trains detection.** The 3D head, 2D RPN/RoI head,
+   FRPN, MRF3Net and IGDR mask losses are all computed from the current frame
+   only (`feat_or_dict=1`). History frames never call the heads.
+2. **Only the grad-window frames train the RSSM itself.** `rssm_history_losses`
+   collects each such frame's `mse(reconstruction, bev_feats_cache)` and its
+   KL, which are then averaged with the current frame's:
+
+   ```python
+   rssm_recon_loss = (sum(loss[0] for loss in history_rssm_losses)
+                      + rssm_recon_loss) / (len(history_rssm_losses) + 1)
+   ```
+
+   So a burn-in frame contributes no loss term at all; it exists purely to
+   move the state forward.
+
+With the default `rssm_bptt_steps=1`, N=4 means one grad frame and two burn-in
+frames; N=3 means one grad frame and one burn-in frame. That is why the
+extra frame in N=4 costs time (its full BEV forward still runs) but not
+memory (no graph is retained), and why it adds no direct loss either.
+
 The older frames are not dead weight even without gradient. In
 `MotionAlignedRSSMFusion.forward` each frame performs:
 
