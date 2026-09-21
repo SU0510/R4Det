@@ -1,0 +1,4 @@
+方法	协议	Overall 3D moderate	Overall BEV moderate	Car (strict)	Truck (strict)	Pedestrian (loose)	Cyclist (loose)
+No-Temporal（单帧）	24e · 预训练 · head-v2	35.59	42.23	47.86	25.53	27.07	41.89
+Ours：N4 Motion-Aligned RSSM	24e · 预训练 · head-v2	40.88	49.85	51.35	30.76	31.32	50.09
+GRU 时序基线（最早 18e baseline）	18e · 无预训练 · 无 head-v2	34.50	41.68	32.82	29.91	26.64	48.63

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>R4Det 对比表（可直接复制到 PPT）</title>
+<style>
+  body { font-family: "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif;
+         background: #fff; margin: 28px; color: #1a1a1a; }
+  h2 { font-size: 20px; margin: 0 0 6px 0; }
+  .sub { color: #666; font-size: 13px; margin: 0 0 16px 0; }
+  table { border-collapse: collapse; font-size: 15px; }
+  th, td { padding: 9px 16px; text-align: center; }
+  th { background: #2f5597; color: #fff; font-weight: 600; white-space: nowrap; }
+  td.m { text-align: left; white-space: nowrap; }
+  td.m b { font-size: 15px; }
+  td.m span { display: block; color: #888; font-size: 11px; font-family: Consolas, monospace; }
+  tr.alt td { background: #f4f7fc; }
+  td.hl { font-weight: 700; color: #b05a00; }
+  tr.old td { background: #f2f2f2; color: #555; }
+  .note { margin-top: 14px; color: #555; font-size: 12.5px; line-height: 1.75; }
+  .note b { color: #1a1a1a; }
+</style>
+</head>
+<body>
+
+<h2>R4Det：无时序 / 本文方法 / 最早 18e 基线 对比（TJ4D val，AP40）</h2>
+<p class="sub">各 run 取自身 BEST epoch 单点；四类即 Overall 的构成项（Car/Truck 用 strict，Ped/Cyc 用 loose）</p>
+
+<table>
+  <tr>
+    <th>方法</th>
+    <th>协议</th>
+    <th>Overall<br>3D moderate</th>
+    <th>Overall<br>BEV moderate</th>
+    <th>Car<br>(strict)</th>
+    <th>Truck<br>(strict)</th>
+    <th>Pedestrian<br>(loose)</th>
+    <th>Cyclist<br>(loose)</th>
+  </tr>
+  <tr>
+    <td class="m"><b>No-Temporal</b>（单帧）<span>no_temporal_N4_2x4_24e_seed0 · ep20</span></td>
+    <td>24e · 预训练 · head-v2</td>
+    <td>35.59</td><td>42.23</td><td>47.86</td><td>25.53</td><td>27.07</td><td>41.89</td>
+  </tr>
+  <tr class="alt">
+    <td class="m"><b>Ours：N4 Motion-Aligned RSSM</b><span>run10_headv2_multiseed/seed_2 · ep14</span></td>
+    <td>24e · 预训练 · head-v2</td>
+    <td class="hl">40.88</td><td class="hl">49.85</td><td>51.35</td><td>30.76</td><td>31.32</td><td>50.09</td>
+  </tr>
+  <tr class="old">
+    <td class="m"><b>GRU 时序基线</b>（最早 18e baseline）<span>baseline_temporal · ep12</span></td>
+    <td>18e · 无预训练 · 无 head-v2</td>
+    <td>34.50</td><td>41.68</td><td>32.82</td><td>29.91</td><td>26.64</td><td>48.63</td>
+  </tr>
+</table>
+
+<div class="note">
+  <b>同栈对照（上两行）：</b>时序融合净贡献 <b>Overall 3D +5.29</b>（40.88 − 35.59）、
+  <b>BEV +7.62</b>；分类别 Car +3.49 / Truck +5.23 / Pedestrian +4.25 / Cyclist +8.20。<br>
+  <b>口径：</b>Overall 3D = mean(Ped_loose, Cyc_loose, Car_strict, Truck_strict)，故四类列求平均恰等于 Overall 列
+  （35.59 / 40.88 / 34.50 均已校验）。<br>
+  <b>注意：</b>第 3 行是<b>早期 18e 栈</b>（无预训练、无 head-v2、Ped 1-anchor 时代、lr 2e-4、spg=4）且为单次非确定性运行，
+  与前两行<b>不同栈，不可直接相减</b>，仅作项目起点参照。同栈纵向可比请用上两行。
+</div>
+
+</body>
+</html>
