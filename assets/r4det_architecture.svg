@@ -1,0 +1,232 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2850" height="900" viewBox="0 0 2850 900">
+<rect width="2850" height="900" fill="white"/>
+<defs>
+<marker id="arrB" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+  <path d="M 0 0 L 10 5 L 0 10 z" fill="#1A1A1A"/>
+</marker>
+<marker id="arrBlu" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+  <path d="M 0 0 L 10 5 L 0 10 z" fill="#6C8EBF"/>
+</marker>
+<marker id="arrOrg" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+  <path d="M 0 0 L 10 5 L 0 10 z" fill="#E8A33D"/>
+</marker>
+<marker id="arrBlk" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+  <path d="M 0 0 L 10 5 L 0 10 z" fill="#333333"/>
+</marker>
+</defs>
+<polygon points="55.0,232.0 115.0,212.0 115.0,142.0 55.0,162.0" fill="#FDEBC8" stroke="#E8A33D" stroke-width="2.6" stroke-linejoin="round"/>
+<polygon points="125.0,168.0 168.0,178.0 168.0,212.0 125.0,222.0" fill="#FDEBC8" stroke="#E8A33D" stroke-width="2.6" stroke-linejoin="round"/>
+<text x="105" y="278" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Multi-view</text>
+<text x="105" y="305" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Images</text>
+<polyline points="180.0,190.0 243.0,190.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<rect x="250" y="140" width="180" height="100" rx="16" fill="#FDEBC8" stroke="#E8A33D" stroke-width="3.5"/>
+<rect x="314" y="152" width="62" height="52" rx="8" fill="white" stroke="#E8A33D" stroke-width="2.4"/>
+<rect x="301" y="162" width="62" height="52" rx="8" fill="white" stroke="#E8A33D" stroke-width="2.4"/>
+<rect x="288" y="172" width="62" height="52" rx="8" fill="white" stroke="#E8A33D" stroke-width="2.4"/>
+<text x="340" y="278" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Camera Encoder</text>
+<text x="340" y="305" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#666666" text-anchor="middle">Backbone + FPN</text>
+<polyline points="430.0,190.0 483.0,190.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<polygon points="508.0,217.0 604.0,197.0 604.0,115.0 508.0,135.0" fill="#FDEBC8" stroke="#E8A33D" stroke-width="2.6" stroke-linejoin="round"/>
+<polygon points="492.0,231.0 588.0,211.0 588.0,129.0 492.0,149.0" fill="#FDEBC8" stroke="#E8A33D" stroke-width="2.6" stroke-linejoin="round"/>
+<polygon points="476.0,245.0 572.0,225.0 572.0,143.0 476.0,163.0" fill="#FDEBC8" stroke="#E8A33D" stroke-width="2.6" stroke-linejoin="round"/>
+<text x="545" y="278" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Multi-scale</text>
+<text x="545" y="305" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Camera Feat.</text>
+<polyline points="612.0,188.0 648.0,190.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<rect x="655" y="140" width="190" height="100" rx="16" fill="#F8CECC" stroke="#B85450" stroke-width="3.5"/>
+<polygon points="706.0,168.0 794.0,168.0 784.0,182.0 696.0,182.0" fill="#F5B5B0" stroke="#B85450" stroke-width="2.2" stroke-linejoin="round"/>
+<polygon points="706.0,192.0 794.0,192.0 784.0,206.0 696.0,206.0" fill="#F5B5B0" stroke="#B85450" stroke-width="2.2" stroke-linejoin="round"/>
+<polygon points="706.0,216.0 794.0,216.0 784.0,230.0 696.0,230.0" fill="#F5B5B0" stroke="#B85450" stroke-width="2.2" stroke-linejoin="round"/>
+<text x="750" y="122" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Panoramic Depth Fusion (PDF)</text>
+<polyline points="845.0,190.0 913.0,190.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<rect x="920" y="140" width="190" height="100" rx="16" fill="#FDEBC8" stroke="#E8A33D" stroke-width="3.5"/>
+<g stroke="#333333" stroke-width="2.2" fill="none">
+<polygon points="1046,160 1082,173 1082,213 1046,226" fill="#E8E8E8"/>
+<line x1="955" y1="193" x2="1046" y2="160"/>
+<line x1="955" y1="193" x2="1082" y2="173"/>
+<line x1="955" y1="193" x2="1082" y2="213"/>
+<line x1="955" y1="193" x2="1046" y2="226"/>
+</g>
+<rect x="962" y="185" width="17" height="17" fill="#333333"/>
+<text x="1015" y="278" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Camera-to-BEV</text>
+<text x="1015" y="305" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">View Transform</text>
+<text x="1015" y="330" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#666666" text-anchor="middle">LSS depth lift</text>
+<polyline points="1110.0,190.0 1180.0,214.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<polygon points="1190.0,200.0 1295.0,200.0 1324.8,180.8 1219.8,180.8" fill="#FDEBC8" stroke="#E8A33D" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1295.0,200.0 1324.8,180.8 1324.8,255.8 1295.0,275.0" fill="#FDEBC8" stroke="#E8A33D" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1190.0,275.0 1295.0,275.0 1295.0,200.0 1190.0,200.0" fill="#FDEBC8" stroke="#E8A33D" stroke-width="3" stroke-linejoin="round"/>
+<line x1="1225.0" y1="275" x2="1225.0" y2="200" stroke="#E8A33D" stroke-width="1.6"/>
+<line x1="1225.0" y1="200" x2="1234.92" y2="193.6" stroke="#E8A33D" stroke-width="1.6"/>
+<line x1="1260.0" y1="275" x2="1260.0" y2="200" stroke="#E8A33D" stroke-width="1.6"/>
+<line x1="1260.0" y1="200" x2="1279.84" y2="187.2" stroke="#E8A33D" stroke-width="1.6"/>
+<line x1="1190" y1="237.5" x2="1295" y2="237.5" stroke="#E8A33D" stroke-width="1.6"/>
+<line x1="1295" y1="237.5" x2="1324.76" y2="218.3" stroke="#E8A33D" stroke-width="1.6"/>
+<line x1="1304.92" y1="193.6" x2="1304.92" y2="268.6" stroke="#E8A33D" stroke-width="1.6"/>
+<line x1="1314.84" y1="187.2" x2="1314.84" y2="262.2" stroke="#E8A33D" stroke-width="1.6"/>
+<text x="1258" y="318" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Camera Feat.</text>
+<text x="1258" y="345" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">(in BEV)</text>
+<path d="M 82 646 A 14 14 0 0 1 82 674" fill="none" stroke="#6C8EBF" stroke-width="3.4"/>
+<path d="M 95 633 A 27 27 0 0 1 95 687" fill="none" stroke="#6C8EBF" stroke-width="3.4"/>
+<path d="M 108 620 A 40 40 0 0 1 108 700" fill="none" stroke="#6C8EBF" stroke-width="3.4"/>
+<circle cx="68" cy="660" r="6" fill="#6C8EBF"/>
+<text x="120" y="738" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">4D Radar</text>
+<text x="120" y="765" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Points</text>
+<polyline points="180.0,650.0 243.0,650.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<rect x="250" y="600" width="180" height="100" rx="16" fill="#DAE8FC" stroke="#6C8EBF" stroke-width="3.5"/>
+<rect x="305" y="628" width="17" height="17" rx="3" fill="white" stroke="#6C8EBF" stroke-width="2.2"/>
+<rect x="305" y="650" width="17" height="17" rx="3" fill="white" stroke="#6C8EBF" stroke-width="2.2"/>
+<rect x="305" y="672" width="17" height="17" rx="3" fill="white" stroke="#6C8EBF" stroke-width="2.2"/>
+<rect x="327" y="628" width="17" height="17" rx="3" fill="white" stroke="#6C8EBF" stroke-width="2.2"/>
+<rect x="327" y="650" width="17" height="17" rx="3" fill="white" stroke="#6C8EBF" stroke-width="2.2"/>
+<rect x="327" y="672" width="17" height="17" rx="3" fill="white" stroke="#6C8EBF" stroke-width="2.2"/>
+<rect x="349" y="628" width="17" height="17" rx="3" fill="white" stroke="#6C8EBF" stroke-width="2.2"/>
+<rect x="349" y="650" width="17" height="17" rx="3" fill="white" stroke="#6C8EBF" stroke-width="2.2"/>
+<rect x="349" y="672" width="17" height="17" rx="3" fill="white" stroke="#6C8EBF" stroke-width="2.2"/>
+<text x="330" y="738" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Radar Encoder</text>
+<text x="330" y="763" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="normal" fill="#666666" text-anchor="middle">Voxel Encoder +</text>
+<text x="330" y="782" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="normal" fill="#666666" text-anchor="middle">SECONDFPN</text>
+<polyline points="430.0,650.0 482.0,655.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<polygon points="496.0,644.0 576.0,644.0 600.8,628.0 520.8,628.0" fill="#DAE8FC" stroke="#6C8EBF" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="576.0,644.0 600.8,628.0 600.8,684.0 576.0,700.0" fill="#DAE8FC" stroke="#6C8EBF" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="496.0,700.0 576.0,700.0 576.0,644.0 496.0,644.0" fill="#DAE8FC" stroke="#6C8EBF" stroke-width="3" stroke-linejoin="round"/>
+<line x1="522.6666666666666" y1="700" x2="522.6666666666666" y2="644" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="522.6666666666666" y1="644" x2="530.9333333333333" y2="638.6666666666666" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="549.3333333333334" y1="700" x2="549.3333333333334" y2="644" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="549.3333333333334" y1="644" x2="565.8666666666667" y2="633.3333333333334" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="496" y1="672.0" x2="576" y2="672.0" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="576" y1="672.0" x2="600.8" y2="656.0" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="584.2666666666667" y1="638.6666666666666" x2="584.2666666666667" y2="694.6666666666666" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="592.5333333333333" y1="633.3333333333334" x2="592.5333333333333" y2="689.3333333333334" stroke="#6C8EBF" stroke-width="1.6"/>
+<text x="560" y="738" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Radar Voxel</text>
+<text x="560" y="763" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Feat.</text>
+<polyline points="592.0,655.0 648.0,650.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<rect x="660" y="600" width="150" height="100" rx="16" fill="#DAE8FC" stroke="#6C8EBF" stroke-width="3.5"/>
+<polygon points="683.0,650.0 733.0,634.0 785.0,650.0 735.0,666.0" fill="#333333" stroke="#333333" stroke-width="1.5" stroke-linejoin="round"/>
+<polyline points="709.0,614.0 709.0,638.0" fill="none" stroke="#333333" stroke-width="5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<polyline points="760.0,688.0 760.0,664.0" fill="none" stroke="#333333" stroke-width="5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<text x="735" y="738" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">BEV Collapse</text>
+<text x="735" y="765" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#666666" text-anchor="middle">height → BEV</text>
+<polyline points="810.0,650.0 1000.0,632.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<polygon points="1010.0,580.0 1115.0,580.0 1144.8,560.8 1039.8,560.8" fill="#DAE8FC" stroke="#6C8EBF" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1115.0,580.0 1144.8,560.8 1144.8,635.8 1115.0,655.0" fill="#DAE8FC" stroke="#6C8EBF" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1010.0,655.0 1115.0,655.0 1115.0,580.0 1010.0,580.0" fill="#DAE8FC" stroke="#6C8EBF" stroke-width="3" stroke-linejoin="round"/>
+<line x1="1045.0" y1="655" x2="1045.0" y2="580" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="1045.0" y1="580" x2="1054.92" y2="573.6" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="1080.0" y1="655" x2="1080.0" y2="580" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="1080.0" y1="580" x2="1099.84" y2="567.2" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="1010" y1="617.5" x2="1115" y2="617.5" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="1115" y1="617.5" x2="1144.76" y2="598.3" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="1124.92" y1="573.6" x2="1124.92" y2="648.6" stroke="#6C8EBF" stroke-width="1.6"/>
+<line x1="1134.84" y1="567.2" x2="1134.84" y2="642.2" stroke="#6C8EBF" stroke-width="1.6"/>
+<text x="1078" y="738" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Radar Feat.</text>
+<text x="1078" y="765" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">(in BEV)</text>
+<polyline points="1330.0,222.0 1443.0,398.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<polyline points="1152.0,638.0 1443.0,445.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<rect x="1450" y="375" width="180" height="90" rx="16" fill="#F5F5F5" stroke="#999999" stroke-width="3.5"/>
+<rect x="1482" y="398" width="38" height="44" rx="8" fill="#FDEBC8" stroke="#E8A33D" stroke-width="2.6"/>
+<rect x="1560" y="398" width="38" height="44" rx="8" fill="#DAE8FC" stroke="#6C8EBF" stroke-width="2.6"/>
+<text x="1540" y="430" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="26" font-weight="bold" fill="#1A1A1A" text-anchor="middle">+</text>
+<text x="1540" y="505" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">RC-BEV Fusion</text>
+<text x="1540" y="532" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#666666" text-anchor="middle">concat + conv</text>
+<polyline points="1630.0,420.0 1683.0,420.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<polygon points="1740.0,392.0 1818.0,392.0 1839.1,378.4 1761.1,378.4" fill="#EDE3F8" stroke="#8E7CC3" stroke-width="2.6" stroke-linejoin="round"/>
+<polygon points="1818.0,392.0 1839.1,378.4 1839.1,420.4 1818.0,434.0" fill="#EDE3F8" stroke="#8E7CC3" stroke-width="2.6" stroke-linejoin="round"/>
+<polygon points="1740.0,434.0 1818.0,434.0 1818.0,392.0 1740.0,392.0" fill="#EDE3F8" stroke="#8E7CC3" stroke-width="2.6" stroke-linejoin="round"/>
+<polygon points="1720.0,406.0 1798.0,406.0 1819.1,392.4 1741.1,392.4" fill="#EDE3F8" stroke="#8E7CC3" stroke-width="2.6" stroke-linejoin="round"/>
+<polygon points="1798.0,406.0 1819.1,392.4 1819.1,434.4 1798.0,448.0" fill="#EDE3F8" stroke="#8E7CC3" stroke-width="2.6" stroke-linejoin="round"/>
+<polygon points="1720.0,448.0 1798.0,448.0 1798.0,406.0 1720.0,406.0" fill="#EDE3F8" stroke="#8E7CC3" stroke-width="2.6" stroke-linejoin="round"/>
+<polygon points="1700.0,420.0 1778.0,420.0 1799.1,406.4 1721.1,406.4" fill="#DCD0F0" stroke="#8E7CC3" stroke-width="2.6" stroke-linejoin="round"/>
+<polygon points="1778.0,420.0 1799.1,406.4 1799.1,448.4 1778.0,462.0" fill="#DCD0F0" stroke="#8E7CC3" stroke-width="2.6" stroke-linejoin="round"/>
+<polygon points="1700.0,462.0 1778.0,462.0 1778.0,420.0 1700.0,420.0" fill="#DCD0F0" stroke="#8E7CC3" stroke-width="2.6" stroke-linejoin="round"/>
+<line x1="1726.0" y1="462" x2="1726.0" y2="420" stroke="#8E7CC3" stroke-width="1.6"/>
+<line x1="1726.0" y1="420" x2="1733.0266666666666" y2="415.46666666666664" stroke="#8E7CC3" stroke-width="1.6"/>
+<line x1="1752.0" y1="462" x2="1752.0" y2="420" stroke="#8E7CC3" stroke-width="1.6"/>
+<line x1="1752.0" y1="420" x2="1766.0533333333333" y2="410.93333333333334" stroke="#8E7CC3" stroke-width="1.6"/>
+<line x1="1700" y1="441.0" x2="1778" y2="441.0" stroke="#8E7CC3" stroke-width="1.6"/>
+<line x1="1778" y1="441.0" x2="1799.08" y2="427.4" stroke="#8E7CC3" stroke-width="1.6"/>
+<line x1="1785.0266666666666" y1="415.46666666666664" x2="1785.0266666666666" y2="457.46666666666664" stroke="#8E7CC3" stroke-width="1.6"/>
+<line x1="1792.0533333333333" y1="410.93333333333334" x2="1792.0533333333333" y2="452.93333333333334" stroke="#8E7CC3" stroke-width="1.6"/>
+<text x="1790" y="505" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Fused BEV Feat.</text>
+<text x="1790" y="532" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#666666" text-anchor="middle">(t−N … t)</text>
+<polyline points="1848.0,420.0 1908.0,420.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<rect x="1915" y="375" width="200" height="90" rx="16" fill="#F8CECC" stroke="#B85450" stroke-width="3.5"/>
+<polygon points="1960.0,405.0 2070.0,405.0 2058.0,420.0 1948.0,420.0" fill="#F5B5B0" stroke="#B85450" stroke-width="2.2" stroke-linejoin="round"/>
+<polygon points="1960.0,438.0 2070.0,438.0 2058.0,453.0 1948.0,453.0" fill="#F5B5B0" stroke="#B85450" stroke-width="2.2" stroke-linejoin="round"/>
+<path d="M 1985 372 C 1985 340, 2045 340, 2045 368" fill="none"
+ stroke="#333333" stroke-width="3" marker-end="url(#arrBlk)"/>
+<text x="2015" y="330" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#666666" text-anchor="middle">h, z state (BPTT)</text>
+<text x="2015" y="505" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Deformable Gated</text>
+<text x="2015" y="532" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Temporal Fusion</text>
+<text x="2015" y="557" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#666666" text-anchor="middle">pose-free align · gated agg. (DGTF)</text>
+<polyline points="2115.0,420.0 2173.0,420.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<rect x="2180" y="375" width="200" height="90" rx="16" fill="#F8CECC" stroke="#B85450" stroke-width="3.5"/>
+<polygon points="2212.0,418.0 2267.0,418.0 2283.1,407.6 2228.1,407.6" fill="#F5B5B0" stroke="#B85450" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="2267.0,418.0 2283.1,407.6 2283.1,441.6 2267.0,452.0" fill="#F5B5B0" stroke="#B85450" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="2212.0,452.0 2267.0,452.0 2267.0,418.0 2212.0,418.0" fill="#F5B5B0" stroke="#B85450" stroke-width="2" stroke-linejoin="round"/>
+<line x1="2230.3333333333335" y1="452" x2="2230.3333333333335" y2="418" stroke="#B85450" stroke-width="1.6"/>
+<line x1="2230.3333333333335" y1="418" x2="2235.706666666667" y2="414.53333333333336" stroke="#B85450" stroke-width="1.6"/>
+<line x1="2248.6666666666665" y1="452" x2="2248.6666666666665" y2="418" stroke="#B85450" stroke-width="1.6"/>
+<line x1="2248.6666666666665" y1="418" x2="2259.413333333333" y2="411.06666666666666" stroke="#B85450" stroke-width="1.6"/>
+<line x1="2212" y1="435.0" x2="2267" y2="435.0" stroke="#B85450" stroke-width="1.6"/>
+<line x1="2267" y1="435.0" x2="2283.12" y2="424.6" stroke="#B85450" stroke-width="1.6"/>
+<line x1="2272.3733333333334" y1="414.53333333333336" x2="2272.3733333333334" y2="448.53333333333336" stroke="#B85450" stroke-width="1.6"/>
+<line x1="2277.7466666666664" y1="411.06666666666666" x2="2277.7466666666664" y2="445.06666666666666" stroke="#B85450" stroke-width="1.6"/>
+<rect x="2300" y="395" width="52" height="14" rx="4" fill="#F5B5B0" stroke="#B85450" stroke-width="2"/>
+<rect x="2300" y="417" width="52" height="14" rx="4" fill="#F5B5B0" stroke="#B85450" stroke-width="2"/>
+<rect x="2300" y="439" width="52" height="14" rx="4" fill="#F5B5B0" stroke="#B85450" stroke-width="2"/>
+<text x="2280" y="505" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Instance-Guided</text>
+<text x="2280" y="532" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Dynamic Refinement</text>
+<text x="2280" y="557" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#666666" text-anchor="middle">foreground-gated fusion (IGDR)</text>
+<polyline points="2380.0,420.0 2438.0,420.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<rect x="2445" y="375" width="170" height="90" rx="16" fill="#F5F5F5" stroke="#999999" stroke-width="3.5"/>
+<polygon points="2480.0,448.0 2540.0,432.0 2596.0,448.0 2536.0,464.0" fill="#E8E8E8" stroke="#888888" stroke-width="2" stroke-linejoin="round"/>
+<g stroke="#B85450" stroke-width="2.4" fill="none">
+<polygon points="2500,440 2522,432 2536,438 2514,446"/>
+<line x1="2500" y1="440" x2="2500" y2="428"/>
+<line x1="2522" y1="432" x2="2522" y2="420"/>
+<line x1="2536" y1="438" x2="2536" y2="426"/>
+<line x1="2514" y1="446" x2="2514" y2="434"/>
+</g>
+<text x="2530" y="505" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">3D Detection Head</text>
+<text x="2530" y="532" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#666666" text-anchor="middle">Dynamic Anchor Head</text>
+<polyline points="2615.0,420.0 2673.0,420.0" fill="none" stroke="#1A1A1A" stroke-width="4.5" stroke-linejoin="round" marker-end="url(#arrB)"/>
+<polygon points="2690.0,420.0 2752.0,420.0 2770.6,408.0 2708.6,408.0" fill="#EDEDED" stroke="#999999" stroke-width="2.4" stroke-linejoin="round"/>
+<polygon points="2752.0,420.0 2770.6,408.0 2770.6,450.0 2752.0,462.0" fill="#EDEDED" stroke="#999999" stroke-width="2.4" stroke-linejoin="round"/>
+<polygon points="2690.0,462.0 2752.0,462.0 2752.0,420.0 2690.0,420.0" fill="#EDEDED" stroke="#999999" stroke-width="2.4" stroke-linejoin="round"/>
+<line x1="2710.6666666666665" y1="462" x2="2710.6666666666665" y2="420" stroke="#999999" stroke-width="1.6"/>
+<line x1="2710.6666666666665" y1="420" x2="2716.8666666666663" y2="416.0" stroke="#999999" stroke-width="1.6"/>
+<line x1="2731.3333333333335" y1="462" x2="2731.3333333333335" y2="420" stroke="#999999" stroke-width="1.6"/>
+<line x1="2731.3333333333335" y1="420" x2="2743.7333333333336" y2="412.0" stroke="#999999" stroke-width="1.6"/>
+<line x1="2690" y1="441.0" x2="2752" y2="441.0" stroke="#999999" stroke-width="1.6"/>
+<line x1="2752" y1="441.0" x2="2770.6" y2="429.0" stroke="#999999" stroke-width="1.6"/>
+<line x1="2758.2" y1="416.0" x2="2758.2" y2="458.0" stroke="#999999" stroke-width="1.6"/>
+<line x1="2764.4" y1="412.0" x2="2764.4" y2="454.0" stroke="#999999" stroke-width="1.6"/>
+<g stroke="#B85450" stroke-width="2.6" fill="none">
+<polygon points="2702,436 2738,424 2762,432 2726,444"/>
+<line x1="2702" y1="436" x2="2702" y2="418"/>
+<line x1="2738" y1="424" x2="2738" y2="406"/>
+<line x1="2762" y1="432" x2="2762" y2="414"/>
+<line x1="2726" y1="444" x2="2726" y2="426"/>
+<polygon points="2702,418 2738,406 2762,414 2726,426"/>
+</g>
+<text x="2745" y="505" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">3D Boxes</text>
+<rect x="2180" y="25" width="200" height="85" rx="16" fill="white" stroke="#E8A33D" stroke-width="2.8" stroke-dasharray="8 6"/>
+<text x="2280" y="62" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1A1A1A" text-anchor="middle">2D Instance Branch</text>
+<text x="2280" y="90" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#666666" text-anchor="middle">RPN + Mask Head</text>
+<polyline points="540.0,100.0 540.0,70.0 2172.0,70.0" fill="none" stroke="#E8A33D" stroke-width="3" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrOrg)"/>
+<text x="1250" y="60" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#666666" text-anchor="middle">2D features</text>
+<polyline points="2280.0,110.0 2280.0,368.0" fill="none" stroke="#E8A33D" stroke-width="3" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrOrg)"/>
+<text x="2292" y="200" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#666666" text-anchor="start">E: instance features</text>
+<text x="2292" y="226" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#666666" text-anchor="start">S: BEV instance map</text>
+<polyline points="540.0,606.0 540.0,490.0 755.0,490.0 755.0,248.0" fill="none" stroke="#6C8EBF" stroke-width="3" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#arrBlu)"/>
+<text x="647" y="478" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#6C8EBF" text-anchor="middle">Radar Depth</text>
+<rect x="40" y="845" width="34" height="24" rx="6" fill="#FDEBC8" stroke="#E8A33D" stroke-width="2.4"/>
+<text x="84" y="863" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#1A1A1A" text-anchor="start">Camera branch</text>
+<rect x="260" y="845" width="34" height="24" rx="6" fill="#DAE8FC" stroke="#6C8EBF" stroke-width="2.4"/>
+<text x="304" y="863" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#1A1A1A" text-anchor="start">Radar branch</text>
+<rect x="480" y="845" width="34" height="24" rx="6" fill="#F8CECC" stroke="#B85450" stroke-width="2.4"/>
+<text x="524" y="863" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#1A1A1A" text-anchor="start">Proposed modules (Ours)</text>
+<line x1="820" y1="857" x2="880" y2="857" stroke="#6C8EBF" stroke-width="3" stroke-dasharray="8 6"/>
+<text x="890" y="863" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#1A1A1A" text-anchor="start">cross-modal input (radar depth)</text>
+<line x1="1230" y1="857" x2="1290" y2="857" stroke="#E8A33D" stroke-width="3" stroke-dasharray="8 6"/>
+<text x="1300" y="863" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#1A1A1A" text-anchor="start">auxiliary path (2D instance branch)</text>
+</svg>

@@ -1,0 +1,371 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="930" viewBox="0 0 1800 930">
+<rect width="1800" height="930" fill="white"/>
+<defs><marker id="arrB" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#333333"/></marker><marker id="arrTeal" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#4DB6AC"/></marker><marker id="arrGreen" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#66BB6A"/></marker><marker id="arrPur" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#AB7CE0"/></marker><marker id="arrOrg" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#E8722C"/></marker><marker id="arrGray" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#999999"/></marker></defs>
+<text x="900" y="46" font-family="DejaVu Sans" font-size="30" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Motion-Aligned RSSM Temporal Fusion</text>
+<text x="900" y="74" font-family="DejaVu Sans" font-size="16" font-weight="normal" fill="#666666" text-anchor="middle">adapted world-model learning for radar–camera BEV detection</text>
+<text x="145" y="142" font-family="DejaVu Sans" font-size="15" font-weight="normal" fill="#666666" text-anchor="end">t−2</text>
+<rect x="160" y="150" width="280" height="240" rx="26" fill="#F2F2F2" stroke="#DBDBDB" stroke-width="3"/>
+<rect x="238" y="172" width="124" height="72" rx="14" fill="#C9F0DC" stroke="#4CAF50" stroke-width="3"/>
+<text x="300" y="212" font-family="DejaVu Sans" font-size="24" font-weight="bold" fill="#2E7D32" text-anchor="middle" font-style="italic">h_t</text>
+<text x="300" y="233" font-family="DejaVu Sans" font-size="11" font-weight="normal" fill="#666666" text-anchor="middle">GRU hidden</text>
+<rect x="258" y="264" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="258" y="278" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="258" y="292" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="258" y="306" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="258" y="320" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="258" y="334" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="272" y="264" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="272" y="278" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="272" y="292" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="272" y="306" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="272" y="320" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="272" y="334" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="286" y="264" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="286" y="278" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="286" y="292" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="286" y="306" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="286" y="320" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="286" y="334" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="300" y="264" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="300" y="278" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="300" y="292" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="300" y="306" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="300" y="320" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="300" y="334" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="314" y="264" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="314" y="278" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="314" y="292" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="314" y="306" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="314" y="320" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="314" y="334" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="328" y="264" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="328" y="278" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="328" y="292" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="328" y="306" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="328" y="320" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="328" y="334" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<polyline points="300.0,248.0 300.0,258.0" fill="none" stroke="#66BB6A" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrGreen)"/>
+<text x="248" y="376" font-family="DejaVu Sans" font-size="18" font-weight="bold" fill="#333333" text-anchor="end" font-style="italic">z_t</text>
+<line x1="291" y1="99" x2="309" y2="117" stroke="#D64545" stroke-width="4"/>
+<line x1="309" y1="99" x2="291" y2="117" stroke="#D64545" stroke-width="4"/>
+<polyline points="300.0,122.0 300.0,164.0" fill="none" stroke="#999999" stroke-width="3" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrGray)"/>
+<text x="255" y="94" font-family="DejaVu Sans" font-size="14" font-weight="bold" fill="#D64545" text-anchor="end">motion a_t (not used)</text>
+<text x="255" y="116" font-family="DejaVu Sans" font-size="12" font-weight="bold" text-anchor="end"><tspan fill="#E8722C">(2) </tspan><tspan fill="#666666"> no ego velocity in TJ4D</tspan></text>
+<polygon points="145,470 255,470 225,400 175,400" fill="#6FA8DC" stroke="#3D7CC9" stroke-width="2.5" stroke-linejoin="round"/>
+<text x="200" y="442" font-family="DejaVu Sans" font-size="18" font-weight="bold" fill="#FFFFFF" text-anchor="middle">enc</text>
+<polygon points="345,400 455,400 430,470 370,470" fill="#D2A8E8" stroke="#9B59B6" stroke-width="2.5" stroke-linejoin="round"/>
+<text x="400" y="442" font-family="DejaVu Sans" font-size="18" font-weight="bold" fill="#FFFFFF" text-anchor="middle">dec</text>
+<rect x="130" y="480" width="140" height="90" rx="10" fill="#F4F6F2" stroke="#8A8A8A" stroke-width="2.5"/>
+<rect x="140" y="489" width="22" height="21" fill="#BFD8C9" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="164" y="489" width="22" height="21" fill="#AFCBE3" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="188" y="489" width="22" height="21" fill="#E3DEBE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="212" y="489" width="22" height="21" fill="#D8CFC2" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="236" y="489" width="22" height="21" fill="#C2D6CC" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="140" y="513" width="22" height="21" fill="#E0D4BE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="164" y="513" width="22" height="21" fill="#B7CDE0" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="188" y="513" width="22" height="21" fill="#CBDCC2" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="212" y="513" width="22" height="21" fill="#DCD3C6" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="236" y="513" width="22" height="21" fill="#B9CFE2" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="140" y="537" width="22" height="21" fill="#CFE0C6" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="164" y="537" width="22" height="21" fill="#D9CEC0" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="188" y="537" width="22" height="21" fill="#C6D8CE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="212" y="537" width="22" height="21" fill="#E2DCC0" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="236" y="537" width="22" height="21" fill="#B4C9DD" stroke="#FFFFFF" stroke-width="1.4"/>
+<text x="200" y="594" font-family="DejaVu Sans" font-size="14" font-weight="bold" fill="#1A1A1A" text-anchor="middle">x_t (fused BEV feat.)</text>
+<text x="200" y="612" font-family="DejaVu Sans" font-size="12" font-weight="normal" fill="#666666" text-anchor="middle">KL(q‖p)  ·  q: posterior  p: prior</text>
+<rect x="138" y="626" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#3D7CC9" stroke-width="2.5"/>
+<text x="200" y="648" font-family="DejaVu Sans" font-size="12.5" font-weight="bold" fill="#1A1A1A" text-anchor="middle">q(z_t | h_t, e_t)</text>
+<rect x="138" y="668" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#9B59B6" stroke-width="2.5"/>
+<text x="200" y="690" font-family="DejaVu Sans" font-size="12.5" font-weight="bold" fill="#1A1A1A" text-anchor="middle">p(z_t | h_t)</text>
+<rect x="138" y="710" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#777777" stroke-width="2.5"/>
+<text x="200" y="732" font-family="DejaVu Sans" font-size="12.5" font-weight="bold" fill="#1A1A1A" text-anchor="middle">z_t = μ_q</text>
+<rect x="330" y="480" width="140" height="90" rx="10" fill="#F4F6F2" stroke="#8A8A8A" stroke-width="2.5"/>
+<rect x="340" y="489" width="22" height="21" fill="#DCE8D9" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="364" y="489" width="22" height="21" fill="#D3E2EF" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="388" y="489" width="22" height="21" fill="#F1EDDC" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="412" y="489" width="22" height="21" fill="#E8E1D8" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="436" y="489" width="22" height="21" fill="#D9E4DC" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="340" y="513" width="22" height="21" fill="#EEE7D6" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="364" y="513" width="22" height="21" fill="#D5E2EE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="388" y="513" width="22" height="21" fill="#DFE9DB" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="412" y="513" width="22" height="21" fill="#EAE3D9" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="436" y="513" width="22" height="21" fill="#D6E1EE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="340" y="537" width="22" height="21" fill="#E0E8DA" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="364" y="537" width="22" height="21" fill="#EAE2D6" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="388" y="537" width="22" height="21" fill="#DAE3DC" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="412" y="537" width="22" height="21" fill="#F0EBDD" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="436" y="537" width="22" height="21" fill="#D3DEEC" stroke="#FFFFFF" stroke-width="1.4"/>
+<text x="400" y="594" font-family="DejaVu Sans" font-size="14" font-weight="bold" fill="#1A1A1A" text-anchor="middle">x̂_t (recon)</text>
+<text x="400" y="612" font-family="DejaVu Sans" font-size="12" font-weight="normal" fill="#666666" text-anchor="middle">L_recon (MSE)</text>
+<text x="580" y="142" font-family="DejaVu Sans" font-size="15" font-weight="normal" fill="#666666" text-anchor="end">t−1</text>
+<rect x="595" y="150" width="280" height="240" rx="26" fill="#F2F2F2" stroke="#DBDBDB" stroke-width="3"/>
+<rect x="673" y="172" width="124" height="72" rx="14" fill="#C9F0DC" stroke="#4CAF50" stroke-width="3"/>
+<text x="735" y="212" font-family="DejaVu Sans" font-size="24" font-weight="bold" fill="#2E7D32" text-anchor="middle" font-style="italic">h_t</text>
+<text x="735" y="233" font-family="DejaVu Sans" font-size="11" font-weight="normal" fill="#666666" text-anchor="middle">GRU hidden</text>
+<rect x="693" y="264" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="693" y="278" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="693" y="292" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="693" y="306" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="693" y="320" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="693" y="334" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="707" y="264" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="707" y="278" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="707" y="292" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="707" y="306" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="707" y="320" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="707" y="334" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="721" y="264" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="721" y="278" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="721" y="292" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="721" y="306" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="721" y="320" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="721" y="334" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="735" y="264" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="735" y="278" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="735" y="292" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="735" y="306" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="735" y="320" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="735" y="334" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="749" y="264" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="749" y="278" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="749" y="292" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="749" y="306" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="749" y="320" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="749" y="334" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="763" y="264" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="763" y="278" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="763" y="292" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="763" y="306" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="763" y="320" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="763" y="334" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<polyline points="735.0,248.0 735.0,258.0" fill="none" stroke="#66BB6A" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrGreen)"/>
+<text x="683" y="376" font-family="DejaVu Sans" font-size="18" font-weight="bold" fill="#333333" text-anchor="end" font-style="italic">z_t</text>
+<line x1="726" y1="99" x2="744" y2="117" stroke="#D64545" stroke-width="4"/>
+<line x1="744" y1="99" x2="726" y2="117" stroke="#D64545" stroke-width="4"/>
+<polyline points="735.0,122.0 735.0,164.0" fill="none" stroke="#999999" stroke-width="3" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrGray)"/>
+<polygon points="580,470 690,470 660,400 610,400" fill="#6FA8DC" stroke="#3D7CC9" stroke-width="2.5" stroke-linejoin="round"/>
+<text x="635" y="442" font-family="DejaVu Sans" font-size="18" font-weight="bold" fill="#FFFFFF" text-anchor="middle">enc</text>
+<polygon points="780,400 890,400 865,470 805,470" fill="#D2A8E8" stroke="#9B59B6" stroke-width="2.5" stroke-linejoin="round"/>
+<text x="835" y="442" font-family="DejaVu Sans" font-size="18" font-weight="bold" fill="#FFFFFF" text-anchor="middle">dec</text>
+<rect x="565" y="480" width="140" height="90" rx="10" fill="#F4F6F2" stroke="#8A8A8A" stroke-width="2.5"/>
+<rect x="575" y="489" width="22" height="21" fill="#BFD8C9" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="599" y="489" width="22" height="21" fill="#AFCBE3" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="623" y="489" width="22" height="21" fill="#E3DEBE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="647" y="489" width="22" height="21" fill="#D8CFC2" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="671" y="489" width="22" height="21" fill="#C2D6CC" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="575" y="513" width="22" height="21" fill="#E0D4BE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="599" y="513" width="22" height="21" fill="#B7CDE0" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="623" y="513" width="22" height="21" fill="#CBDCC2" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="647" y="513" width="22" height="21" fill="#DCD3C6" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="671" y="513" width="22" height="21" fill="#B9CFE2" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="575" y="537" width="22" height="21" fill="#CFE0C6" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="599" y="537" width="22" height="21" fill="#D9CEC0" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="623" y="537" width="22" height="21" fill="#C6D8CE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="647" y="537" width="22" height="21" fill="#E2DCC0" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="671" y="537" width="22" height="21" fill="#B4C9DD" stroke="#FFFFFF" stroke-width="1.4"/>
+<text x="635" y="594" font-family="DejaVu Sans" font-size="14" font-weight="bold" fill="#1A1A1A" text-anchor="middle">x_t (fused BEV feat.)</text>
+<text x="635" y="612" font-family="DejaVu Sans" font-size="12" font-weight="normal" fill="#666666" text-anchor="middle">KL(q‖p)  ·  q: posterior  p: prior</text>
+<rect x="573" y="626" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#3D7CC9" stroke-width="2.5"/>
+<text x="635" y="648" font-family="DejaVu Sans" font-size="12.5" font-weight="bold" fill="#1A1A1A" text-anchor="middle">q(z_t | h_t, e_t)</text>
+<rect x="573" y="668" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#9B59B6" stroke-width="2.5"/>
+<text x="635" y="690" font-family="DejaVu Sans" font-size="12.5" font-weight="bold" fill="#1A1A1A" text-anchor="middle">p(z_t | h_t)</text>
+<rect x="573" y="710" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#777777" stroke-width="2.5"/>
+<text x="635" y="732" font-family="DejaVu Sans" font-size="12.5" font-weight="bold" fill="#1A1A1A" text-anchor="middle">z_t = μ_q</text>
+<rect x="765" y="480" width="140" height="90" rx="10" fill="#F4F6F2" stroke="#8A8A8A" stroke-width="2.5"/>
+<rect x="775" y="489" width="22" height="21" fill="#DCE8D9" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="799" y="489" width="22" height="21" fill="#D3E2EF" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="823" y="489" width="22" height="21" fill="#F1EDDC" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="847" y="489" width="22" height="21" fill="#E8E1D8" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="871" y="489" width="22" height="21" fill="#D9E4DC" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="775" y="513" width="22" height="21" fill="#EEE7D6" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="799" y="513" width="22" height="21" fill="#D5E2EE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="823" y="513" width="22" height="21" fill="#DFE9DB" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="847" y="513" width="22" height="21" fill="#EAE3D9" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="871" y="513" width="22" height="21" fill="#D6E1EE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="775" y="537" width="22" height="21" fill="#E0E8DA" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="799" y="537" width="22" height="21" fill="#EAE2D6" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="823" y="537" width="22" height="21" fill="#DAE3DC" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="847" y="537" width="22" height="21" fill="#F0EBDD" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="871" y="537" width="22" height="21" fill="#D3DEEC" stroke="#FFFFFF" stroke-width="1.4"/>
+<text x="835" y="594" font-family="DejaVu Sans" font-size="14" font-weight="bold" fill="#1A1A1A" text-anchor="middle">x̂_t (recon)</text>
+<text x="835" y="612" font-family="DejaVu Sans" font-size="12" font-weight="normal" fill="#666666" text-anchor="middle">L_recon (MSE)</text>
+<text x="1015" y="142" font-family="DejaVu Sans" font-size="15" font-weight="normal" fill="#666666" text-anchor="end">t</text>
+<rect x="1030" y="150" width="280" height="240" rx="26" fill="#F2F2F2" stroke="#DBDBDB" stroke-width="3"/>
+<rect x="1108" y="172" width="124" height="72" rx="14" fill="#C9F0DC" stroke="#4CAF50" stroke-width="3"/>
+<text x="1170" y="212" font-family="DejaVu Sans" font-size="24" font-weight="bold" fill="#2E7D32" text-anchor="middle" font-style="italic">h_t</text>
+<text x="1170" y="233" font-family="DejaVu Sans" font-size="11" font-weight="normal" fill="#666666" text-anchor="middle">GRU hidden</text>
+<rect x="1128" y="264" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1128" y="278" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1128" y="292" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1128" y="306" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1128" y="320" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1128" y="334" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1142" y="264" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1142" y="278" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1142" y="292" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1142" y="306" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1142" y="320" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1142" y="334" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1156" y="264" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1156" y="278" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1156" y="292" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1156" y="306" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1156" y="320" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1156" y="334" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1170" y="264" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1170" y="278" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1170" y="292" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1170" y="306" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1170" y="320" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1170" y="334" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1184" y="264" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1184" y="278" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1184" y="292" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1184" y="306" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1184" y="320" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1184" y="334" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1198" y="264" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1198" y="278" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1198" y="292" width="14" height="14" fill="#333333" stroke="#555555" stroke-width="1.6"/>
+<rect x="1198" y="306" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1198" y="320" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<rect x="1198" y="334" width="14" height="14" fill="#FFFFFF" stroke="#555555" stroke-width="1.6"/>
+<polyline points="1170.0,248.0 1170.0,258.0" fill="none" stroke="#66BB6A" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrGreen)"/>
+<text x="1118" y="376" font-family="DejaVu Sans" font-size="18" font-weight="bold" fill="#333333" text-anchor="end" font-style="italic">z_t</text>
+<line x1="1161" y1="99" x2="1179" y2="117" stroke="#D64545" stroke-width="4"/>
+<line x1="1179" y1="99" x2="1161" y2="117" stroke="#D64545" stroke-width="4"/>
+<polyline points="1170.0,122.0 1170.0,164.0" fill="none" stroke="#999999" stroke-width="3" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrGray)"/>
+<polygon points="1015,470 1125,470 1095,400 1045,400" fill="#6FA8DC" stroke="#3D7CC9" stroke-width="2.5" stroke-linejoin="round"/>
+<text x="1070" y="442" font-family="DejaVu Sans" font-size="18" font-weight="bold" fill="#FFFFFF" text-anchor="middle">enc</text>
+<polygon points="1215,400 1325,400 1300,470 1240,470" fill="#D2A8E8" stroke="#9B59B6" stroke-width="2.5" stroke-linejoin="round"/>
+<text x="1270" y="442" font-family="DejaVu Sans" font-size="18" font-weight="bold" fill="#FFFFFF" text-anchor="middle">dec</text>
+<rect x="1000" y="480" width="140" height="90" rx="10" fill="#F4F6F2" stroke="#8A8A8A" stroke-width="2.5"/>
+<rect x="1010" y="489" width="22" height="21" fill="#BFD8C9" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1034" y="489" width="22" height="21" fill="#AFCBE3" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1058" y="489" width="22" height="21" fill="#E3DEBE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1082" y="489" width="22" height="21" fill="#D8CFC2" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1106" y="489" width="22" height="21" fill="#C2D6CC" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1010" y="513" width="22" height="21" fill="#E0D4BE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1034" y="513" width="22" height="21" fill="#B7CDE0" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1058" y="513" width="22" height="21" fill="#CBDCC2" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1082" y="513" width="22" height="21" fill="#DCD3C6" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1106" y="513" width="22" height="21" fill="#B9CFE2" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1010" y="537" width="22" height="21" fill="#CFE0C6" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1034" y="537" width="22" height="21" fill="#D9CEC0" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1058" y="537" width="22" height="21" fill="#C6D8CE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1082" y="537" width="22" height="21" fill="#E2DCC0" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1106" y="537" width="22" height="21" fill="#B4C9DD" stroke="#FFFFFF" stroke-width="1.4"/>
+<text x="1070" y="594" font-family="DejaVu Sans" font-size="14" font-weight="bold" fill="#1A1A1A" text-anchor="middle">x_t (fused BEV feat.)</text>
+<text x="1070" y="612" font-family="DejaVu Sans" font-size="12" font-weight="normal" fill="#666666" text-anchor="middle">KL(q‖p)  ·  q: posterior  p: prior</text>
+<rect x="1008" y="626" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#3D7CC9" stroke-width="2.5"/>
+<text x="1070" y="648" font-family="DejaVu Sans" font-size="12.5" font-weight="bold" fill="#1A1A1A" text-anchor="middle">q(z_t | h_t, e_t)</text>
+<rect x="1008" y="668" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#9B59B6" stroke-width="2.5"/>
+<text x="1070" y="690" font-family="DejaVu Sans" font-size="12.5" font-weight="bold" fill="#1A1A1A" text-anchor="middle">p(z_t | h_t)</text>
+<rect x="1008" y="710" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#777777" stroke-width="2.5"/>
+<text x="1070" y="732" font-family="DejaVu Sans" font-size="12.5" font-weight="bold" fill="#1A1A1A" text-anchor="middle">z_t = μ_q</text>
+<rect x="1200" y="480" width="140" height="90" rx="10" fill="#F4F6F2" stroke="#8A8A8A" stroke-width="2.5"/>
+<rect x="1210" y="489" width="22" height="21" fill="#DCE8D9" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1234" y="489" width="22" height="21" fill="#D3E2EF" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1258" y="489" width="22" height="21" fill="#F1EDDC" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1282" y="489" width="22" height="21" fill="#E8E1D8" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1306" y="489" width="22" height="21" fill="#D9E4DC" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1210" y="513" width="22" height="21" fill="#EEE7D6" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1234" y="513" width="22" height="21" fill="#D5E2EE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1258" y="513" width="22" height="21" fill="#DFE9DB" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1282" y="513" width="22" height="21" fill="#EAE3D9" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1306" y="513" width="22" height="21" fill="#D6E1EE" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1210" y="537" width="22" height="21" fill="#E0E8DA" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1234" y="537" width="22" height="21" fill="#EAE2D6" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1258" y="537" width="22" height="21" fill="#DAE3DC" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1282" y="537" width="22" height="21" fill="#F0EBDD" stroke="#FFFFFF" stroke-width="1.4"/>
+<rect x="1306" y="537" width="22" height="21" fill="#D3DEEC" stroke="#FFFFFF" stroke-width="1.4"/>
+<text x="1270" y="594" font-family="DejaVu Sans" font-size="14" font-weight="bold" fill="#1A1A1A" text-anchor="middle">x̂_t (recon)</text>
+<text x="1270" y="612" font-family="DejaVu Sans" font-size="12" font-weight="normal" fill="#666666" text-anchor="middle">L_recon (MSE)</text>
+<polyline points="362.0,208.0 455.0,208.0" fill="none" stroke="#66BB6A" stroke-width="3.5" stroke-linejoin="round" marker-end="url(#arrGreen)"/>
+<polyline points="550.0,208.0 669.0,208.0" fill="none" stroke="#66BB6A" stroke-width="3.5" stroke-linejoin="round" marker-end="url(#arrGreen)"/>
+<polyline points="342.0,306.0 455.0,306.0" fill="none" stroke="#AB7CE0" stroke-width="3.5" stroke-linejoin="round" marker-end="url(#arrPur)"/>
+<polyline points="550.0,306.0 689.0,306.0" fill="none" stroke="#AB7CE0" stroke-width="3.5" stroke-linejoin="round" marker-end="url(#arrPur)"/>
+<polyline points="797.0,208.0 890.0,208.0" fill="none" stroke="#66BB6A" stroke-width="3.5" stroke-linejoin="round" marker-end="url(#arrGreen)"/>
+<polyline points="985.0,208.0 1104.0,208.0" fill="none" stroke="#66BB6A" stroke-width="3.5" stroke-linejoin="round" marker-end="url(#arrGreen)"/>
+<polyline points="777.0,306.0 890.0,306.0" fill="none" stroke="#AB7CE0" stroke-width="3.5" stroke-linejoin="round" marker-end="url(#arrPur)"/>
+<polyline points="985.0,306.0 1124.0,306.0" fill="none" stroke="#AB7CE0" stroke-width="3.5" stroke-linejoin="round" marker-end="url(#arrPur)"/>
+<rect x="455" y="196" width="125" height="134" rx="14" fill="#FFE3D3" stroke="#E8722C" stroke-width="3"/>
+<line x1="493" y1="240" x2="493" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="501" y1="240" x2="501" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="509" y1="240" x2="509" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="517" y1="240" x2="517" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="525" y1="240" x2="525" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="533" y1="240" x2="533" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="541" y1="240" x2="541" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="493" y1="240" x2="541" y2="240" stroke="#888888" stroke-width="1.2"/>
+<line x1="493" y1="248" x2="541" y2="248" stroke="#888888" stroke-width="1.2"/>
+<line x1="493" y1="256" x2="541" y2="256" stroke="#888888" stroke-width="1.2"/>
+<line x1="493" y1="264" x2="541" y2="264" stroke="#888888" stroke-width="1.2"/>
+<line x1="493" y1="272" x2="541" y2="272" stroke="#888888" stroke-width="1.2"/>
+<line x1="493" y1="280" x2="541" y2="280" stroke="#888888" stroke-width="1.2"/>
+<line x1="493" y1="288" x2="541" y2="288" stroke="#888888" stroke-width="1.2"/>
+<polygon points="499,244 535,242 531,280 495,282" fill="none" stroke="#E8722C" stroke-width="2.4" stroke-dasharray="5 4"/>
+<text x="517" y="184" font-family="DejaVu Sans" font-size="13" font-weight="bold" fill="#E8722C" text-anchor="middle">(1) Deformable Align</text>
+<text x="517" y="366" font-family="DejaVu Sans" font-size="11" font-weight="bold" fill="#E8722C" text-anchor="middle">motion offsets</text>
+<rect x="890" y="196" width="125" height="134" rx="14" fill="#FFE3D3" stroke="#E8722C" stroke-width="3"/>
+<line x1="928" y1="240" x2="928" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="936" y1="240" x2="936" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="944" y1="240" x2="944" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="952" y1="240" x2="952" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="960" y1="240" x2="960" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="968" y1="240" x2="968" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="976" y1="240" x2="976" y2="288" stroke="#888888" stroke-width="1.2"/>
+<line x1="928" y1="240" x2="976" y2="240" stroke="#888888" stroke-width="1.2"/>
+<line x1="928" y1="248" x2="976" y2="248" stroke="#888888" stroke-width="1.2"/>
+<line x1="928" y1="256" x2="976" y2="256" stroke="#888888" stroke-width="1.2"/>
+<line x1="928" y1="264" x2="976" y2="264" stroke="#888888" stroke-width="1.2"/>
+<line x1="928" y1="272" x2="976" y2="272" stroke="#888888" stroke-width="1.2"/>
+<line x1="928" y1="280" x2="976" y2="280" stroke="#888888" stroke-width="1.2"/>
+<line x1="928" y1="288" x2="976" y2="288" stroke="#888888" stroke-width="1.2"/>
+<polygon points="934,244 970,242 966,280 930,282" fill="none" stroke="#E8722C" stroke-width="2.4" stroke-dasharray="5 4"/>
+<text x="952" y="184" font-family="DejaVu Sans" font-size="13" font-weight="bold" fill="#E8722C" text-anchor="middle">(1) Deformable Align</text>
+<text x="952" y="366" font-family="DejaVu Sans" font-size="11" font-weight="bold" fill="#E8722C" text-anchor="middle">motion offsets</text>
+<text x="880" y="396" font-family="DejaVu Sans" font-size="12" font-weight="normal" fill="#666666" text-anchor="end">h_t, z_t → next frame (BPTT)</text>
+<circle cx="1352" cy="306" r="17" fill="#FFFFFF" stroke="#E8722C" stroke-width="3"/>
+<text x="1352" y="313" font-family="DejaVu Sans" font-size="22" font-weight="bold" fill="#E8722C" text-anchor="middle">+</text>
+<polyline points="1373.0,306.0 1391.0,306.0" fill="none" stroke="#E8722C" stroke-width="3.5" stroke-linejoin="round" marker-end="url(#arrOrg)"/>
+<rect x="1395" y="270" width="350" height="72" rx="14" fill="#FFF3E6" stroke="#E8722C" stroke-width="3"/>
+<text x="1570" y="300" font-family="DejaVu Sans" font-size="19" font-weight="bold" fill="#1A1A1A" text-anchor="middle">BEV stream</text>
+<text x="1570" y="325" font-family="DejaVu Sans" font-size="13" font-weight="normal" fill="#666666" text-anchor="middle">→ output_proj → 3D detection</text>
+<text x="1570" y="258" font-family="DejaVu Sans" font-size="14" font-weight="bold" fill="#E8722C" text-anchor="middle">(3) z_t re-injected into the BEV stream</text>
+<polyline points="1144.0,525.0 1195.0,525.0 1195.0,380.0 1220.0,380.0 1220.0,306.0 1331.0,306.0" fill="none" stroke="#E8722C" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrOrg)"/>
+<text x="1170" y="556" font-family="DejaVu Sans" font-size="12" font-weight="bold" fill="#E8722C" text-anchor="middle">x_t</text>
+<text x="1170" y="572" font-family="DejaVu Sans" font-size="11" font-weight="bold" fill="#E8722C" text-anchor="middle">resid.</text>
+<rect x="1390" y="560" width="380" height="228" rx="14" fill="#FCFCFC" stroke="#999999" stroke-width="2.5" stroke-dasharray="8 6"/>
+<text x="1580" y="590" font-family="DejaVu Sans" font-size="17" font-weight="bold" fill="#1A1A1A" text-anchor="middle">Training Losses</text>
+<rect x="1412" y="620" width="84" height="26" rx="7" fill="#FFFFFF" stroke="#AB7CE0" stroke-width="2.2"/>
+<text x="1454" y="638" font-family="DejaVu Sans" font-size="13" font-weight="bold" fill="#AB7CE0" text-anchor="middle">L_recon</text>
+<text x="1510" y="638" font-family="DejaVu Sans" font-size="12.5" font-weight="normal" fill="#1A1A1A" text-anchor="start">MSE(x̂_t, x_t) — reconstruction</text>
+<rect x="1412" y="656" width="84" height="26" rx="7" fill="#FFFFFF" stroke="#AB7CE0" stroke-width="2.2"/>
+<text x="1454" y="674" font-family="DejaVu Sans" font-size="13" font-weight="bold" fill="#AB7CE0" text-anchor="middle">L_KL</text>
+<text x="1510" y="674" font-family="DejaVu Sans" font-size="12.5" font-weight="normal" fill="#1A1A1A" text-anchor="start">KL(q(z_t|h_t,e_t) ‖ p(z_t|h_t))</text>
+<rect x="1412" y="692" width="84" height="26" rx="7" fill="#FFFFFF" stroke="#3D7CC9" stroke-width="2.2"/>
+<text x="1454" y="710" font-family="DejaVu Sans" font-size="13" font-weight="bold" fill="#3D7CC9" text-anchor="middle">L_det</text>
+<text x="1510" y="710" font-family="DejaVu Sans" font-size="12.5" font-weight="normal" fill="#1A1A1A" text-anchor="start">3D detection: Focal + SmoothL1 + Dir</text>
+<rect x="1412" y="728" width="84" height="26" rx="7" fill="#FFFFFF" stroke="#3D7CC9" stroke-width="2.2"/>
+<text x="1454" y="746" font-family="DejaVu Sans" font-size="13" font-weight="bold" fill="#3D7CC9" text-anchor="middle">L_iou</text>
+<text x="1510" y="746" font-family="DejaVu Sans" font-size="12.5" font-weight="normal" fill="#1A1A1A" text-anchor="start">IoU-aware quality (L1, train only)</text>
+<text x="1580" y="776" font-family="DejaVu Sans" font-size="12" font-weight="normal" fill="#666666" text-anchor="middle">losses unchanged from the world-model baseline</text>
+<rect x="60" y="806" width="34" height="22" rx="6" fill="#C9F0DC" stroke="#4CAF50" stroke-width="2.2"/>
+<text x="104" y="822" font-family="DejaVu Sans" font-size="14" font-weight="normal" fill="#1A1A1A" text-anchor="start">h_t — deterministic GRU state</text>
+<rect x="426" y="806" width="11" height="11" fill="#333333" stroke="#555555" stroke-width="1.2"/>
+<rect x="426" y="817" width="11" height="11" fill="#FFFFFF" stroke="#555555" stroke-width="1.2"/>
+<rect x="437" y="806" width="11" height="11" fill="#FFFFFF" stroke="#555555" stroke-width="1.2"/>
+<rect x="437" y="817" width="11" height="11" fill="#333333" stroke="#555555" stroke-width="1.2"/>
+<rect x="448" y="806" width="11" height="11" fill="#333333" stroke="#555555" stroke-width="1.2"/>
+<rect x="448" y="817" width="11" height="11" fill="#FFFFFF" stroke="#555555" stroke-width="1.2"/>
+<text x="472" y="822" font-family="DejaVu Sans" font-size="14" font-weight="normal" fill="#1A1A1A" text-anchor="start">z_t — stochastic latent</text>
+<text x="712" y="824" font-family="DejaVu Sans" font-size="13" font-weight="bold" text-anchor="start"><tspan fill="#E8722C">(2) </tspan><tspan fill="#1A1A1A"> motion a_t not used at every step</tspan></text>
+<rect x="1060" y="806" width="34" height="22" rx="6" fill="#FFE3D3" stroke="#E8722C" stroke-width="2.2"/>
+<text x="1104" y="822" font-family="DejaVu Sans" font-size="13" font-weight="bold" text-anchor="start"><tspan fill="#E8722C">(1)(3) </tspan><tspan fill="#1A1A1A"> adapted modules (this network)</tspan></text>
+<polygon points="60,852 120,852 108,874 72,874" fill="#6FA8DC" stroke="#3D7CC9" stroke-width="2.2"/>
+<text x="140" y="868" font-family="DejaVu Sans" font-size="14" font-weight="normal" fill="#1A1A1A" text-anchor="start">enc = BEV feature encoder</text>
+<polygon points="426,852 486,852 474,874 438,874" fill="#D2A8E8" stroke="#9B59B6" stroke-width="2.2"/>
+<text x="506" y="868" font-family="DejaVu Sans" font-size="14" font-weight="normal" fill="#1A1A1A" text-anchor="start">dec = reconstruction decoder</text>
+<text x="800" y="868" font-family="DejaVu Sans" font-size="14" font-weight="normal" fill="#666666" text-anchor="start">inputs x_t are fused BEV features (radar–camera), not raw images</text>
+</svg>
