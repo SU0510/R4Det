@@ -5180,3 +5180,83 @@ Caveats:
 - `checkpoint_config.interval=2` in FG-FULL versus 1 in run10 only affects
   which epochs are saved, not the metrics, but it does mean odd-epoch peaks are
   not on disk.
+
+### 46.12 FG-FULL N=4 Temporal-baseline control config (2026-09-20)
+
+Goal: isolate the contribution of the RSSM temporal fusion in the current
+FG-FULL N=4 mainline. This is the missing control flagged in the full report
+(unknown U3): the GRU baseline had only been compared in the old 18-epoch,
+pre-pretrain, pre-head-v2 setup, never on the final FG-FULL stack.
+
+New config:
+
+`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_temporal_baseline.py`
+
+It derives from
+`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head.py` and changes
+only the temporal branch:
+
+| Setting | FG-FULL RSSM | Temporal control |
+|---|---|---|
+| `model.temporal_fusion.type` | `MotionAlignedRSSMFusion` | `TemporalDeformableFusionBaseline` |
+| `model.rssm_bptt_steps` | inherited `1` | `0` |
+| `custom_hooks` | `KLScaleSchedulerHook` | `[]` |
+| all other model/data/train fields | unchanged | unchanged |
+
+Definition of `TemporalDeformableFusionBaseline`:
+
+- added in `mmdet3d/models/fusion_layers/temporal_r4det_fusion.py`;
+- subclasses the unchanged original `TemporalDeformableFusion` (so the
+  pretrained checkpoint's `temporal_fusion.*` GRU-baseline keys remain
+  load-compatible);
+- stores the previous raw BEV feature and applies the original deformable GRU
+  on the current frame;
+- returns the six-item interface expected by the current detector
+  (`output, None, None, None, None, None`), so no KL or reconstruction loss is
+  introduced.
+
+Why `rssm_bptt_steps=0`: the original Temporal baseline fused the current frame
+with a detached previous-frame BEV feature. Setting BPTT to 0 keeps the full
+history loop under `no_grad`, preserving that single-step, detached-gradient
+semantics instead of silently training the GRU baseline through RSSM's
+truncated-BPTT protocol.
+
+What this control answers:
+
+- the final-stack delta between RSSM and the original Temporal baseline;
+- whether the previously observed advantage of RSSM is specific to the final
+  pretrained/head-v2/FG-FULL recipe or survives when only temporal fusion is
+  swapped.
+
+What this control does not change or answer:
+
+- it does not isolate PDF / PDF-like depth fusion, IGDR, foreground
+  supervision, pretraining, head-v2, or N=4 data-window effects;
+- it is still a single seed until run;
+- the historical 18-epoch `34.50` baseline remains a separate record and is
+  not directly comparable to this 24-epoch FG-FULL run without accounting for
+  the rest of the stack.
+
+Verification already run for the config (2026-09-20):
+
+- `python -m py_compile` on the modified modules and config: pass.
+- config merge check with custom imports disabled:
+  `temporal_type=TemporalDeformableFusionBaseline`, `seq_len=4`, `bptt=0`,
+  `shared_stem=False`, `use_msk2d/use_props/use_depth=True`,
+  `rangeview=MRF3Net`, `proposal=FRPN`, `custom_hooks=[]`: pass.
+- GPU smoke on idle card 3:
+  `python me_rssm/sanity/smoke_fgfull_gpu.py 2 <new config>`: pass;
+  two train steps + two val forwards, peak ~10.63 GiB.
+- Control smoke with the original FG-FULL RSSM config: pass; both configs show
+  the same smoke-level loss-key set, with the RSSM run adding
+  `loss_rssm_kl` / `loss_rssm_recon` as expected.
+
+Prepared launch pattern (not launched here):
+
+```bash
+source .envrc
+CUDA_VISIBLE_DEVICES=5,6,7 bash tools/dist_train.sh \
+  configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_temporal_baseline.py \
+  3 --seed 0 --deterministic \
+  --work-dir /data/lurui/work_dirs/fgfull_N4_temporal_baseline_seed0
+```

@@ -118,3 +118,62 @@ class TemporalDeformableFusion(BaseModule):
         output = self.output_layer(h_t)
         return output
 
+
+@FUSION_LAYERS.register_module()
+class TemporalDeformableFusionBaseline(TemporalDeformableFusion):
+    """RSSM-interface adapter for the original TemporalDeformableFusion.
+
+    The current R4Det temporal loop expects a six-item return:
+
+        output, reconstruction, kl, h_t, z_t, stats
+
+    The original one-step GRU baseline only returns ``output``. This subclass
+    keeps that implementation unchanged while exposing the same interface.
+    It stores the previous *raw* BEV feature, exactly the input the original
+    baseline consumed, and applies the deformable GRU only on the current
+    frame. No reconstruction or KL terms are produced. Subclassing (instead
+    of wrapping) keeps the pretrained checkpoint keys under
+    ``temporal_fusion.*`` compatible with the original GRU baseline weights.
+    """
+
+    def __init__(self,
+                 in_channels: int,
+                 out_channels: int,
+                 kernel_size: int = 3,
+                 deform_groups: int = 1,
+                 gate_kernel_size: int = 1,
+                 norm_cfg=dict(type='BN', requires_grad=True),
+                 act_cfg=dict(type='ReLU', inplace=True),
+                 init_cfg=None):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            deform_groups=deform_groups,
+            gate_kernel_size=gate_kernel_size,
+            norm_cfg=norm_cfg,
+            act_cfg=act_cfg,
+            init_cfg=init_cfg)
+        self.prev_feat = None
+
+    def reset_state(self):
+        self.prev_feat = None
+
+    def reset_for_samples(self, mask):
+        if self.prev_feat is not None and mask.any():
+            keep = ~mask
+            self.prev_feat = torch.where(
+                keep[:, None, None, None], self.prev_feat,
+                torch.zeros_like(self.prev_feat))
+
+    @auto_fp16(apply_to=('feat', 'velocity'))
+    def forward(self, feat, velocity=None, use_posterior=True,
+                deterministic=True, detach_state=True):
+        if self.prev_feat is None or self.prev_feat.shape != feat.shape:
+            self.prev_feat = feat.detach() if detach_state else feat
+            return feat, None, None, None, None, None
+
+        output = super().forward(feat, self.prev_feat)
+        self.prev_feat = feat.detach() if detach_state else feat
+        return output, None, None, None, None, None
+

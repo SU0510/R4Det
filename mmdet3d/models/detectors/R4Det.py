@@ -891,7 +891,7 @@ class R4Det(MVXFasterRCNN):
                         bev_feats, use_posterior=True,
                         deterministic=rssm_deterministic,
                         detach_state=rssm_detach_state)
-                if rssm_history_losses is not None:
+                if rssm_history_losses is not None and rssm_recon is not None:
                     rssm_history_losses.append(
                         (F.mse_loss(rssm_recon, bev_feats_cache),
                          rssm_kl, rssm_stats))
@@ -902,7 +902,8 @@ class R4Det(MVXFasterRCNN):
                     self.temporal_fusion(
                         bev_feats, use_posterior=True,
                         deterministic=rssm_deterministic)
-                rssm_recon_loss = F.mse_loss(rssm_recon, bev_feats_cache)
+                if rssm_recon is not None:
+                    rssm_recon_loss = F.mse_loss(rssm_recon, bev_feats_cache)
                 if is_valid_mask is not None:
                     is_valid_mask_dev = is_valid_mask.to(bev_feats.device)
                     mask_expanded = is_valid_mask_dev[:, None, None, None]

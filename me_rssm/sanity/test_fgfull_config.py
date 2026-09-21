@@ -64,11 +64,16 @@ def main():
           model_cfg.depth_net.relative_loss_weight, '(expect 0.04)')
     ok &= model_cfg.depth_net.loss_abs_weight == 0.0
     ok &= model_cfg.depth_net.relative_loss_weight == 0.04
+    temporal_types = {
+        'MotionAlignedRSSMFusion',
+        'TemporalDeformableFusionBaseline',
+    }
     print('F1 temporal_fusion type =', model_cfg.temporal_fusion.type,
-          '(expect MotionAlignedRSSMFusion)')
-    ok &= model_cfg.temporal_fusion.type == 'MotionAlignedRSSMFusion'
+          f'(expect one of {sorted(temporal_types)})')
+    ok &= model_cfg.temporal_fusion.type in temporal_types
     print('F1 model.seq_len =', model_cfg.seq_len)
-    print('F1 temporal_fusion.hidden_dim =', model_cfg.temporal_fusion.hidden_dim)
+    print('F1 temporal_fusion.hidden_dim =',
+          model_cfg.temporal_fusion.get('hidden_dim'))
 
     # F2: model build on CPU (inject meta_info exactly like tools/train_vod.py)
     import tempfile

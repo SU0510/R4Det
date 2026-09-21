@@ -45,8 +45,11 @@ def main():
         project_name='tj4d_fgfull_smoke'))
 
     model = build_model(cfg.model)
-    print(f'SMOKE seq_len={cfg.model.seq_len} '
-          f'hidden_dim={cfg.model.temporal_fusion.hidden_dim}')
+    temporal_cfg = cfg.model.temporal_fusion
+    temporal_detail = f"type={temporal_cfg.type}"
+    if 'hidden_dim' in temporal_cfg:
+        temporal_detail += f" hidden_dim={temporal_cfg.hidden_dim}"
+    print(f'SMOKE seq_len={cfg.model.seq_len} {temporal_detail}')
     load_checkpoint(model, CKPT, map_location='cpu', strict=False, logger=None)
     optimizer = build_optimizer(model, cfg.optimizer)
     model = MMDataParallel(model.cuda().train(), device_ids=[0])
