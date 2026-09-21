@@ -25,9 +25,14 @@
 # this to 0 keeps all history frames under no_grad, matching that semantics
 # instead of importing RSSM's truncated-BPTT training protocol into the GRU
 # baseline.
+#
+# find_unused_parameters=False: with both 2D heads absent, every parameter is
+# touched on every forward, so DDP's unused-parameter traversal is dead weight.
 # ---------------------------------------------------------------------------
 
 _base_ = './TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head.py'
+
+find_unused_parameters = False
 
 model = dict(
     img_rpn_head=None,
