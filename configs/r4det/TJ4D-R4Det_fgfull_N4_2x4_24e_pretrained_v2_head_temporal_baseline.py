@@ -1,16 +1,19 @@
 # ---------------------------------------------------------------------------
-# FG-FULL N=4 with ONLY the temporal fusion module replaced.
+# FG-FULL N=4 with the temporal fusion module replaced and the 2D instance
+# branch (RPN/RoI/masks) plus IGDR disabled.
 #
 # Base: TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head.py
 # So everything else is kept identical to the current FG-FULL mainline:
 #   - pretrained backbone / detector input recipe
 #   - N=4 data window and batch/schedule
 #   - head-v2
-#   - 2D RPN/RoI, MRF3Net, FRPN, foreground-biased relative depth supervision
-#   - IGDR fusion
+#   - MRF3Net, FRPN, foreground-biased relative depth supervision
 #
-# The only model difference is:
-#   MotionAlignedRSSMFusion -> TemporalDeformableFusionBaseline
+# Two differences from the FG-FULL mainline:
+#   1. MotionAlignedRSSMFusion -> TemporalDeformableFusionBaseline
+#   2. img_rpn_head/img_roi_head disabled, so no 2D instance branch is built
+#      and no instance features reach IGDR; because R4Det gates IGDR on
+#      (with_rpn and with_roi_head), igdr_fusion is not constructed either.
 #
 # The adapter exposes the six-item temporal-fusion interface expected by the
 # current detector while internally running the original
@@ -27,6 +30,8 @@
 _base_ = './TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head.py'
 
 model = dict(
+    img_rpn_head=None,
+    img_roi_head=None,
     temporal_fusion=dict(
         _delete_=True,
         type='TemporalDeformableFusionBaseline',
