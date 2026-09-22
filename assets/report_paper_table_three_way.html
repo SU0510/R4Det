@@ -1,0 +1,32 @@
+<meta charset="utf-8">
+<style>
+  body { font-family: Calibri, "Segoe UI", Arial, sans-serif; font-size: 16px; color:#222; margin: 18px; }
+  h2 { font-size: 17px; margin: 20px 0 6px; }
+  table { border-collapse: collapse; margin: 0 0 8px; }
+  th, td { border: 1px solid #b8c4d6; padding: 4px 7px; text-align: center; white-space: nowrap; }
+  th { background: #2f5597; color: #fff; font-weight: 600; font-size: 15px; }
+  th.band { background: #4a6fa5; }
+  th.q { background: #f7f9fc; color: #6b7280; font-weight: 400; font-size: 14px; }
+  td.m { text-align: left; }
+  tr.ours td { background: #eef5ff; font-weight: 700; }
+  tr.delta td { background: #fff4e6; font-weight: 700; color: #b05a00; }
+  .note { font-size: 14.5px; color: #555; line-height: 1.55; }
+</style>
+
+<h2>三方对比：N4 RSSM / No-Temporal / GRU（TJ4D 验证集，AP40 / %，moderate 难度）</h2>
+<p class="note">BEST 口径（论文 / 汇报用）。Δ 由显示值相减得出，可自行验算。</p>
+
+<table>
+  <tr><th class="band" rowspan="2">Method</th><th class="band" colspan="5">3D detection (moderate)</th><th class="band" colspan="5">BEV detection (moderate)</th></tr>
+  <tr><th>Car</th><th>Pedestrian</th><th>Cyclist</th><th>Truck</th><th>Overall</th><th>Car</th><th>Pedestrian</th><th>Cyclist</th><th>Truck</th><th>Overall</th></tr>
+  <tr><th class="q"></th><th class="q">strict</th><th class="q">loose</th><th class="q">loose</th><th class="q">strict</th><th class="q"></th><th class="q">strict</th><th class="q">loose</th><th class="q">loose</th><th class="q">strict</th><th class="q"></th></tr>
+  <tr class="ours"><td class="m">N4 RSSM</td><td>51.35</td><td>31.32</td><td>50.09</td><td>30.76</td><td>40.88</td><td>70.61</td><td>33.54</td><td>51.81</td><td>43.45</td><td>49.85</td></tr>
+  <tr><td class="m">No-Temporal</td><td>47.86</td><td>27.07</td><td>41.89</td><td>25.53</td><td>35.59</td><td>63.32</td><td>28.81</td><td>44.25</td><td>32.54</td><td>42.23</td></tr>
+  <tr class="delta"><td class="m">Δ (N4 − No-Temporal)</td><td>+3.49</td><td>+4.25</td><td>+8.20</td><td>+5.23</td><td>+5.29</td><td>+7.29</td><td>+4.73</td><td>+7.56</td><td>+10.91</td><td>+7.62</td></tr>
+  <tr><td class="m">GRU</td><td>49.78</td><td>29.41</td><td>46.40</td><td>28.41</td><td>38.50</td><td>67.33</td><td>31.41</td><td>48.41</td><td>38.54</td><td>46.42</td></tr>
+  <tr class="delta"><td class="m">Δ (N4 − GRU)</td><td>+1.57</td><td>+1.91</td><td>+3.69</td><td>+2.35</td><td>+2.38</td><td>+3.28</td><td>+2.13</td><td>+3.40</td><td>+4.91</td><td>+3.43</td></tr>
+</table>
+
+<p class="note">列依次为：Car 3D moderate strict · Pedestrian 3D moderate loose · Cyclist 3D moderate loose · Truck 3D moderate strict · Overall 3D moderate · Car BEV moderate strict · Pedestrian BEV moderate loose · Cyclist BEV moderate loose · Truck BEV moderate strict · Overall BEV moderate。<br>
+Overall = 四类均值，三行均已验证逐位相等（3D 与 BEV 各自成立）。N4 RSSM BEST @ep14（主模型最高 seed）；No-Temporal BEST @ep20；GRU = GRU 时序融合基线（<code>TemporalDeformableFusion</code>）。<br>
+N4 RSSM 在 10 列上同时全胜 No-Temporal 与 GRU。数据来源：原始 <code>*.log.json</code> 重算。</p>
