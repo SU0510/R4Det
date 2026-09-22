@@ -5548,3 +5548,7 @@ DDP unused-parameter 检测。
   明确设为 `requires_grad=False`；在未做此类结构判定前，不应再用 `False` 重跑。
 - 由于崩溃发生在 ep1 内，这次失败不改变 46.12 对 temporal baseline 的实验定义，也没有产生
   可用的训练结果。
+
+修复后的重试已于 2026-09-22 12:58 UTC 使用 GPU 5/6/7 从 ep1 重新启动，配置已恢复
+`find_unused_parameters=True`，日志追加到
+`/data/lurui/work_dirs/fgfull_N4_temporal_baseline_seed0/train_stdout_retry_20260922.log`。
