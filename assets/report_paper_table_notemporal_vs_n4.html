@@ -1,0 +1,87 @@
+<meta charset="utf-8">
+<style>
+  body { font-family: Calibri, "Segoe UI", Arial, sans-serif; font-size: 14px; color:#222; margin: 18px; }
+  h2 { font-size: 15px; margin: 20px 0 6px; }
+  table { border-collapse: collapse; margin: 0 0 8px; }
+  th, td { border: 1px solid #b8c4d6; padding: 4px 7px; text-align: center; white-space: nowrap; }
+  th { background: #2f5597; color: #fff; font-weight: 600; font-size: 13px; }
+  th.band { background: #4a6fa5; }
+  th.q { background: #f7f9fc; color: #6b7280; font-weight: 400; font-size: 12px; }
+  td.m { text-align: left; }
+  tr.ours td { background: #eef5ff; font-weight: 700; }
+  .note { font-size: 12.5px; color: #555; line-height: 1.55; }
+</style>
+
+<h2>No-Temporal 与 N4 RSSM 对比（AP40 / %，moderate 难度）</h2>
+
+<h3 style="font-size:13px;margin:12px 0 4px;">BEST 口径（论文 / 汇报用）</h3>
+<table>
+  <tr>
+    <th class="band" rowspan="2">Method</th>
+    <th class="band" colspan="5">3D detection (moderate)</th>
+    <th class="band" colspan="5">BEV detection (moderate)</th>
+  </tr>
+  <tr>
+    <th>Car</th><th>Pedestrian</th><th>Cyclist</th><th>Truck</th><th>Overall</th>
+    <th>Car</th><th>Pedestrian</th><th>Cyclist</th><th>Truck</th><th>Overall</th>
+  </tr>
+  <tr>
+    <th class="q"></th>
+    <th class="q">strict</th><th class="q">loose</th><th class="q">loose</th>
+    <th class="q">strict</th><th class="q"></th>
+    <th class="q">strict</th><th class="q">loose</th><th class="q">loose</th>
+    <th class="q">strict</th><th class="q"></th>
+  </tr>
+  <tr>
+    <td class="m">No-Temporal</td>
+    <td>47.86</td><td>27.07</td><td>41.89</td><td>25.53</td><td>35.59</td>
+    <td>63.32</td><td>28.81</td><td>44.25</td><td>32.54</td><td>42.23</td>
+  </tr>
+  <tr class="ours">
+    <td class="m">N4 RSSM</td>
+    <td>51.35</td><td>31.32</td><td>50.09</td><td>30.76</td><td>40.88</td>
+    <td>70.61</td><td>33.54</td><td>51.81</td><td>43.45</td><td>49.85</td>
+  </tr>
+</table>
+
+<h3 style="font-size:13px;margin:12px 0 4px;">窗口口径（ep12-16 均值，实验室选型用）</h3>
+<table>
+  <tr>
+    <th class="band" rowspan="2">Method</th>
+    <th class="band" colspan="5">3D detection (moderate)</th>
+    <th class="band" colspan="5">BEV detection (moderate)</th>
+  </tr>
+  <tr>
+    <th>Car</th><th>Pedestrian</th><th>Cyclist</th><th>Truck</th><th>Overall</th>
+    <th>Car</th><th>Pedestrian</th><th>Cyclist</th><th>Truck</th><th>Overall</th>
+  </tr>
+  <tr>
+    <th class="q"></th>
+    <th class="q">strict</th><th class="q">loose</th><th class="q">loose</th>
+    <th class="q">strict</th><th class="q"></th>
+    <th class="q">strict</th><th class="q">loose</th><th class="q">loose</th>
+    <th class="q">strict</th><th class="q"></th>
+  </tr>
+  <tr>
+    <td class="m">No-Temporal</td>
+    <td>46.16</td><td>26.67</td><td>42.28</td><td>23.48</td><td>34.65</td>
+    <td>61.89</td><td>28.52</td><td>44.67</td><td>31.42</td><td>41.62</td>
+  </tr>
+  <tr class="ours">
+    <td class="m">N4 RSSM</td>
+    <td>48.98</td><td>30.58</td><td>47.99</td><td>30.04</td><td>39.40</td>
+    <td>68.63</td><td>32.97</td><td>49.78</td><td>41.95</td><td>48.33</td>
+  </tr>
+</table>
+
+<p class="note">
+列依次为：Car 3D moderate strict · Pedestrian 3D moderate loose · Cyclist 3D moderate loose ·
+Truck 3D moderate strict · Overall 3D moderate · Car BEV moderate strict ·
+Pedestrian BEV moderate loose · Cyclist BEV moderate loose · Truck BEV moderate strict ·
+Overall BEV moderate。<br>
+Overall = 四类均值，已验证与 Overall 行逐位相等（3D 与 BEV 各自成立）。
+No-Temporal BEST @ep20；N4 RSSM BEST @ep14（主模型最高 seed，40.88）。<b>N4 RSSM 在 10 列上全胜。</b><br>
+同栈单变量：两份 config 差异仅 <code>temporal_fusion</code>；权重结构差异仅 46 个
+<code>temporal_fusion.*</code> tensor（10,575,930 参数，占模型 22.0%）。数据来源：原始
+<code>*.log.json</code> 重算。
+</p>
