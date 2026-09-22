@@ -26,13 +26,15 @@
 # instead of importing RSSM's truncated-BPTT training protocol into the GRU
 # baseline.
 #
-# find_unused_parameters=False: with both 2D heads absent, every parameter is
-# touched on every forward, so DDP's unused-parameter traversal is dead weight.
+# find_unused_parameters=True: even with both 2D heads absent, the MRF3Net
+# range-view foreground branch still has parameters that do not receive a
+# gradient in the temporal-baseline loss path. Disabling unused-parameter
+# detection here triggers a DDP reduction error.
 # ---------------------------------------------------------------------------
 
 _base_ = './TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head.py'
 
-find_unused_parameters = False
+find_unused_parameters = True
 
 model = dict(
     img_rpn_head=None,
