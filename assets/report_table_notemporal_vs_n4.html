@@ -1,0 +1,102 @@
+<meta charset="utf-8">
+<style>
+  body { font-family: Calibri, "Segoe UI", Arial, sans-serif; font-size: 15px; color:#222; margin: 18px; }
+  h2 { font-size: 16px; margin: 20px 0 6px; }
+  table { border-collapse: collapse; margin: 0 0 6px; }
+  th, td { border: 1px solid #b8c4d6; padding: 5px 10px; text-align: center; white-space: nowrap; }
+  th { background: #2f5597; color: #fff; font-weight: 600; }
+  td.m { text-align: left; }
+  td.rid { font-family: Consolas, monospace; font-size: 11px; color: #666; text-align: left;
+           padding-top: 0; border-top: 0; }
+  tr.delta td { background: #fff4e6; font-weight: 700; }
+  tr.best td { background: #eef5ff; }
+  .hl { color: #b05a00; font-weight: 700; }
+  .note { font-size: 12.5px; color: #555; line-height: 1.55; }
+</style>
+
+<h2>主模型 = N4 Motion-Aligned RSSM（三个 seed，同一份 config）</h2>
+<table>
+  <tr>
+    <th>seed</th><th>BEST Overall 3D</th><th>@ep</th>
+    <th>BEST Overall BEV</th><th>窗口 3D (ep12-16)</th><th>窗口 BEV</th>
+  </tr>
+  <tr><td class="m">seed0</td><td>39.88</td><td>ep16</td><td>47.70</td><td>38.39</td><td>46.52</td></tr>
+  <tr><td class="m">seed1</td><td>40.51</td><td>ep15</td><td>48.13</td><td>39.20</td><td>46.85</td></tr>
+  <tr class="best"><td class="m"><b>seed2（最高）</b></td><td class="hl">40.88</td><td class="hl">ep14</td>
+      <td class="hl">49.85</td><td class="hl">39.40</td><td class="hl">48.33</td></tr>
+  <tr class="delta"><td class="m">均值</td><td>40.42 ± 0.51</td><td>ep14–16</td><td>48.56</td><td>39.00</td><td>47.23</td></tr>
+</table>
+<p class="note">
+三个 seed 共用同一份 config（seed0/seed2 仅差 <code>checkpoint_config interval</code>，属记账项）。
+</p>
+
+<h2>表 1：BEST 口径（论文 / 汇报用）</h2>
+<table>
+  <tr>
+    <th rowspan="2">指标</th>
+    <th>No-Temporal</th>
+    <th colspan="2">主模型 seed0（种子对齐）</th>
+    <th colspan="2">主模型 seed2（最高单点）</th>
+  </tr>
+  <tr>
+    <th>(seed0)</th><th>N4 RSSM</th><th>Δ</th><th>N4 RSSM</th><th>Δ</th>
+  </tr>
+  <tr>
+    <td class="m"><b>Overall 3D moderate</b></td>
+    <td>35.59</td><td class="hl">39.88</td><td>+4.29</td><td class="hl">40.88</td><td>+5.29</td>
+  </tr>
+  <tr>
+    <td class="m"><b>Overall BEV moderate</b></td>
+    <td>42.23</td><td class="hl">47.70</td><td>+5.47</td><td class="hl">49.85</td><td>+7.62</td>
+  </tr>
+  <tr><td class="m">Car 3D moderate strict</td>
+    <td>47.86</td><td>49.98</td><td>+2.11</td><td>51.35</td><td>+3.49</td></tr>
+  <tr><td class="m">Truck 3D moderate strict</td>
+    <td>25.53</td><td>30.43</td><td>+4.90</td><td>30.76</td><td>+5.23</td></tr>
+  <tr><td class="m">Pedestrian 3D moderate loose</td>
+    <td>27.07</td><td>28.64</td><td>+1.57</td><td>31.32</td><td>+4.25</td></tr>
+  <tr><td class="m">Cyclist 3D moderate loose</td>
+    <td>41.89</td><td>50.47</td><td>+8.58</td><td>50.09</td><td>+8.20</td></tr>
+  <tr>
+    <td class="rid" colspan="2">no_temporal_N4_2x4_24e_seed0</td>
+    <td class="rid" colspan="2">run10_headv2_multiseed/seed_0 (BEST @ep20 / @ep16)</td>
+    <td class="rid" colspan="2">run10_headv2_multiseed/seed_2 (BEST @ep14)</td>
+  </tr>
+</table>
+
+<h2>表 2：窗口口径（ep12-16 均值，实验室选型用）</h2>
+<table>
+  <tr>
+    <th rowspan="2">指标</th>
+    <th>No-Temporal</th>
+    <th colspan="2">主模型 seed0（种子对齐）</th>
+    <th colspan="2">主模型 seed2（最高单点）</th>
+  </tr>
+  <tr>
+    <th>(seed0)</th><th>N4 RSSM</th><th>Δ</th><th>N4 RSSM</th><th>Δ</th>
+  </tr>
+  <tr>
+    <td class="m"><b>Overall 3D moderate</b></td>
+    <td>34.65</td><td class="hl">38.39</td><td>+3.74</td><td class="hl">39.40</td><td>+4.75</td>
+  </tr>
+  <tr>
+    <td class="m"><b>Overall BEV moderate</b></td>
+    <td>41.62</td><td class="hl">46.52</td><td>+4.90</td><td class="hl">48.33</td><td>+6.71</td>
+  </tr>
+  <tr><td class="m">Car 3D moderate strict</td>
+    <td>46.16</td><td>47.80</td><td>+1.64</td><td>48.98</td><td>+2.81</td></tr>
+  <tr><td class="m">Truck 3D moderate strict</td>
+    <td>23.48</td><td>28.21</td><td>+4.73</td><td>30.04</td><td>+6.56</td></tr>
+  <tr><td class="m">Pedestrian 3D moderate loose</td>
+    <td>26.67</td><td>28.92</td><td>+2.24</td><td>30.58</td><td>+3.91</td></tr>
+  <tr><td class="m">Cyclist 3D moderate loose</td>
+    <td>42.28</td><td>48.63</td><td>+6.34</td><td>47.99</td><td>+5.71</td></tr>
+</table>
+<p class="note">
+<b>该引用哪个 Δ</b>：No-Temporal 只有 seed0 一次 —— 做"时序融合净收益"的科学对照用
+<b>seed0 ↔ seed0 = +4.29</b>（种子对齐，可辩护）；作为"最终成绩"汇报可用 <b>40.88</b>，
+但 Δ 要标成 <b>+5.29</b> 并注明是"主模型最优 seed vs 单帧 seed0"，不要悄然混用。<br>
+同栈单变量：两份 config 差异仅 <code>temporal_fusion</code>（None ↔ MotionAlignedRSSMFusion）。
+Overall 3D = (Car strict + Truck strict + Ped loose + Cyc loose) / 4。四类在 seed0/seed2 下均全为正。<br>
+数据来源：原始 <code>*.log.json</code> 重算。
+</p>
