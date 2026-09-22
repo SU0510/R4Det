@@ -2,6 +2,7 @@
 <style>
   body { font-family: Calibri, "Segoe UI", Arial, sans-serif; font-size: 14px; color:#222; margin: 18px; }
   h2 { font-size: 15px; margin: 20px 0 6px; }
+  h3 { font-size: 13px; margin: 12px 0 4px; }
   table { border-collapse: collapse; margin: 0 0 8px; }
   th, td { border: 1px solid #b8c4d6; padding: 4px 7px; text-align: center; white-space: nowrap; }
   th { background: #2f5597; color: #fff; font-weight: 600; font-size: 13px; }
@@ -9,12 +10,14 @@
   th.q { background: #f7f9fc; color: #6b7280; font-weight: 400; font-size: 12px; }
   td.m { text-align: left; }
   tr.ours td { background: #eef5ff; font-weight: 700; }
+  tr.delta td { background: #fff4e6; font-weight: 700; color: #b05a00; }
   .note { font-size: 12.5px; color: #555; line-height: 1.55; }
 </style>
 
 <h2>No-Temporal 与 N4 RSSM 对比（AP40 / %，moderate 难度）</h2>
+<p class="note">第三行 Δ = N4 RSSM − No-Temporal，由显示值相减得出，可自行验算。</p>
 
-<h3 style="font-size:13px;margin:12px 0 4px;">BEST 口径（论文 / 汇报用）</h3>
+<h3>BEST 口径（论文 / 汇报用）</h3>
 <table>
   <tr>
     <th class="band" rowspan="2">Method</th>
@@ -42,9 +45,14 @@
     <td>51.35</td><td>31.32</td><td>50.09</td><td>30.76</td><td>40.88</td>
     <td>70.61</td><td>33.54</td><td>51.81</td><td>43.45</td><td>49.85</td>
   </tr>
+  <tr class="delta">
+    <td class="m">Δ (N4 − No-Temporal)</td>
+    <td>+3.49</td><td>+4.25</td><td>+8.20</td><td>+5.23</td><td>+5.29</td>
+    <td>+7.29</td><td>+4.73</td><td>+7.56</td><td>+10.91</td><td>+7.62</td>
+  </tr>
 </table>
 
-<h3 style="font-size:13px;margin:12px 0 4px;">窗口口径（ep12-16 均值，实验室选型用）</h3>
+<h3>窗口口径（ep12-16 均值，实验室选型用）</h3>
 <table>
   <tr>
     <th class="band" rowspan="2">Method</th>
@@ -72,6 +80,11 @@
     <td>48.98</td><td>30.58</td><td>47.99</td><td>30.04</td><td>39.40</td>
     <td>68.63</td><td>32.97</td><td>49.78</td><td>41.95</td><td>48.33</td>
   </tr>
+  <tr class="delta">
+    <td class="m">Δ (N4 − No-Temporal)</td>
+    <td>+2.82</td><td>+3.91</td><td>+5.71</td><td>+6.56</td><td>+4.75</td>
+    <td>+6.74</td><td>+4.45</td><td>+5.11</td><td>+10.53</td><td>+6.71</td>
+  </tr>
 </table>
 
 <p class="note">
@@ -79,7 +92,7 @@
 Truck 3D moderate strict · Overall 3D moderate · Car BEV moderate strict ·
 Pedestrian BEV moderate loose · Cyclist BEV moderate loose · Truck BEV moderate strict ·
 Overall BEV moderate。<br>
-Overall = 四类均值，已验证与 Overall 行逐位相等（3D 与 BEV 各自成立）。
+Overall = 四类均值，已验证与 Overall 行逐位相等（3D 与 BEV 各自成立，两行均验证）。
 No-Temporal BEST @ep20；N4 RSSM BEST @ep14（主模型最高 seed，40.88）。<b>N4 RSSM 在 10 列上全胜。</b><br>
 同栈单变量：两份 config 差异仅 <code>temporal_fusion</code>；权重结构差异仅 46 个
 <code>temporal_fusion.*</code> tensor（10,575,930 参数，占模型 22.0%）。数据来源：原始
