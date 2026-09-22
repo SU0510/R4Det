@@ -5193,15 +5193,28 @@ New config:
 `configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_temporal_baseline.py`
 
 It derives from
-`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head.py` and changes
-only the temporal branch:
+`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head.py`.
 
-| Setting | FG-FULL RSSM | Temporal control |
+NOTE (updated 2026-09-22): the control was originally written as a pure
+temporal swap, but commit `5eb904f` (2026-09-21 13:52) also disabled the 2D
+instance branch and therefore IGDR, so that it lines up with the intended
+paper-side method stack `..._no2d_igdr.py`. The table below records the
+current, actual state. Against `..._no2d_igdr.py` the diff is exactly the four
+rows shown; against the full FG-FULL mainline it is those four rows plus
+`img_rpn_head`/`img_roi_head` (and the IGDR branch they gate).
+
+| Setting | `..._no2d_igdr.py` (method) | Temporal control |
 |---|---|---|
 | `model.temporal_fusion.type` | `MotionAlignedRSSMFusion` | `TemporalDeformableFusionBaseline` |
 | `model.rssm_bptt_steps` | inherited `1` | `0` |
 | `custom_hooks` | `KLScaleSchedulerHook` | `[]` |
+| `find_unused_parameters` | `True` | `False` |
+| `model.img_rpn_head` / `model.img_roi_head` | `None` | `None` (same) |
 | all other model/data/train fields | unchanged | unchanged |
+
+The `find_unused_parameters` row is a DDP performance switch, not a modelling
+change; the no2d_igdr method run logs PyTorch's "did not find any unused
+parameters" warning, so `True` is pure overhead there.
 
 Definition of `TemporalDeformableFusionBaseline`:
 
@@ -5231,7 +5244,9 @@ What this control answers:
 What this control does not change or answer:
 
 - it does not isolate PDF / PDF-like depth fusion, IGDR, foreground
-  supervision, pretraining, head-v2, or N=4 data-window effects;
+  supervision, pretraining, head-v2, or N=4 data-window effects (it shares the
+  no2d_igdr stack with the method run, so 2D instance supervision and IGDR are
+  off on both sides);
 - it is still a single seed until run;
 - the historical 18-epoch `34.50` baseline remains a separate record and is
   not directly comparable to this 24-epoch FG-FULL run without accounting for

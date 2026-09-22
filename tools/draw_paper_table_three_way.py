@@ -58,9 +58,13 @@ NOTEMPORAL = [47.86, 27.07, 41.89, 25.53, 35.59,
 N4RSSM = [51.35, 31.32, 50.09, 30.76, 40.88,
           70.61, 33.54, 51.81, 43.45, 49.85]
 
-# GRU column: Overall 3D pinned at 38.50; every other column takes the same
-# fraction of the N4 - No-Temporal gap, which keeps the four-class identity
-# exact.  Asserted below so the construction stays self-documenting.
+# GRU column: NOT measured.  This is the prior estimate from
+# assets/r4det_baseline_prediction.md (Overall 3D pinned at 38.50); every other
+# column takes the same fraction of the N4 - No-Temporal gap, which keeps the
+# four-class identity exact.  Asserted below so the construction stays
+# self-documenting.  The rendered table and every derived artifact label this
+# row as a prior so it is never mistaken for a run result.
+GRU_IS_PRIOR = True
 GRU_OVL3D = 38.50
 FRAC = (GRU_OVL3D - NOTEMPORAL[4]) / (N4RSSM[4] - NOTEMPORAL[4])
 GRU = [round(a + FRAC * (b - a), 2) for a, b in zip(NOTEMPORAL, N4RSSM)]
@@ -162,7 +166,7 @@ def data_row(name, vals, *, ours=False, delta=False, size=10.5):
 data_row("N4 RSSM", N4RSSM, ours=True)
 data_row("No-Temporal", NOTEMPORAL)
 data_row("Δ (N4 − No-Temporal)", DELTA_NT, delta=True)
-data_row("GRU", GRU)
+data_row("GRU (prior)", GRU)
 data_row("Δ (N4 − GRU)", DELTA_GRU, delta=True)
 
 NOTES = [
@@ -170,9 +174,9 @@ NOTES = [
     "Truck 3D moderate strict · Overall 3D moderate ·",
     "　　　　　Car BEV moderate strict · Pedestrian BEV moderate loose · Cyclist BEV moderate loose · "
     "Truck BEV moderate strict · Overall BEV moderate",
-    "Overall = 四类均值（已验证逐位相等）。N4 RSSM BEST @ep14（主模型最高 seed）；No-Temporal BEST @ep20；"
-    "GRU 为 GRU 时序融合基线（TemporalDeformableFusion）。",
-    "数据来源：原始 *.log.json 重算；Δ 由显示值相减得到。",
+    "Overall = 四类均值（已验证逐位相等）。N4 RSSM BEST @ep14（主模型最高 seed）；No-Temporal BEST @ep20。",
+    "GRU 行为先验估计（prior），非实测：同栈 GRU 控制 run 尚未跑出结果。"
+    "数据仅 N4 RSSM / No-Temporal 两行来自原始 *.log.json 重算；Δ 由显示值相减得到。",
 ]
 note_ts = [ax.text(0, NOTE_Y0 - NOTE_DY * k, txt, ha="left", va="top",
                    fontsize=fs(8.5), color=DIM) for k, txt in enumerate(NOTES)]
@@ -225,7 +229,9 @@ for a, b, d in zip(NOTEMPORAL, N4RSSM, DELTA_NT):
 for a, b, d in zip(GRU, N4RSSM, DELTA_GRU):
     assert abs(round(b, 2) - round(a, 2) - d) < 0.005, ("dGRU", a, b, d)
 assert all(b > a for a, b in zip(NOTEMPORAL, N4RSSM)), "N4 must beat No-Temporal in all 10"
-assert all(b > a for a, b in zip(GRU, N4RSSM)), "N4 must beat GRU in all 10"
+# GRU is a prior, so its "N4 wins" relation is an assumption of the
+# construction, not a measurement.  Keep the check but name it honestly.
+assert all(b > a for a, b in zip(GRU, N4RSSM)), "prior construction assumes N4 beats GRU in all 10"
 for k, (a, b, g) in enumerate(zip(NOTEMPORAL, N4RSSM, GRU)):
     assert abs(g - round(a + FRAC * (b - a), 2)) < 0.005, ("interp", k, g)
 
