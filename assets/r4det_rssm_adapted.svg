@@ -71,8 +71,8 @@
 <rect x="188" y="537" width="22" height="21" fill="#C6D8CE" stroke="#FFFFFF" stroke-width="1.4"/>
 <rect x="212" y="537" width="22" height="21" fill="#E2DCC0" stroke="#FFFFFF" stroke-width="1.4"/>
 <rect x="236" y="537" width="22" height="21" fill="#B4C9DD" stroke="#FFFFFF" stroke-width="1.4"/>
-<text x="200" y="594" font-family="DejaVu Sans" font-size="14" font-weight="bold" fill="#1A1A1A" text-anchor="middle">x_t (fused BEV feat.)</text>
-<text x="200" y="612" font-family="DejaVu Sans" font-size="12" font-weight="normal" fill="#666666" text-anchor="middle">KL(q‖p)  ·  q: posterior  p: prior</text>
+<text x="200" y="594" font-family="DejaVu Sans" font-size="13" font-weight="bold" fill="#1A1A1A" text-anchor="middle">x_t (fused BEV)</text>
+<text x="200" y="612" font-family="DejaVu Sans" font-size="11" font-weight="normal" fill="#666666" text-anchor="middle">KL(q‖p) · q: post, p: pri</text>
 <rect x="138" y="626" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#3D7CC9" stroke-width="2.5"/>
 <text x="200" y="648" font-family="DejaVu Sans" font-size="12.5" font-weight="bold" fill="#1A1A1A" text-anchor="middle">q(z_t | h_t, e_t)</text>
 <rect x="138" y="668" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#9B59B6" stroke-width="2.5"/>
@@ -163,8 +163,8 @@
 <rect x="623" y="537" width="22" height="21" fill="#C6D8CE" stroke="#FFFFFF" stroke-width="1.4"/>
 <rect x="647" y="537" width="22" height="21" fill="#E2DCC0" stroke="#FFFFFF" stroke-width="1.4"/>
 <rect x="671" y="537" width="22" height="21" fill="#B4C9DD" stroke="#FFFFFF" stroke-width="1.4"/>
-<text x="635" y="594" font-family="DejaVu Sans" font-size="14" font-weight="bold" fill="#1A1A1A" text-anchor="middle">x_t (fused BEV feat.)</text>
-<text x="635" y="612" font-family="DejaVu Sans" font-size="12" font-weight="normal" fill="#666666" text-anchor="middle">KL(q‖p)  ·  q: posterior  p: prior</text>
+<text x="635" y="594" font-family="DejaVu Sans" font-size="13" font-weight="bold" fill="#1A1A1A" text-anchor="middle">x_t (fused BEV)</text>
+<text x="635" y="612" font-family="DejaVu Sans" font-size="11" font-weight="normal" fill="#666666" text-anchor="middle">KL(q‖p) · q: post, p: pri</text>
 <rect x="573" y="626" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#3D7CC9" stroke-width="2.5"/>
 <text x="635" y="648" font-family="DejaVu Sans" font-size="12.5" font-weight="bold" fill="#1A1A1A" text-anchor="middle">q(z_t | h_t, e_t)</text>
 <rect x="573" y="668" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#9B59B6" stroke-width="2.5"/>
@@ -255,8 +255,8 @@
 <rect x="1058" y="537" width="22" height="21" fill="#C6D8CE" stroke="#FFFFFF" stroke-width="1.4"/>
 <rect x="1082" y="537" width="22" height="21" fill="#E2DCC0" stroke="#FFFFFF" stroke-width="1.4"/>
 <rect x="1106" y="537" width="22" height="21" fill="#B4C9DD" stroke="#FFFFFF" stroke-width="1.4"/>
-<text x="1070" y="594" font-family="DejaVu Sans" font-size="14" font-weight="bold" fill="#1A1A1A" text-anchor="middle">x_t (fused BEV feat.)</text>
-<text x="1070" y="612" font-family="DejaVu Sans" font-size="12" font-weight="normal" fill="#666666" text-anchor="middle">KL(q‖p)  ·  q: posterior  p: prior</text>
+<text x="1070" y="594" font-family="DejaVu Sans" font-size="13" font-weight="bold" fill="#1A1A1A" text-anchor="middle">x_t (fused BEV)</text>
+<text x="1070" y="612" font-family="DejaVu Sans" font-size="11" font-weight="normal" fill="#666666" text-anchor="middle">KL(q‖p) · q: post, p: pri</text>
 <rect x="1008" y="626" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#3D7CC9" stroke-width="2.5"/>
 <text x="1070" y="648" font-family="DejaVu Sans" font-size="12.5" font-weight="bold" fill="#1A1A1A" text-anchor="middle">q(z_t | h_t, e_t)</text>
 <rect x="1008" y="668" width="124" height="34" rx="8" fill="#FFFFFF" stroke="#9B59B6" stroke-width="2.5"/>

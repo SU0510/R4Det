@@ -57,13 +57,13 @@ def ar(pts, color, sw=3.5, dashed=False, marker='arrB'):
       f'stroke-linejoin="round"{d} marker-end="url(#{marker})"/>')
 
 
-def tx(x, y, s, size=20, weight='bold', fill=TXT, anchor='middle', italic=False):
+def tx(x, y, s, size=28, weight='bold', fill=TXT, anchor='middle', italic=False):
     style = ' font-style="italic"' if italic else ''
     A(f'<text x="{x}" y="{y}" font-family="{FONT}" font-size="{size}" '
       f'font-weight="{weight}" fill="{fill}" text-anchor="{anchor}"{style}>{s}</text>')
 
 
-def tx2(x, y, parts, size=13, anchor='middle'):
+def tx2(x, y, parts, size=21, anchor='middle'):
     """text with colored tspans"""
     tsp = ''.join(f'<tspan fill="{c}">{s}</tspan>' for s, c in parts)
     A(f'<text x="{x}" y="{y}" font-family="{FONT}" font-size="{size}" '
@@ -165,8 +165,8 @@ for idx, cx in enumerate(CXS):
 
     # x_t image + label + losses + posterior/prior stack
     bev_img(cx - 170, 480, XT_CELLS)
-    tx(cx - 100, 594, 'x_t (fused BEV feat.)', 14, 'bold')
-    tx(cx - 100, 612, 'KL(q‖p)  ·  q: posterior  p: prior', 12, 'normal', SUB)
+    tx(cx - 100, 594, 'x_t (fused BEV)', 13, 'bold')
+    tx(cx - 100, 612, 'KL(q‖p) · q: post, p: pri', 11, 'normal', SUB)
     for bi, (lbl, col) in enumerate([('q(z_t | h_t, e_t)', ENC_S),
                                      ('p(z_t | h_t)', DEC_S),
                                      ('z_t = μ_q', '#777777')]):
