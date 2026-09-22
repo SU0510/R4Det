@@ -151,7 +151,7 @@ output = output_layer(h_t)                          ← 3×3 ConvModule，Xavier
 ### 3.3 当前仓库状态的重要警告（本次审计发现）
 
 1. **主配置 ≠ clean 基线**：`TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head.py` 当前含 `shared_stem=True`（commit `b4fd7be` 09-15 加入，§41 门控失败后**从未回退**）。想复跑 clean full-RSSM 必须先把 `shared_stem=True` 改回 False（或从 `work_dirs/run10_headv2_multiseed/seed_*/` 的配置快照复制）。【已验证：读当前配置 + git】
-2. **`BEVRSSMTemporalFusion.forward` 缺 return**：commit `99c74ff`（08-25，移动 Deterministic 类时）误删了基类 forward 末尾的 `return output, reconstruction, kl*kl_scale, h_t, z_t, stats`。当前代码下 `baseline_rssm` 配置不可直接复跑（返回 None）；历史 Run 2（07-27）训练时该行存在。【已验证：git show 对比 + git log -L】
+2. ~~**`BEVRSSMTemporalFusion.forward` 缺 return**~~（**2026-09-22 已修复**）：commit `99c74ff`（08-25，移动 Deterministic 类时）误删了基类 forward 末尾的 `return output, reconstruction, kl*kl_scale, h_t, z_t, stats`，使 `baseline_rssm` 配置返回 None、不可直接复跑。该行已恢复（`mmdet3d/models/fusion_layers/rssm_fusion.py`），修复后该方法与 `99c74ff^` 版本 AST 一致、`baseline_rssm` 可复跑。历史 Run 2（07-27）训练时该行本就存在，故其 33.54 不受影响，无需重估。【已验证：git show 对比 + git log -L + 单测 + 实跑 forward】
 3. **`baseline_rssm` 配置文件被后来覆盖**：现文件是 kl_scale=1.0/free_nats=1.0/warmup 0→1.0(ep0-5)（v2/v3 风格），与《训练记录》§4 所记 Run 2 实际训练值（kl_scale=0.1 / free_nats=0.0 / warmup 0→0.1 ep0-3）不符 → Run 2 的真实超参现在只能信记录。【已验证：读现配置 vs 记录】
 4. 预训练 checkpoint `checkpoints/pretrained_tj4d.pth`（1.09GB，1421 个张量）内含：img_backbone/img_neck/depth_net/pts_voxel_encoder/pts_backbone/pts_neck + **Cross_Modal_Fusion 的 `cross_attention.*` 权重**（主线 ConcatConvFusion 不加载）+ 一个 **`temporal_fusion.*` 是 GRU 基线模块的权重**（与 RSSM 结构不匹配 → 每次训练 RSSM 均为随机初始化）。【已验证：checkpoint 键值枚举】
 
@@ -541,7 +541,7 @@ Run 11 Truck×3 anchor（38.45，Car −5）；Run 12 Car-large anchor（38.11�
 
 ### 12.3 仓库状态卫生（建议汇报前处理）
 - 主配置 `shared_stem=True` 未回退（见 U7）；
-- `BEVRSSMTemporalFusion.forward` 缺 return（`99c74ff` 引入的潜伏 bug，不影响主线但影响复跑 Run 2 配置）；
+- ~~`BEVRSSMTemporalFusion.forward` 缺 return~~（2026-09-22 已修复，见 §3.3 第 2 条）；
 - `baseline_rssm` 配置内容与其历史训练超参不符。
 
 ---
@@ -551,7 +551,7 @@ Run 11 Truck×3 anchor（38.45，Car −5）；Run 12 Car-large anchor（38.11�
 按《训练记录》§44.7.6 与本次审计综合（优先级从高到低）：
 
 1. **等 CycCls seed2 完成**，按既定口径补全三 seed 配对均值与逐 seed 双结论，正式给 CycCls 分支定性（预期：记「仅 Car strict 跨 seed 正向、Overall 未被支持」并停止）。
-2. **冻结主线**：把主配置回退成 clean（shared_stem=False）并打 tag/存档快照，避免复现事故；修复 `BEVRSSMTemporalFusion` return（或明确标注该类为死代码）。
+2. **冻结主线**：把主配置回退成 clean（shared_stem=False）并打 tag/存档快照，避免复现事故；~~修复 `BEVRSSMTemporalFusion` return~~（2026-09-22 已完成）。
 3. **论文口径补强**：clean full RSSM 40.42±0.51 为主表；KL0 多 seed 作机制消融附录；No-Temporal/Deterministic 作时序收益分解；频率加权口径作部署讨论。
 4. **若继续刷 Overall**：唯一有跨 seed 证据的方向是 **Car**（CycCls 的 Car strict +2.9）；可试「只保留 CycCls 分支收益、去掉 stem」或对 Car 的 anchor/分配器做单变量（注意 Cyclist 红线）。
 5. **若解决 Truck**：拆分类专属 prediction tower（§28.8 候选 2）或先做 Car–Truck 混淆专项诊断（分类 vs 定位）——但注意 §26.6 诊断已显示 Truck 首要是定位（长轴/中心）而非分类。

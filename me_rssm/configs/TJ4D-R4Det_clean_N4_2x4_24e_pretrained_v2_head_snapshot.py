@@ -15,12 +15,12 @@
 # file. The ME-RSSM mainline config already overrides shared_stem=False,
 # so all queued ME runs are unaffected.
 #
-# Known hygiene issue that cannot be fixed under the zero-modification
-# protocol: BEVRSSMTemporalFusion.forward lost its final `return` in
-# commit 99c74ff (report 3.3 item 2), so a `baseline_rssm` rerun crashes
-# on the None tuple. MotionAlignedRSSMFusion (the mainline) overrides
-# forward entirely and is unaffected. Any baseline_rssm rerun must use a
-# patched copy, not the original class.
+# Historical hygiene issue, since fixed: BEVRSSMTemporalFusion.forward lost
+# its final `return` in commit 99c74ff (report 3.3 item 2), which made a
+# `baseline_rssm` rerun crash on the None tuple. The line was restored in the
+# rssm_fusion module; MotionAlignedRSSMFusion (the mainline) was never
+# affected because it overrides forward entirely. This note is kept for
+# provenance, and no config values are changed by that fix.
 # ---------------------------------------------------------------------------
 
 import os

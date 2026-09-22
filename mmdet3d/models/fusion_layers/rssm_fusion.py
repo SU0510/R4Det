@@ -497,6 +497,8 @@ class BEVRSSMTemporalFusion(BaseModule):
             self.h_state = h_t
             self.z_state = z_t
 
+        return output, reconstruction, kl * self.kl_scale, h_t, z_t, stats
+
 @FUSION_LAYERS.register_module()
 class MotionAlignedRSSMFusion(BEVRSSMTemporalFusion):
     """RSSM with motion-aware deformable alignment of historical states.
