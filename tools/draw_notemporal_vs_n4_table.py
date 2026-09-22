@@ -25,6 +25,14 @@ plt.rcParams["font.family"] = "Noto Sans CJK SC"
 plt.rcParams["axes.unicode_minus"] = False
 plt.rcParams["svg.fonttype"] = "none"
 
+# --- font size bump: every text size goes up by FONT_DELTA points -------------
+FONT_DELTA = 2
+
+
+def fs(x):
+    return x + FONT_DELTA
+
+
 HDR_BG = "#2f5597"
 HDR_FG = "white"
 OV_BG = "#eef5ff"
@@ -81,7 +89,7 @@ def cell(ax, x0, x1, y0, y1, text, *, bg=None, fg=TXT, bold=False,
         x, ha = (x0 + x1) / 2, "center"
     else:
         x, ha = x0 + pad, "left"
-    t = ax.text(x, (y0 + y1) / 2, text, ha=ha, va="center", fontsize=size,
+    t = ax.text(x, (y0 + y1) / 2, text, ha=ha, va="center", fontsize=fs(size),
                 color=fg, fontweight="bold" if bold else "normal", zorder=3,
                 linespacing=1.25)
     if boxes is not None:
@@ -162,26 +170,27 @@ rh = 0.0400
 GAP = 0.038
 boxes = []
 
-ax.text(0, 1.005, "No-Temporal vs 主模型（N4 Motion-Aligned RSSM）", ha="left",
-        va="bottom", fontsize=14.5, fontweight="bold", color=TXT)
-ax.text(0, 0.975, "同栈单变量：两份 config 差异仅 temporal_fusion（None ↔ MotionAlignedRSSMFusion）",
-        ha="left", va="bottom", fontsize=10.0, color=DIM)
+labels = []
+labels.append(ax.text(0, 0.994, "No-Temporal vs 主模型（N4 Motion-Aligned RSSM）", ha="left",
+        va="bottom", fontsize=fs(14.5), fontweight="bold", color=TXT))
+labels.append(ax.text(0, 0.975, "同栈单变量：两份 config 差异仅 temporal_fusion（None ↔ MotionAlignedRSSMFusion）",
+        ha="left", va="bottom", fontsize=fs(10.0), color=DIM))
 
 y = 0.935
-ax.text(0, y + 0.004, "表 1　BEST 口径（论文 / 汇报用）", ha="left", va="bottom",
-        fontsize=11.5, fontweight="bold", color=TXT)
+labels.append(ax.text(0, y + 0.004, "表 1　BEST 口径（论文 / 汇报用）", ha="left", va="bottom",
+        fontsize=fs(11.5), fontweight="bold", color=TXT))
 y = header(ax, y, rh, boxes)
 y = body(ax, y, rh, BEST, boxes)
 
 y -= GAP
-ax.text(0, y + 0.004, "表 2　窗口口径（ep12-16 均值，实验室选型用）", ha="left",
-        va="bottom", fontsize=11.5, fontweight="bold", color=TXT)
+labels.append(ax.text(0, y + 0.004, "表 2　窗口口径（ep12-16 均值，实验室选型用）", ha="left",
+        va="bottom", fontsize=fs(11.5), fontweight="bold", color=TXT))
 y = header(ax, y, rh, boxes)
 y = body(ax, y, rh, WIN, boxes)
 
 y -= GAP
-ax.text(0, y + 0.004, "主模型三 seed（同一份 config）", ha="left", va="bottom",
-        fontsize=11.5, fontweight="bold", color=TXT)
+labels.append(ax.text(0, y + 0.004, "主模型三 seed（同一份 config）", ha="left", va="bottom",
+        fontsize=fs(11.5), fontweight="bold", color=TXT))
 y = seed_table(ax, y, rh, boxes)
 
 fig.canvas.draw()
@@ -207,6 +216,26 @@ for i in range(len(boxes)):
             ov = min(a.x1, b.x1) - max(a.x0, b.x0)
             assert ov <= 1.0, (f"text overlap: {boxes[i][0].get_text()!r} vs "
                                f"{boxes[j][0].get_text()!r}")
+
+# --- title / sub-title / table labels: inside canvas, clear of every cell
+for lb in labels:
+    lbb = lb.get_window_extent(renderer=ren)
+    tag = lb.get_text()[:24]
+    assert lbb.x0 >= -1 and lbb.y0 >= -1, f"label outside canvas (lo): {tag!r}"
+    assert lbb.x1 <= fb.x1 + 1 and lbb.y1 <= fb.y1 + 1, f"label outside canvas (hi): {tag!r}"
+    for t, _ in boxes:
+        tb = t.get_window_extent(renderer=ren)
+        if lbb.overlaps(tb):
+            ov = min(lbb.x1, tb.x1) - max(lbb.x0, tb.x0)
+            assert ov <= 1.0, f"label overlaps cell {t.get_text()[:16]!r}: {tag!r}"
+for i in range(len(labels)):
+    for j in range(i + 1, len(labels)):
+        a = labels[i].get_window_extent(renderer=ren)
+        b = labels[j].get_window_extent(renderer=ren)
+        if a.overlaps(b):
+            ov = min(a.x1, b.x1) - max(a.x0, b.x0)
+            assert ov <= 1.0, (f"label overlap: {labels[i].get_text()[:20]!r} vs "
+                               f"{labels[j].get_text()[:20]!r}")
 
 out = "/home/lurui/workspace/R4Det/assets/r4det_notemporal_vs_n4_table"
 fig.savefig(out + ".png", dpi=200)

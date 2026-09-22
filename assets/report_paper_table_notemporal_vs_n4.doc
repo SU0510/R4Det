@@ -1,17 +1,17 @@
 <meta charset="utf-8">
 <style>
-  body { font-family: Calibri, "Segoe UI", Arial, sans-serif; font-size: 14px; color:#222; margin: 18px; }
-  h2 { font-size: 15px; margin: 20px 0 6px; }
-  h3 { font-size: 13px; margin: 12px 0 4px; }
+  body { font-family: Calibri, "Segoe UI", Arial, sans-serif; font-size: 16px; color:#222; margin: 18px; }
+  h2 { font-size: 17px; margin: 20px 0 6px; }
+  h3 { font-size: 15px; margin: 12px 0 4px; }
   table { border-collapse: collapse; margin: 0 0 8px; }
   th, td { border: 1px solid #b8c4d6; padding: 4px 7px; text-align: center; white-space: nowrap; }
-  th { background: #2f5597; color: #fff; font-weight: 600; font-size: 13px; }
+  th { background: #2f5597; color: #fff; font-weight: 600; font-size: 15px; }
   th.band { background: #4a6fa5; }
-  th.q { background: #f7f9fc; color: #6b7280; font-weight: 400; font-size: 12px; }
+  th.q { background: #f7f9fc; color: #6b7280; font-weight: 400; font-size: 14px; }
   td.m { text-align: left; }
   tr.ours td { background: #eef5ff; font-weight: 700; }
   tr.delta td { background: #fff4e6; font-weight: 700; color: #b05a00; }
-  .note { font-size: 12.5px; color: #555; line-height: 1.55; }
+  .note { font-size: 14.5px; color: #555; line-height: 1.55; }
 </style>
 
 <h2>No-Temporal 与 N4 RSSM 对比（AP40 / %，moderate 难度）</h2>

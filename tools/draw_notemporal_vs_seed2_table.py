@@ -23,6 +23,14 @@ plt.rcParams["font.family"] = "Noto Sans CJK SC"
 plt.rcParams["axes.unicode_minus"] = False
 plt.rcParams["svg.fonttype"] = "none"
 
+# --- font size bump: every text size goes up by FONT_DELTA points -------------
+FONT_DELTA = 2
+
+
+def fs(x):
+    return x + FONT_DELTA
+
+
 HDR_BG, HDR_FG = "#2f5597", "white"
 OV_BG, ALT_BG = "#eef5ff", "#f7f9fc"
 EDGE, TXT, DIM, HL = "#b8c4d6", "#1f2430", "#6b7280", "#b05a00"
@@ -65,7 +73,7 @@ def cell(ax, j, y0, y1, text, *, bg=None, fg=TXT, bold=False, size=10.5,
         x, ha = (x0 + x1) / 2, "center"
     else:
         x, ha = x0 + 0.010, "left"
-    t = ax.text(x, (y0 + y1) / 2, text, ha=ha, va="center", fontsize=size,
+    t = ax.text(x, (y0 + y1) / 2, text, ha=ha, va="center", fontsize=fs(size),
                 color=fg, fontweight="bold" if bold else "normal", zorder=3)
     if boxes is not None:
         boxes.append((t, (x0, x1, y0, y1)))
@@ -102,27 +110,27 @@ rh = 0.055
 boxes = []
 
 ax.text(0, 1.005, "No-Temporal vs 主模型最高单点（N4 Motion-Aligned RSSM, seed2）",
-        ha="left", va="bottom", fontsize=14.0, fontweight="bold", color=TXT)
+        ha="left", va="bottom", fontsize=fs(14.0), fontweight="bold", color=TXT)
 ax.text(0, 0.972, "同栈单变量：两份 config 差异仅 temporal_fusion（None ↔ MotionAlignedRSSMFusion）",
-        ha="left", va="bottom", fontsize=10.0, color=DIM)
+        ha="left", va="bottom", fontsize=fs(10.0), color=DIM)
 
 y = 0.930
 ax.text(0, y + 0.006, "BEST 口径（论文 / 汇报用）　　Δ = 主模型 seed2 − No-Temporal",
-        ha="left", va="bottom", fontsize=11.5, fontweight="bold", color=TXT)
+        ha="left", va="bottom", fontsize=fs(11.5), fontweight="bold", color=TXT)
 y = table(ax, y, rh, BEST_ROWS, boxes)
 
 y -= 0.055
 ax.text(0, y + 0.006, "窗口口径（ep12-16 均值，实验室选型用）",
-        ha="left", va="bottom", fontsize=11.5, fontweight="bold", color=TXT)
+        ha="left", va="bottom", fontsize=fs(11.5), fontweight="bold", color=TXT)
 y = table(ax, y, rh, WIN_ROWS, boxes)
 
 ax.text(0, 0.058,
         "No-Temporal BEST 落在 ep20，主模型 seed2 BEST 落在 ep14；No-Temporal 仅有 seed0 一次，"
         "故本表是「单帧 seed0 vs 主模型最优 seed」。",
-        ha="left", va="top", fontsize=9.5, color=DIM)
+        ha="left", va="top", fontsize=fs(9.5), color=DIM)
 ax.text(0, 0.026,
         "四类均值已验证等于 Overall 3D 行；数据来源：原始 *.log.json 重算。",
-        ha="left", va="top", fontsize=9.5, color=DIM)
+        ha="left", va="top", fontsize=fs(9.5), color=DIM)
 
 fig.canvas.draw()
 ren = fig.canvas.get_renderer()

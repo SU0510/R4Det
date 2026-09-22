@@ -28,6 +28,14 @@ plt.rcParams["font.family"] = "Noto Sans CJK SC"
 plt.rcParams["axes.unicode_minus"] = False
 plt.rcParams["svg.fonttype"] = "none"
 
+# --- font size bump: every text size goes up by FONT_DELTA points -------------
+FONT_DELTA = 2
+
+
+def fs(x):
+    return x + FONT_DELTA
+
+
 HDR_BG, HDR_FG = "#2f5597", "white"
 BAND_BG = "#4a6fa5"
 OURS_BG, ALT_BG, DELTA_BG = "#eef5ff", "#f7f9fc", "#fff4e6"
@@ -64,7 +72,7 @@ def cell(ax, x0, x1, y0, y1, text, *, bg=None, fg=TXT, bold=False, size=10.0,
         x, ha = (x0 + x1) / 2, "center"
     else:
         x, ha = x0 + 0.010, "left"
-    t = ax.text(x, (y0 + y1) / 2, text, ha=ha, va="center", fontsize=size,
+    t = ax.text(x, (y0 + y1) / 2, text, ha=ha, va="center", fontsize=fs(size),
                 color=fg, fontweight="bold" if bold else "normal", zorder=3)
     if boxes is not None:
         boxes.append((t, (x0, x1, y0, y1)))
@@ -84,7 +92,7 @@ ax.set_ylim(0, 1)
 ax.axis("off")
 
 fig.text(0.025, 0.978, "No-Temporal 与 N4 RSSM 在 TJ4D 验证集上的对比（AP40 / %）",
-         ha="left", va="top", fontsize=12.5, fontweight="bold", color=TXT)
+         ha="left", va="top", fontsize=fs(12.5), fontweight="bold", color=TXT)
 
 boxes = []
 y = 1.000
@@ -146,7 +154,7 @@ NOTES = [
     "同栈单变量：两份 config 差异仅 temporal_fusion（None ↔ MotionAlignedRSSMFusion）。数据来源：原始 *.log.json 重算。",
 ]
 note_ts = [ax.text(0, NOTE_Y0 - NOTE_DY * k, txt, ha="left", va="top",
-                   fontsize=8.5, color=DIM) for k, txt in enumerate(NOTES)]
+                   fontsize=fs(8.5), color=DIM) for k, txt in enumerate(NOTES)]
 
 fig.canvas.draw()
 ren = fig.canvas.get_renderer()
