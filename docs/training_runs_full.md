@@ -5513,3 +5513,38 @@ BEST 与 LAST（LAST 为无落盘权重对应的 ep21 val）：
   与 RSSM 的 final-stack delta。
 - 后验结论必须等它至少写出固定窗口（建议同样用 ep12-16 和 ep20-24）后再补；单点 BEST
   不能单独作为控制组结论。
+
+#### 47.5.1 2026-09-22 首次运行崩溃（DDP unused parameters）
+
+该 run 的第一次实际训练于 2026-09-22 10:40 启动，在 ep1
+iter 1100/1902 附近崩溃，没有写出任何 val 行，也没有保存任何 checkpoint。
+崩溃日志：`/data/lurui/work_dirs/fgfull_N4_temporal_baseline_seed0/train_stdout.log`。
+
+直接错误：
+
+```text
+RuntimeError: Expected to have finished reduction in the prior iteration before
+starting a new one. This error indicates that your module has parameters that
+were not used in producing loss.
+Parameter indices which did not receive grad for rank 0: 450 ... 464
+```
+
+rank 0 先在此处抛出异常并退出；rank 1/2 随后卡在同一个
+`ALLREDUCE`（`SeqNum=24941`）直到 1800 秒 NCCL watchdog timeout，最终整个
+`tools/train_vod.py` 以 `ChildFailedError` / `SIGABRT` 结束。
+
+参数下标映射后，未收到梯度的 15 个参数全部属于
+`rangeview_foreground.FFE_2.conv_block.1.*`、`modify_low.*`、`modify_high.*`
+这一批 MRF3Net range-view foreground 分支参数。根因是 46.12 中为性能设置的
+`find_unused_parameters=False` 不成立：该 config 在 `custom_hooks=[]` 且
+`rssm_bptt_steps=0` 时，仍存在不会在当前 loss 里得到梯度的模块参数，因此不能关闭
+DDP unused-parameter 检测。
+
+处置结论：
+
+- 这次运行没有可续的 checkpoint，重启时不需要 `--resume-from`；若要保住同一条 run 目录，
+  建议清理掉失败 run 的日志或另起 `_retry` 后缀目录，避免 `latest.pth` 混淆。
+- 修复方式是恢复 `find_unused_parameters=True`，或在确认该分支确实应被冻结/绕过时把其参数
+  明确设为 `requires_grad=False`；在未做此类结构判定前，不应再用 `False` 重跑。
+- 由于崩溃发生在 ep1 内，这次失败不改变 46.12 对 temporal baseline 的实验定义，也没有产生
+  可用的训练结果。
