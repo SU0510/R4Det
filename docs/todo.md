@@ -6,7 +6,6 @@
    - `no2d_igdr` N4 RSSM 的 seed1/seed2 已于 2026-09-23 起跑（GPU 5/6/7，顺序执行，work_dir `fgfull_N4_no2d_igdr_2x4_24e_seed1/2`）。
 2. 最近还需要补充以下 baseline：
    - run10 对应的 GRU 版 baseline。
-   - [x] 已存在的 `no2d_igdr` baseline 的两种口径：已完成（2026-09-23 跑完 temporal/GRU 控制组，ep20 val 后截断，见 `docs/training_runs_full.md` 47.5.2）。
 
 ## 训练效率
 
@@ -30,3 +29,10 @@
    - 给 z 增加只有它能做的任务：预测下一帧 BEV/occupancy/Doppler/box latent，用未来一致性训练 prior，而不是只让 prior 拟合 posterior。
    - 重做 KL 平衡与 free-bits 口径：按 latent/spatial 聚合，考虑 DreamerV3 式 KL balancing，并让 free-bits 后期退火。
    - categorical/unimix 放在上述步骤之后验证，只在低维 z 仍表现出多峰/离散切换表达不足时再引入；不要直接把逐像素 256ch Gaussian 全量替换成 categorical。
+
+## 已完成
+
+以下事项已经收尾，保留结论和结果出处；不再在正文中只标 `[x]`。
+
+1. 已存在的 `no2d_igdr` baseline 的两种口径（2026-09-23 完成）。
+   - 已跑完 temporal/GRU 控制组，ep20 val 后按预设判据截断；结果见 `docs/training_runs_full.md` 47.5.2。
