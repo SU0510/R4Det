@@ -4,8 +4,6 @@
 
 1. 最近需要对 `fgfull` 和 `no2d_igdr` 两种 N4rssm 做 seed1 和 seed2 补充。
    - `no2d_igdr` N4 RSSM 的 seed1/seed2 已于 2026-09-23 起跑（GPU 5/6/7，顺序执行，work_dir `fgfull_N4_no2d_igdr_2x4_24e_seed1/2`）。
-2. 最近还需要补充以下 baseline：
-   - run10 对应的 GRU 版 baseline。
 
 ## 训练效率
 
