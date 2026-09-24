@@ -6,6 +6,28 @@
 > 训练时长按阶段：Run 1–8 为 18 epoch；Run 9 为 30 epoch；Run 10–15 为 24 epoch（`baseline_temporal` 日志从 ep6 起，ep1-5 无记录）。
 > 配套诊断见 [rssm_diagnosis.md](rssm_diagnosis.md)。
 
+> **统一记录口径（2026-09-24 定稿，后续所有 run 必须遵守）**
+>
+> 每次训练只以两个数值口径做横向判断，二者必须同时记录，不能互相替代：
+>
+> 1. **区间均值（comparison mean）**：用于公平对照和抗 epoch 抖动。默认取固定窗口
+>    **ep12-16 五轮等权均值**；截断较早、窗口不完整的 run 必须写明实际跨度和样本数。
+>    训练完整、平台已明确下移的 run 可同时附 `last-5` 作为补充，但主对照仍用 ep12-16。
+> 2. **全轮峰值（all-epoch peak）**：取该 run **所有有 val 记录的 epoch 中的最大单点**，
+>    与是否保存该 epoch 的权重无关。必须写 `指标值 + epoch`；它回答“上限能到多少”。
+>
+> 另单列第三项，仅用于 checkpoint 可用性和复现实验，不参与比较排名：
+> **已存最高点（best saved）** = 磁盘上实际存在权重的 epoch 中 val 最高的那个。若
+> 全轮峰值恰好落盘，则二者相同；若不落盘，则全轮峰值和 best saved 必须分别写清楚。
+>
+> 禁止再用含糊的 `BEST` 单独表示其中任一项。历史章节中的旧 `BEST` 默认指全轮峰值；
+> 需要权重的语境一律写 `best saved`。`checkpoint_interval=2` 时奇数 epoch 的峰值仍按
+> 口径 2 记录，只是注明“无对应权重”。
+>
+> **区间均值必须写出 epoch 跨度**。24e 主线的标准主窗口是 ep12-16；18e/30e/12e 等不同
+> 长度的 run 若 ep12-16 不存在或不是共同平台，使用实际共同窗口并明确标注，不能把不同
+> epoch 区间算出的两个“mean”直接视作同口径。
+
 ---
 
 ## 0. 早期五次 run 一览（Run 1–5，仅时序融合模块对比）
@@ -386,7 +408,7 @@ resume_from:     None -> v1 latest.pth   (续训 v1)
 - 2026-08-11 02:49 UTC 有一次启动后立即中止（`20260811_024942.log` 只有环境与配置，无训练 iter）；
   实际训练从 02:52:01 UTC 开始（`20260811_025201.log(.json)`），ep30 val 于 20:54:21 UTC 写完。
 - 30 个 epoch 全部有 val 行；`checkpoint_config=dict(interval=2)`，磁盘有 `epoch_22.pth`、
-  `epoch_30.pth`，`latest.pth -> epoch_30.pth`；BEST ep22 的权重已落盘。
+  `epoch_30.pth`，`latest.pth -> epoch_30.pth`；全轮峰值 ep22 的权重已落盘。
 
 完整 val 曲线（`pts_bbox/KITTI/*`）：
 
@@ -423,16 +445,16 @@ resume_from:     None -> v1 latest.pth   (续训 v1)
 | 29 | 33.1884 | 43.0669 | 31.3980 | 45.1728 | 28.1170 | 28.0657 |
 | 30 | 33.9915 | 43.0370 | 34.7521 | 46.2863 | 27.3774 | 27.5504 |
 
-BEST 与平台：
+全轮峰值与平台：
 
 | 口径 | epoch | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| BEST | 22 | **34.7083** | 43.8497 | 36.3351 | 46.2762 | 27.4171 | 28.8048 |
+| 全轮峰值 | 22 | **34.7083** | 43.8497 | 36.3351 | 46.2762 | 27.4171 | 28.8048 |
 | LAST | 30 | 33.9915 | 43.0370 | 34.7521 | 46.2863 | 27.3774 | 27.5504 |
 
 - last-5（ep26-30）等权 Overall 均值为 `33.6749`、频率加权为 `34.14`（与第 16 节 `33.67 / 34.14`
-  一致）。BEST ep22 的权重已落盘，可直接复评。
-- 与 Run 9（同配方 + pretrained，BEST `37.94`）相比，pretrained 权重带来 `+3.23` Overall，
+  一致）。全轮峰值 ep22 的权重已落盘，可直接复评。
+- 与 Run 9（同配方 + pretrained，全轮峰值 `37.94`）相比，pretrained 权重带来 `+3.23` Overall，
   主要集中在 Car strict（`36.34 → 48.96`）；这是第 9.3 节结论的数据来源。
 
 ### Run 9: N=4 Pretrained RSSM (seq_len=4, hdim=128, 30e)
@@ -565,17 +587,17 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 | 13 | 28.2174 | 37.2982 | 31.6215 | 38.8671 | 22.0208 | 20.3604 |
 | 14 | 27.3748 | 37.1936 | 31.9762 | 37.9077 | 23.2034 | 16.4117 |
 
-BEST 与落盘权重：
+全轮峰值与 best saved：
 
 | 口径 | epoch | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| BEST val | 12 | 30.0844 | 38.8798 | 31.0891 | 43.4304 | 25.2556 | 20.5624 |
+| 全轮峰值 | 12 | 30.0844 | 38.8798 | 31.0891 | 43.4304 | 25.2556 | 20.5624 |
 | LAST val | 14 | 27.3748 | 37.1936 | 31.9762 | 37.9077 | 23.2034 | 16.4117 |
 | last disk | 14 | 27.3748 | 37.1936 | 31.9762 | 37.9077 | 23.2034 | 16.4117 |
 
 读数：
 
-- 该 run 的 BEST `30.0844` 比 Run 9（pretrained，30e）的 BEST `37.94` 低 `7.86`；两者最先分叉的
+- 该 run 的全轮峰值 `30.0844` 比 Run 9（pretrained，30e）的全轮峰值 `37.94` 低 `7.86`；两者最先分叉的
   不是 pretrained 权重本身就是 lr 与 pretrained 同时改变，所以只能作为「去掉 pretrained 且放大 lr
   的负向尝试」记录，不能当作纯 lr 消融。
 - 后段 ep10-14 在 27-30 平台震荡，没有追赶 Run 9 的 pretrained 曲线；ep15 未跑完，ep15-30 未知。
@@ -616,8 +638,8 @@ BEST 与落盘权重：
 - work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head`
 - **频率加权 Overall（平台，last-5）**: **43.51 ± 0.51**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
 - **BEST overall: ep11 = 40.60** ⚠️ 未存（奇数 epoch，interval=2）
-- **BEST SAVED overall: ep14 = 39.65**
-- **⚠️ 盘点注：ep14 权重已不在盘中，当前落盘为 ep12=39.26，见 17.2 节**
+- **best saved overall: ep14 = 39.65**
+- **⚠️ 盘点注：全轮峰值 ep11 未落盘；原 best saved ep14 权重也已不在盘中，当前落盘为 ep12=39.26，见 17.2 节**
 - **Car strict BEST: ep20 = 53.04（已存）**
 - LAST: ep24 = 38.76
 
@@ -641,8 +663,8 @@ BEST 与落盘权重：
 
 | Metric | BEST | epoch | LAST (ep24) |
 |---|---:|---:|---:|
-| Overall 3D_moderate | **40.60** | 11 (未存) | 38.76 |
-| Overall 3D_moderate（已存） | **39.65** | 14 | 38.76 |
+| Overall 3D_moderate（全轮峰值） | **40.60** | 11 (未存) | 38.76 |
+| Overall 3D_moderate（best saved） | **39.65** | 14 | 38.76 |
 | Overall 3D_easy | 42.49 | 15 | 40.73 |
 | Overall 3D_hard | 39.06 | 11 | 37.42 |
 | Overall BEV_moderate | 48.70 | 13 | 46.66 |
@@ -653,7 +675,7 @@ BEST 与落盘权重：
 
 ### 10.3 vs Run 9（同 base，唯一差异=检测头）
 
-| Metric | Run 9 BEST (ep19) | Run 10 BEST | Run 10 已存 best | Δ (BEST) |
+| Metric | Run 9 全轮峰值 (ep19) | Run 10 全轮峰值 | Run 10 已存最高 | Δ (峰值) |
 |---|---:|---:|---:|---:|
 | Overall 3D_moderate | 37.94 | **40.60** (ep11) | 39.65 (ep14) | **+2.66 / +1.71** |
 | Overall 3D_easy | 40.80 | **42.49** (ep15) | 41.58 (ep14) | +1.69 |
@@ -675,7 +697,7 @@ BEST 与落盘权重：
 
 ### 10.5 Key findings
 
-1. **检测头改动带来明确正向收益**：Overall 3D_moderate +1.71（已存 ep14）/ +2.66（峰值 ep11），BEV 口径 +5.53。Car strict 刷到 **53.04**，全库历史最高，超 Run 9 达 +4.08。
+1. **检测头改动带来明确正向收益**：Overall 3D_moderate +1.71（best saved ep14）/ +2.66（全轮峰值 ep11），BEV 口径 +5.53。Car strict 刷到 **53.04**，全库历史最高，超 Run 9 达 +4.08。
 2. **loose（召回）口径全面提升**：Car +8.71、Cyclist +11.32、Truck +5.22。来源是多 anchor + `anchor_class_mapping` + IoU-proxy 训练信号共同改善了共享检测头特征与打分质量；Car/Cyclist/Truck 仍各只有 1 个 anchor，说明提升是「共享头标定变好」，不是简单加 anchor。
 3. **Pedestrian strict 依旧 ≈ 0**：3 组行人 anchor 只让 loose 微涨（+0.67）、strict 在 0.08–0.42 的噪声带内横跳。**证实瓶颈是 BEV 0.16m 分辨率 + 点云稀疏（行人仅 ~15 cell），不是 anchor 数量**，与上轮判断一致。
 4. **Truck strict 持平（33.2 vs 33.3）但 loose +5.22**：召回上去了、定位没上去，**证实短货车(2.8m)到半挂(25.5m)的巨大尺寸方差 + 单 anchor 才是 Truck 瓶颈**，与尺寸方差分析吻合。
@@ -684,7 +706,7 @@ BEST 与落盘权重：
 
 ### 10.6 Conclusions / Next
 
-- **head-v2 是当前最强模型**：已存最优 ep14（Overall 39.65）+ 新纪录 Car strict ep20（53.04）。按需选点：看 Overall 用 ep14，看 Car 单项用 ep20。
+- **head-v2 是当前最强模型**：best saved ep14（Overall 39.65）+ 新纪录 Car strict ep20（53.04）。按需选点：看 Overall 用 ep14，看 Car 单项用 ep20。
 - 检测头这一刀砍对了方向，但它主要救了 Car / 召回，**没解决 Ped strict 和 Truck strict 两个真正的硬骨头**。
 - 下一步优先级：
   1. **Truck 多 anchor**（van/标准货/半挂 3 组）——直接打当前最大的 strict 差距（Truck 26~33 vs Car 52），零替代风险；
@@ -694,7 +716,7 @@ BEST 与落盘权重：
 
 ### 10.7 复现性评估：Run 10 的 39.65 是「平台顶」，不是「典型值」
 
-- **40.60 从未成为可用 checkpoint**：Run 10 `checkpoint_interval=2`，奇数 epoch 不落盘，ep11=40.60（实际日志 40.59）只存在于日志。可用最优是 **ep14=39.65**。
+- **40.60 从未成为可用 checkpoint**：Run 10 `checkpoint_interval=2`，奇数 epoch 不落盘，ep11=40.60（实际日志 40.59）只存在于日志。当前 best saved 是 **ep14=39.65**。
 - 拆开 ep11 看，40.59 是一次性脉冲：Truck strict 22.77→33.23 单类跳涨，下一轮跌回 27.49；Car 只是维持高位。它不可复现。
 - **稳定平台 ep12–24 的 Overall = 38.56 ± 0.97**（区间 35.64～39.65）。39.65 是这个平台的上沿，重跑一次大概率落在 38.5～39.5。
 - **真正的漂移源不是 Car，而是 Cyclist loose 和 Truck strict**：
@@ -722,7 +744,7 @@ BEST 与落盘权重：
 - config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_truck.py`
 - work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head_truck`
 - **频率加权 Overall（平台，last-5）**: **39.88 ± 0.78**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
-- **BEST Overall: ep11 = 38.45（✅ 已存，interval=1 生效）**
+- **全轮峰值：ep11 = 38.45（✅ 已落盘，interval=1 生效）**
 - **LAST: ep24 = 37.20**
 - Truck strict BEST: **35.03 @ep11（历史最高）**
 - Cyclist strict BEST: **27.11 @ep20（历史最高）**
@@ -761,7 +783,7 @@ BEST 与落盘权重：
 
 | Metric | Run 10 BEST | Run 11 BEST | Δ |
 |---|---:|---:|---:|
-| Overall 3D_moderate | **40.60** (ep11) / 39.65 已存 | 38.45 (ep11) | **−2.15 / −1.20** |
+| Overall 3D_moderate | **40.60** (ep11) / 39.65 best saved | 38.45 (ep11) | **−2.15 / −1.20** |
 | Car 3D_mod_strict | **53.04** (ep20) | 48.03 (ep18) | **−5.01** ❌ |
 | Truck 3D_mod_strict | 33.23 (ep11) | **35.03** (ep11) | **+1.80** ✅ 历史最高 |
 | Cyclist 3D_mod_strict | 25.41 (ep8) | **27.11** (ep20) | **+1.70** ✅ 历史最高 |
@@ -805,7 +827,7 @@ BEST 与落盘权重：
 - config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_truck_car2.py`
 - work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head_truck_car2`
 - **频率加权 Overall（平台，last-5）**: **40.23 ± 0.65**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
-- **BEST Overall: ep14 = 38.11（✅ 已存）**
+- **全轮峰值：ep14 = 38.11（✅ 已落盘）**
 - **LAST: ep24 = 35.73**
 - Car strict BEST: **53.77 @ep14（历史最高）**
 - Truck strict BEST: 29.05 @ep20
@@ -870,7 +892,7 @@ BEST 与落盘权重：
 
 ### 12.6 Conclusions / Next
 
-- **本轮仍是负收益**：Car-large anchor 单独使用能救 Car，但会牺牲 Truck/Cyclist，Overall 没有超过 Run 11，更低于 Run 10 已存最优。
+- **本轮仍是负收益**：Car-large anchor 单独使用能救 Car，但会牺牲 Truck/Cyclist，Overall 没有超过 Run 11，更低于 Run 10 的 best saved。
 - 每个 epoch 的 Overall 最优 checkpoint 已保存为 Run 12 ep14；如果只关注 Car 单项，Run 12 ep14 的 Car strict 53.77 已是新纪录；综合指标仍回退到 **Run 10 head-v2 ep14（39.65）**。
 - anchor 床铺已经加到 Ped×3/Cyc×1/Car×2/Truck×3，继续加 anchor 预计收益会更低。下一步应转向解决共享 head 的 Car–Truck 争夺：优先验证仓库中已备好的 `confusion_pairs=[[2,3]]` 抑制 loss 配置（`_head_confuse.py`），或拆分 Car/Truck 专属分支。
 - 另一个未落入 Run 12 的改变是 Doppler static/dynamic mask（`_head_dynmask.py`），应在不混入 anchor 变量的前提下单独跑消融。
@@ -915,7 +937,7 @@ BEST 与落盘权重：
 - config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_dynmask.py`
 - work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head_dynmask`
 - **频率加权 Overall（平台，last-5）**: **38.62 ± 1.15**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
-- **BEST Overall: ep8 = 36.21（✅ 已存，interval=1）**
+- **全轮峰值：ep8 = 36.21（✅ 已落盘，interval=1）**
 - **LAST: ep24 = 35.10**
 - Car strict BEST: 50.26 @ep8
 - Cyclist strict BEST: 25.32 @ep7
@@ -956,7 +978,7 @@ BEST 与落盘权重：
 
 | Metric | Run 10 BEST | Run 13 BEST | Delta |
 |---|---:|---:|---:|
-| Overall 3D_moderate | **40.60** (ep11) / 39.65 已存 (ep14) | 36.21 (ep8) | **−4.39 / −3.44** ❌❌ |
+| Overall 3D_moderate | **40.60** (ep11) / 39.65 best saved (ep14) | 36.21 (ep8) | **−4.39 / −3.44** ❌❌ |
 | Overall 3D_easy | 42.49 (ep15) | 38.43 | −4.06 |
 | Overall 3D_hard | 39.06 (ep11) | 35.04 | −4.02 |
 | Overall BEV_moderate | 48.70 (ep13) | 43.68 | −5.02 |
@@ -1009,7 +1031,7 @@ BEST 与落盘权重：
 - config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_24e_pretrained_v2_head_bptt.py`
 - work_dir: `work_dirs/rssm_N4_2x4_24e_pretrained_v2_head_bptt`
 - **频率加权 Overall（平台，last-5）**: **38.15 ± 0.68**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
-- **BEST Overall: ep14 = 37.84（✅ 已存）**
+- **全轮峰值：ep14 = 37.84（✅ 已落盘）**
 - **LAST: ep24 = 34.90**
 - Car strict BEST: 49.09 @ep10
 - Ped loose BEST: 31.49 @ep14（历史最高）
@@ -1077,7 +1099,7 @@ BEST 与落盘权重：
 
 ### 14.5 Key findings
 
-1. **BPTT 当前设置没有带来提升**。Overall 最优 37.84（ep14），比 Run 10 已存最优 39.65 低 **1.81**，比 Run 10 峰值的 40.60 低 **2.76**；Run 14 的 LAST 34.90 更比 Run 10 LAST 38.76 低 **3.86**。
+1. **BPTT 当前设置没有带来提升**。Overall 全轮峰值 37.84（ep14），比 Run 10 best saved 39.65 低 **1.81**，比 Run 10 全轮峰值 40.60 低 **2.76**；Run 14 的 LAST 34.90 更比 Run 10 LAST 38.76 低 **3.86**。
 2. **主要输在 Car、Cyclist、BEV**：Car strict −3.95、Cyclist strict −3.16、Cyclist loose −5.93、BEV_mod −2.86，和前面几轮 anchor/mask 实验不同，不是「某一类换另一类」，而是核心类别整体低一档。
 3. **最晚 5 个 epoch 趋势不乐观**：从 ep14 峰值后回落到 35 平台，低学习率阶段也没有再回到 38+，说明这不是早期抖动，而是本配置的上限大约就在 37.8 附近。
 4. **BPTT 没有破坏训练稳定性**：`loss` 从 ep1 的 ~1.79 平稳降到 ep24 的 ~1.27，`grad_norm` 从 15 收敛到 ~4.0，没有 NaN 或梯度爆炸。
@@ -1107,7 +1129,7 @@ BEST 与落盘权重：
 - config: `configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N2_2x4_24e_pretrained_v2_head_bptt.py`
 - work_dir: `work_dirs/rssm_N2_2x4_24e_pretrained_v2_head_bptt`
 - **频率加权 Overall（平台，last-5）**: **39.87 ± 0.45**（幅度提升来自 Car 权重 25%→48.4%；权重见 section 16）
-- **BEST Overall: ep14 = 38.08**（已存）
+- **全轮峰值：ep14 = 38.08**（已落盘）
 - **LAST: ep24 = 37.08**
 - Car strict BEST: 46.22 @ep12
 - Cyclist strict BEST: 25.02 @ep10
@@ -1209,7 +1231,10 @@ BEST 与落盘权重：
 > 即 `Overall_freq = 0.4837·Car_s + 0.2164·Cyc_l + 0.1646·Truck_s + 0.1353·Ped_l`（沿用同类「Car/Truck strict、Ped/Cyc loose」混合口径）。
 > 工具：`python3 tools/summarize_run.py <work_dir> --weighted --tail 5`。
 
-### 16.1 两种口径的平台（last-5）对比
+### 16.1 两种权重口径的平台（last-5，历史补充口径）对比
+
+> **口径提示（2026-09-24）**：下表 `last-5` 是第 16 节当初的分析口径，不再作为后续主对照。
+> 统一主对照请用 **ep12-16 固定窗口均值**；本表仅保留用于说明“等权 vs 频率加权”会改变排名。
 
 | Run | 等权 mean±std | 频率加权 mean±std | 等权 BEST | 频率加权 BEST |
 |---|---:|---:|---:|---:|
@@ -1223,7 +1248,8 @@ BEST 与落盘权重：
 | N4 30e（无 pretrain） | 33.67 ± 0.35 | 34.14 ± 0.61 | 34.71 | 36.04 |
 | N4 30e lr2e4 | 28.30 ± 1.22 | 30.28 ± 0.97 | 30.08 | 31.36 |
 
-（均取 last-5 平台；Run 9/N4 系列为 30e 训练，其余 24e。）
+（均取各自最后 5 个 epoch；Run 9/N4 系列为 30e 训练，其余 24e。注意这会让不同 run 取到的
+epoch 区间不完全一致，因此只适合同配方横向参考，不能替代 ep12-16 固定窗口。）
 
 ### 16.2 新结论
 
@@ -1243,7 +1269,7 @@ BEST 与落盘权重：
 6. **决策建议**：先明确「你优化的是哪个目标」：
    - 平衡多类（发论文通用口径）：继续用等权 1/4，Run 10 第一。
    - Car 主导的部署场景：换频率加权，Run 12（Car-large anchor）值得重新评估，Run 10 仍最强但 Run 12 紧跟。
-   - 无论哪种，都别再拿单点 BEST 比，用上表 last-5 平台均值。
+   - 涉及跨 run 主对照时，统一用 ep12-16 固定窗口均值；全轮峰值只作为上限单列。
 
 ### 16.3 落地
 
@@ -1258,9 +1284,10 @@ BEST 与落盘权重：
 
 ### 17.1 保留规则（此后所有 run 统一执行）
 
-- 每个 run 只保留 `best epoch` + `last epoch` 两个真实 `.pth` 文件，外加 `latest.pth` 符号链接。
-- `best` 是 val `Overall_3D_moderate`（或指定主指标）最高的已保存 epoch。
-- 若最优 epoch 未落盘，回退为 val 最接近该最优值的已保存 epoch（例如 Run 10 head-v2 保留 `epoch_12`）。
+- 每个 run 只保留 `best saved epoch` + `last epoch` 两个真实 `.pth` 文件，外加 `latest.pth` 符号链接。
+- `best saved` 是磁盘上实际存在的权重中 val `Overall_3D_moderate`（或指定主指标）最高的 epoch。
+  全轮峰值按本文件顶部统一口径单独记录，即使它没有权重也不得省略。
+- 若全轮峰值 epoch 未落盘，回退为 val 最接近该峰值的已存 epoch（例如 Run 10 head-v2 保留 `epoch_12`）。
 - `latest.pth` 必须指向 `last.pth`；删除中间 epoch 时**不得删除** `epoch_best`、`epoch_last`、`latest.pth`。
 - 清理删除是破坏性操作，只 dry-run 确认无误后执行，default 不自动删。
 
@@ -1292,10 +1319,14 @@ BEST 与落盘权重：
 
 ## 18. 论文最终报告口径（定稿）
 
-> 写于 2026-08-22，用于把「对外报什么、对内记什么」钉死，避免与会话中多次口头约定不一致。
+> 初写于 2026-08-22；2026-09-24 按本文件顶部的统一记录口径重写。
 
-- 论文主表：报告每个代表性 run 的单点 `BEST` Overall（等权 1/4 口径，`pts_bbox/KITTI/Overall_3D_moderate`），这是对外可比的标准口径。
-- 补充材料 / appendix：报告 deterministic 多 seed 的 `mean ± std`，以及 BEST 所属 epoch 的平台区间。用于回应「BEST 是否 cherry-pick」的审稿追问。
+- 论文主表：每个代表性 run 同时报告两项（等权 1/4 口径，`pts_bbox/KITTI/Overall_3D_moderate`）：
+  **ep12-16 固定窗口均值**（主对照）和**全轮峰值 + epoch**（上限）。两项不可互相替代。
+- 补充材料 / appendix：报告 deterministic 多 seed 的 `mean ± std`、全轮峰值分布，以及
+  ep12-16 窗口的逐 epoch 曲线。用于回应「峰值是否 cherry-pick」「平台是否可复现」的审稿追问。
+- `best saved` 只用于说明哪个 checkpoint 可复评/可发布，不进入性能排名；若全轮峰值未落盘，
+  正文必须显式写出 `peak 未存 / best saved = epX`。
 - 最终多 seed 一律以 `--deterministic` 运行为准；非 deterministic 的历史 run 只作为先导数据，不进入最终口径表中。
 - `latest.pth` 保留指向 last epoch；每个 run 最终只保留 `best epoch` + `last epoch` 两个权重和 `latest.pth` 符号链接（见第 17 节）。
 - 当前主方法 Baseline/Reference 记为 Run 10 head-v2；后续若多 seed 产生新的 best，再以新 best 更新第 10 节和本节。
@@ -1352,18 +1383,40 @@ seed_0 与原 Run 10 用的是同一 default seed（0），但 3 卡 vs 4 卡导
 
 加粗为各 seed 的 BEST epoch。
 
-### 19.2 BEST 汇总（各 seed 取自身 BEST epoch）
+### 19.2 全轮峰值与已存最高点（两套口径分开）
 
-| seed | BEST @ep | 3D_mod | 已存 |
-|---|---:|---:|:---:|
-| seed_0 | ep16 | 39.88 | yes |
-| seed_1 | ep15 | 40.51 | yes |
-| seed_2 | ep14 | **40.88** | yes |
-| **mean +/- std** | | **40.42 +/- 0.51** | |
+全轮峰值 = 每个 seed 所有 val epoch 的最大 Overall；best saved = 磁盘有 `epoch_X.pth` 的
+epoch 中 val 最高的点。seed_0/seed_1 的 `checkpoint_interval=2`，seed_2 为 1。
 
-- 三个 seed 的 BEST epoch 分别落在 ep14/15/16，集中在 ep12-16 高原区（而非原 Run 10 的 ep11）。
-- 方差极小：std=0.51，三个值在 39.88-40.88 的 1 点区间内。说明 Run 10 的 40+ 水平是稳定的，不是 cherry-pick。
-- seed_2 是三 seed 中最高的（40.88），也超过了原 Run 10 未存盘的峰值 40.60。
+| seed | 全轮峰值 @ep | 峰值 3D_mod | best saved @ep | best saved 值 | 说明 |
+|---|---:|---:|---:|---:|---|
+| seed_0 | ep16 | 39.8802 | ep16 | 39.8802 | 峰值已落盘 |
+| seed_1 | ep15 | 40.5073 | ep12 | 39.0503 | **ep15 为奇数 epoch，峰值未落盘** |
+| seed_2 | ep14 | **40.8800** | ep14 | 40.8800 | 峰值已落盘 |
+| **三 seed 均值 ± std** | | **40.42 ± 0.51** | | 39.94 ± 0.92 | 后者不作为性能对照 |
+
+- 三个 seed 的全轮峰值分别落在 ep14/15/16，集中在 ep12-16 高原区（而非原 Run 10 的 ep11）。
+- 全轮峰值方差极小：std=0.51，三个值在 39.88-40.88 的 1 点区间内。说明 Run 10 的 40+ 水平
+  是稳定的，不是 cherry-pick。
+- seed_2 是三 seed 中全轮峰值最高的（40.88），也超过了原 Run 10 未落盘的峰值 40.60。
+- **此前 19.2/19.8 把 seed_1 ep15 记为“已存”是错的**：该目录 `checkpoint_interval=2`，
+  磁盘只有偶数 epoch 权重；ep15 峰值仍按统一口径保留，但可用权重回退到 ep12。
+
+### 19.2b ep12-16 固定窗口均值（comparison mean，主对照口径）
+
+各 seed 在 ep12-16 五个 epoch 上等权平均，Overlap 构成项同前：
+
+| 指标 | seed_0 | seed_1 | seed_2 | 三 seed 均值 ± std |
+|---|---:|---:|---:|---:|
+| Overall 3D moderate | 38.3902 | 39.1994 | 39.3990 | **38.9962 ± 0.5342** |
+| Overall BEV moderate | 46.5193 | 46.8477 | 48.3350 | 47.2340 ± 0.9675 |
+| Car strict | 47.8027 | 45.3952 | 48.9752 | 47.3910 ± 1.8252 |
+| Cyclist loose | 48.6271 | 47.6034 | 47.9939 | 48.0748 ± 0.5166 |
+| Pedestrian loose | 28.9160 | 30.1997 | 30.5844 | 29.9000 ± 0.8736 |
+| Truck strict | 28.2149 | 33.5993 | 30.0424 | 30.6189 ± 2.7381 |
+
+说明：三 seed 的全轮峰值 mean `40.42` 是上限口径，不能替代这里的窗口均值 `39.00`；
+后续 20-25 节及 CycCls 等对照使用的 `38.39 / 39.20 / 39.40` 正是本表逐 seed 的 Overall 窗口均值。
 
 ### 19.3 BEST epoch 逐类别对比
 
@@ -1382,7 +1435,7 @@ seed_0 与原 Run 10 用的是同一 default seed（0），但 3 卡 vs 4 卡导
 | Truck 3D_mod_strict | 30.43 | 34.79 | 30.76 | 31.99 | 2.43 |
 | Truck 3D_mod_loose | 49.44 | 51.58 | 52.01 | 51.01 | 1.38 |
 
-### 19.4 固定 ep14 截面对比（与原 Run 10 已存最优同一 epoch）
+### 19.4 固定 ep14 截面对比（与原 Run 10 best saved 同一 epoch）
 
 | Metric | seed_0 | seed_1 | seed_2 | mean | std | 原 Run 10 |
 |---|---:|---:|---:|---:|---:|---:|
@@ -1404,14 +1457,16 @@ seed_0 与原 Run 10 用的是同一 default seed（0），但 3 卡 vs 4 卡导
 
 | 口径 | 原 Run 10 | 三 seed 复现 | 结论 |
 |---|---:|---:|---|
-| 单次 BEST | 40.60 (ep11, 未存) | 40.42 +/- 0.51 | 原 Run 10 在区间内，非离群 |
-| 已存 BEST | 39.65 (ep14) | 40.42 +/- 0.51 (全部已存) | 复现超过原已存 |
+| 全轮峰值 | 40.60 (ep11, 未存) | 40.42 +/- 0.51 | 原 Run 10 在 1 std 内，非离群 |
+| ep12-16 窗口均值 | 39.06 | 39.00 +/- 0.53 | 平台水平一致 |
 | ep14 固定截面 | 39.65 | 39.28 +/- 1.45 | 在 1 std 内，基本一致 |
-| BEST epoch | ep11 | ep14/15/16 | 峰值后移 3-5 epoch |
+| best saved | 39.65 (ep14) | seed_0 39.88 / seed_1 **39.05 (ep12)** / seed_2 40.88 | seed_1 峰值未存，已存最高低于峰值 |
+| 全轮峰值 epoch | ep11 | ep14/15/16 | 峰值后移 3-5 epoch |
 
 - 原 Run 10 的 ep11=40.60 不是 cherry-pick：三 seed mean 40.42，std 0.51，40.60 在 1 std 以内。
 - BEST epoch 从 ep11 后移到 ep14-16，可能来自 3 卡 vs 4 卡的有效 batch 差异（12 vs 16），更小 batch 需要更多 epoch 收敛到峰值。
-- 所有三个 seed 的 BEST 均已落盘（seed_0 ep16, seed_1 ep15, seed_2 ep14），修复了原 Run 10 ep11 未存的遗憾。
+- seed_0/seed_2 的全轮峰值已落盘；seed_1 的 ep15 峰值因 `checkpoint_interval=2` 未落盘，
+  可用 best saved 是 ep12。原 Run 10 ep11 未存的问题在本组只修复了 2/3。
 
 ### 19.6 收敛形态分析
 
@@ -1432,7 +1487,8 @@ seed_0 与原 Run 10 用的是同一 default seed（0），但 3 卡 vs 4 卡导
 ### 19.8 关键结论
 
 1. Run 10 head-v2 的 40+ 水平是可复现的：三 seed mean=40.42+/-0.51，原 Run 10 单次 40.60 在区间内，不是 cherry-pick。
-2. 所有 BEST checkpoint 已存盘，修复了原 Run 10 ep11=40.60 未存的遗憾。三 seed 中最好的是 seed_2 ep14=40.88。
+2. 三 seed 中最好的是 seed_2 ep14=40.88（已存）；seed_0 ep16=39.88 已存，seed_1 ep15=40.51
+   **没有对应权重**，best saved 回退 ep12=39.05。
 3. 峰值稳定在 ep12-16（原 Run 10 在 ep11），3 卡 vs 4 卡的有效 batch 差异可能导致峰值后移，但不影响上限。
 4. 主指标方差极小（std=0.51），适合论文报告 mean+/-std 作为确定性证据。
 5. 逐类别方差集中在 Car loose / Cyclist strict / Truck strict——这些是共享 head 正样本分配的敏感点，进一步佐证 Car-Truck 混淆是下一步要解决的根因。
@@ -1442,10 +1498,13 @@ seed_0 与原 Run 10 用的是同一 default seed（0），但 3 卡 vs 4 卡导
 
 基于多 seed 结果，更新第 18 节的最终报告口径：
 
-- 主表（对外）：Run 10 head-v2 报告 40.42 +/- 0.51（三 seed BEST 的 mean +/- std），替代原单次 40.60。
-- 补充材料：附三 seed 逐 epoch 曲线（19.1 节）和逐类别 mean +/- std（19.3 节）。
+- 主表（对外）：Run 10 head-v2 并列报告 ep12-16 窗口均值 `39.00 ± 0.53` 与全轮峰值
+  `40.42 ± 0.51`；后者是上限统计，不替代前者。
+- 补充材料：附三 seed 逐 epoch 曲线（19.1 节）、ep12-16 窗口均值（19.2b）和逐类别峰值
+  mean ± std（19.3 节）。
 - 最佳单点：seed_2 ep14 = 40.88（已存），作为 released checkpoint 候选。
-- BEST epoch 选择：ep12-16 是稳定高原区，报告时取各 seed 自身 BEST（而非固定 epoch），避免低估。
+- 窗口均值选择：ep12-16 是三个 seed 的共同峰值窗口，固定 epoch 可比；全轮峰值另列，
+  避免用“各 seed 自身最高点”替代平台对照。
 
 ---
 
@@ -1911,7 +1970,8 @@ seed0 单点的 +0.67（第 22 节）在三 seed 视角下被证明不是稳健�
    N4、BPTT1、2×4（有效 batch 12）、24e，作为论文的时序融合基准，不再继续堆随机状态变体。
 2. 检测头消融回归主线，优先级：Truck/Car 混淆（Cyclist strict / Truck strict 是多 seed 方差
    的主要来源）→ Pedestrian strict（BEV 分辨率物理瓶颈，需单独定向）。
-3. 论文最终报告口径仍以第 19 节完整 RSSM 三 seed BEST mean 40.42 ± 0.51 为准；
+3. 论文最终报告口径仍以第 19 节完整 RSSM 三 seed 的全轮峰值 mean 40.42 ± 0.51 为准，
+   主对照同时使用 ep12-16 窗口均值 39.00 ± 0.53；
    KL0 多 seed 结果作为负向消融证据列入附录，佐证「保留 KL」的机制性结论。
 
 ---
@@ -2158,7 +2218,7 @@ strict 反升 +2.71，判定为「Truck refine 分支对共享 BEV 特征的梯�
 
 - 后期 ep17-20 无恢复：Overall 36.12 / 37.87 / 36.60 / 36.02，均值 36.65；Truck 18.01 / 26.58 / 24.94 / 27.07，
   均值 24.15；Cyc 47.26 / 43.43 / 40.79 / 39.45，均值 42.74。
-- BEST = ep10 的 37.99，**仍低于基线平台值**（基线 ep12-16 均值 38.39）；最终 ep24 = 36.68。
+- 全轮峰值 = ep10 的 37.99，**仍低于基线平台值**（基线 ep12-16 均值 38.39）；最终 ep24 = 36.68。
 
 ### 27.7 核心结论（本轮明确失败，并推翻第 26 节部分判断）
 
@@ -4525,11 +4585,11 @@ seed2：
 - 因此 Car strict 只能记为「**两个 seed 上为正、不是跨三个 seed 稳健的效应**」，不再作为
   支持该分支保留的依据。
 
-#### 44.7.4 BEST 与全局峰值排名
+#### 44.7.4 全轮峰值与全局峰值排名
 
-各 run 取自身 BEST（max `Overall_3D_moderate`）：
+各 run 取自身全轮峰值（max `Overall_3D_moderate`）：
 
-| run | BEST @ep | Overall 3D | Overall BEV | Cyclist loose | Ped loose | Car strict | Truck strict |
+| run | 峰值 @ep | Overall 3D | Overall BEV | Cyclist loose | Ped loose | Car strict | Truck strict |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | CycCls seed0 | 12 | 40.6350 | 48.2658 | 49.6157 | 30.0768 | 51.6789 | 31.1687 |
 | CycCls seed1 | 15 | 39.7104 | 47.0907 | 49.1415 | 27.2706 | 51.1331 | 31.2962 |
@@ -4558,7 +4618,7 @@ seed2：
 
 全库 `Overall_3D_moderate` 峰值排名（扫描所有 `work_dirs/**/*.log.json`）：
 
-| 排名 | run | BEST @ep | Overall 3D |
+| 排名 | run | 峰值 @ep | Overall 3D |
 |---:|---|---:|---:|
 | 1 | KL0 消融 seed1（第 25 节，已被否决） | 20 | 41.0994 |
 | 2 | Run10 head-v2 seed2（主线） | 14 | 40.8800 |
@@ -4579,7 +4639,7 @@ seed2：
   seed1 的 `41.0994`。
 - CycCls seed1 `39.7104` 低于 Run10 三 seed 中最低的 `39.8802`；CycCls seed2 `40.1627`
   也低于 Run10 三 seed 的最低值之上不多，位于 Run10 分布下半区。
-- 按第 19 节既定口径（comparison 用平台/固定窗口均值，不用单点 BEST），`40.6350`
+- 按统一口径（comparison 用 ep12-16 固定窗口均值，全轮峰值只作为上限单列），`40.6350`
   落在 Run10 三 seed BEST 分布 `40.42 ± 0.51` 的一个标准差内，**不能算刷新历史最高**。
   主线（Run10 head-v2）历史最高单点仍是 seed2 ep14 `40.88`。
 
@@ -4650,12 +4710,14 @@ cmd        python tools/test_vod.py --config <cfg> --checkpoint <ckpt> --gpu-id 
 - 至于 Car 受益与 Ped/Truck 受损是否由该分支的**结构设计**导致，现有三个 seed 的结果
   仍不足以区分原因：seed 间方向不一致、幅度在噪声带内，本节不下因果判断。
 - 因此最终判定：**CycCls 分支在多 seed 复现下未被支持，不能定为可替换主模型。**
-  主线维持 Run 10 head-v2 `40.42 ± 0.51`。该分支记为「单 seed 上近似踩线、跨 seed 不可
+  主线维持 Run 10 head-v2 的 ep12-16 窗口均值 `39.00 ± 0.53`（全轮峰值 `40.42 ± 0.51`）。
+  该分支记为「单 seed 上近似踩线、跨 seed 不可
   复现」，不再为整体 Overall 调整，也不在主线上启用。
 
 #### 44.7.8 下一步
 
-1. 主模型维持 Run 10 head-v2（第 19 节）`40.42 ± 0.51`，不再为该分支投入训练。
+1. 主模型维持 Run 10 head-v2（第 19 节）：主对照 ep12-16 窗口均值 `39.00 ± 0.53`，
+   全轮峰值 `40.42 ± 0.51`；不再为该分支投入训练。
 2. 若确实需要 Cyclist 专项改进，应换一条与分类残差不同的假设重新预注册（例如候选排序
    之外的召回/回归方向），并直接按三 seed 均值 + ep12-16 固定窗口做门控，不先跑单 seed。
 3. 后续任何单点峰值都必须配平台/固定窗口均值一起报，避免再次出现 seed0 ep12 `40.6350`
@@ -4717,9 +4779,9 @@ seed1/seed2 使用各自 seed 目录中的同名校验点与配置，分别调�
 完整 JSON 输出保存在
 `/data/lurui/work_dirs/run10_headv2_avg_ep12_14_16/seed_{0,1,2}.json`。
 
-### 45.2 与主线 BEST 口径对比
+### 45.2 与主线全轮峰值口径对比
 
-主线为 Run 10 head-v2 clean full RSSM 三 seed 各自 BEST：Overall `40.42 +/- 0.51`。
+主线为 Run 10 head-v2 clean full RSSM 三 seed 的全轮峰值：Overall `40.42 +/- 0.51`。
 本节平均权重不是从每个 seed 的曲线中挑 epoch，而是固定 ep12+ep14+ep16 等权平均。
 
 | 指标 | 主线三 seed 均值 | 平均权重三 seed 均值 | Δ（平均权重 − 主线） | 判定 |
@@ -4740,7 +4802,7 @@ BEV 的逐 seed 配对差为 `+0.4572 / +0.0172 / +0.7413`，均值 `+0.4052`、
 
 | 标准 | 实测 | 判定 |
 |---|---:|---|
-| 三 seed Overall BEST 口径均值 ≥ 40.42 | 40.5152 | ✅ |
+| 三 seed Overall 全轮峰值口径均值 ≥ 40.42 | 40.5152 | ✅ |
 | seed 间标准差不高于 0.51 | 0.4410 | ✅ |
 | 四个类别三 seed 均值任一不得下降超过 1.0 | Car −0.3526、Cyc −0.7093、Ped +1.1247、Truck +0.3080 | ✅ |
 | Overall/BEV 至少一项稳定提升 ≥ 0.3 | Overall +0.0919；BEV +0.4052 | ✅ BEV |
@@ -4753,8 +4815,8 @@ BEV 的逐 seed 配对差为 `+0.4572 / +0.0172 / +0.7413`，均值 `+0.4052`、
   低成本稳定化方案。
 - 类别均值没有出现超过 1.0 的下降；Car/Cyclist 的小幅下降被 Ped/Truck 的提升抵消在
   Overall 内，但不应被解释为对 Car/Cyclist 有正向作用。
-- 后续若进入论文主表或最终方案，应优先报告三个平均 checkpoint 的独立复评结果，而不是
-  继续在训练日志的单点峰值上挑 epoch。
+- 后续若进入论文主表或最终方案，应优先报告三个平均 checkpoint 的独立复评结果；
+  全轮峰值仍按统一口径单列，但不得用它替代固定窗口的主对照结论。
 
 ---
 
@@ -5430,11 +5492,11 @@ ep10-24 曲线（`pts_bbox/KITTI/*`）：
 | 23 | 38.4706 | 45.7259 | 50.0863 | 43.0548 | 30.8507 | 29.8907 |
 | 24 | 38.5365 | 45.8641 | 50.9215 | 42.4788 | 30.9400 | 29.8058 |
 
-BEST 与 LAST：
+全轮峰值与 LAST：
 
 | 口径 | epoch | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| BEST Overall | 16 | **40.6924** | 47.7198 | 54.9550 | 46.8439 | 28.4734 | 32.4974 |
+| 全轮峰值 | 16 | **40.6924** | 47.7198 | 54.9550 | 46.8439 | 28.4734 | 32.4974 |
 | LAST | 24 | 38.5365 | 45.8641 | 50.9215 | 42.4788 | 30.9400 | 29.8058 |
 
 固定窗口均值：
@@ -5496,11 +5558,11 @@ BEST 与 LAST：
 | 22 | 38.7110 | 45.2627 | 48.2989 | 44.2242 | 30.3549 | 31.9662 |
 | 23 | 38.4766 | 45.2330 | 47.3200 | 43.3337 | 30.1571 | 33.0956 |
 
-BEST 与 LAST：
+全轮峰值与 LAST：
 
 | 口径 | epoch | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| BEST Overall | 14 | **40.3853** | 47.7999 | 48.7109 | 50.5391 | 34.2463 | 28.0448 |
+| 全轮峰值 | 14 | **40.3853** | 47.7999 | 48.7109 | 50.5391 | 34.2463 | 28.0448 |
 | LAST val | 23 | 38.4766 | 45.2330 | 47.3200 | 43.3337 | 30.1571 | 33.0956 |
 
 与同 seed FG-FULL N=4 的同期窗口对比：
@@ -5564,11 +5626,11 @@ BEST 与 LAST：
 | 20 | 36.3817 | 43.7743 | 48.0251 | 43.6819 | 20.8593 | 32.9606 |
 | 21 | 37.4185 | 44.8328 | 49.3765 | 43.4252 | 24.5217 | 32.3507 |
 
-BEST 与 LAST（LAST 为无落盘权重对应的 ep21 val）：
+全轮峰值与 LAST（LAST 为无落盘权重对应的 ep21 val）：
 
 | 口径 | epoch | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| BEST Overall | 9 | **40.2850** | 49.4313 | 47.5623 | 56.8707 | 27.9718 | 28.7349 |
+| 全轮峰值 | 9 | **40.2850** | 49.4313 | 47.5623 | 56.8707 | 27.9718 | 28.7349 |
 | LAST val | 21 | 37.4185 | 44.8328 | 49.3765 | 43.4252 | 24.5217 | 32.3507 |
 | last disk | 20 | 36.3817 | 43.7743 | 48.0251 | 43.6819 | 20.8593 | 32.9606 |
 
@@ -5703,17 +5765,17 @@ RSSM 融合相对原始 temporal fusion 是否有提升；到 ep20 时固定窗�
 | 19 | 36.7451 | 43.4264 | 51.3833 | 42.2214 | 27.4558 | 25.9201 |
 | 20 | 37.0091 | 44.2052 | 50.1170 | 43.0086 | 26.9649 | 27.9461 |
 
-BEST 与落盘权重：
+全轮峰值与 best saved：
 
 | 口径 | epoch | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| BEST val（无落盘权重） | 11 | **39.5431** | 46.7741 | 49.6872 | 49.9060 | 29.3140 | 29.2653 |
-| BEST 偶数 epoch | 18 | 37.6587 | 45.7567 | 49.8664 | 44.3677 | 27.9239 | 28.4769 |
+| 全轮峰值（无落盘权重） | 11 | **39.5431** | 46.7741 | 49.6872 | 49.9060 | 29.3140 | 29.2653 |
+| best saved（偶数 epoch） | 18 | 37.6587 | 45.7567 | 49.8664 | 44.3677 | 27.9239 | 28.4769 |
 | LAST val | 20 | 37.0091 | 44.2052 | 50.1170 | 43.0086 | 26.9649 | 27.9461 |
 
-注：`checkpoint_interval=2` 只在偶数 epoch 落盘，BEST val（ep11）没有对应权重；该 run 的
-「最优可评估权重」实际是 ep18 或 ep20，Overall 3D 都在 37.6-37.0。这是 checkpoint 间隔造成的，
-与截断位置无关，也说明这条 baseline 不能用「BEST val」口径去和对照的单点 BEST 直接比。
+注：`checkpoint_interval=2` 只在偶数 epoch 落盘，全轮峰值（ep11 `39.5431`）没有对应权重；
+该 run 的 best saved 实际是 ep18 `37.6587`。按统一口径，ep11 峰值仍必须记录为 run 上限，
+但主对照仍是 ep12-16 / ep18-20 固定窗口均值，不拿它的峰值去和对照的单点峰值直接比。
 
 与同 seed `fgfull_N4_no2d_igdr` 对照的固定窗口对比：
 
@@ -5742,7 +5804,7 @@ BEST 与落盘权重：
   （ep18-20 -5.91）。写论文时不能笼统说「所有类别提升」。
 - baseline 有早段领先（ep1-7 多数高于对照），但到 ep12 之后被反超并稳定落后，后段没有回弹；
   ep19 的 36.75 和 ep20 的 37.01 已在 37 平台，继续跑不改变方向，所以截断在 ep20。
-- 局限：ep21-24 未跑，ep20-24 窗口只有 ep20 一个点；另外 BEST val（ep11）无落盘权重。
+- 局限：ep21-24 未跑，ep20-24 窗口只有 ep20 一个点；另外全轮峰值（ep11 `39.5431`）无落盘权重。
   因此本控制组适合作为「单 seed、截断于 ep20 的方向性对照」，不能当作完整 24e run 放在主表里，
   若要论文主表口径仍需按 TODO 补齐。
 
@@ -5762,7 +5824,7 @@ BEST 与落盘权重：
 - ep21 val（`40.4423`）于 2026-09-24 02:57:55 UTC 写完；ep22 训练到 700/1902 iter、最后一条
   训练日志为 03:16:21 UTC 时主动
   停止，ep22 没有 val 行，也没有 `epoch_22.pth`。
-- 停止依据：ep21 相对 ep20（`41.3110`）回落，且没有超过已落盘 BEST ep16（`42.2904`）；
+- 停止依据：ep21 相对 ep20（`41.3110`）回落，且没有超过 best saved ep16（`42.2904`）；
   学习率已进入 cosine 尾部（ep21 lr `1.005e-05`，ep22 lr `5.710e-06`），不足以支持大幅回弹。
 - `checkpoint_interval=2`，磁盘保存 ep2/4/6/.../20；`latest.pth -> epoch_20.pth`。
 - 注意：本 debug/消融 stack 只关掉了 2D RPN/RoI 与 IGDR，仍继承 FG-FULL 的 MRF3Net、
@@ -5794,12 +5856,12 @@ BEST 与落盘权重：
 | 20 | 41.3110 | 48.2571 | 53.0877 | 52.3906 | 29.3230 | 30.4426 |
 | 21 | 40.4423 | 47.1288 | 53.7354 | 50.2729 | 27.5115 | 30.2494 |
 
-BEST 与落盘权重：
+全轮峰值与 best saved：
 
 | 口径 | epoch | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| BEST val（无落盘权重） | 15 | **43.1449** | 49.9082 | 54.2137 | 52.3439 | 31.0114 | 35.0104 |
-| BEST saved / 偶数 epoch | 16 | **42.2904** | 49.1613 | 58.3750 | 53.5163 | 28.3188 | 28.9515 |
+| 全轮峰值（无落盘权重） | 15 | **43.1449** | 49.9082 | 54.2137 | 52.3439 | 31.0114 | 35.0104 |
+| best saved（偶数 epoch） | 16 | **42.2904** | 49.1613 | 58.3750 | 53.5163 | 28.3188 | 28.9515 |
 | LAST val | 21 | 40.4423 | 47.1288 | 53.7354 | 50.2729 | 27.5115 | 30.2494 |
 
 与同 stack 的 seed0 对照（固定窗口均值）：
@@ -5821,14 +5883,15 @@ BEST 与落盘权重：
 
 读数：
 
-- seed1 的 BEST saved（ep16 `42.2904`）明显高于 seed0 的 `40.3853`，也高于完整 FG-FULL
-  N=4 seed0 的 `40.6924`；ep12-16 / ep18-20 两个固定窗口的 Overall 与 BEV 也都高于 seed0。
+- seed1 的 best saved（ep16 `42.2904`）明显高于 seed0 的全轮峰值 `40.3853`，也高于完整
+  FG-FULL N=4 seed0 的全轮峰值 `40.6924`；ep12-16 / ep18-20 两个固定窗口的 Overall 与 BEV
+  也都高于 seed0，两项口径方向一致。
 - 这是很大的 seed 间方差：Overall ep12-16 相差 `+2.64`，Car strict 与 Cyclist loose 相差
   `+6` 左右，说明单 seed 结论不可靠，必须等 seed2 收齐后再报 seed 均值与标准差。
 - 提升不是全类别一致：seed1 的 Ped loose 在两个窗口都比 seed0 低 `1.8-2.9`；Truck strict
   在 ep12-16 更高、ep18-20 更低。种子间没有出现「全面一致」的类别收益。
-- ep15 的 val 峰值 `43.1449` 因 `checkpoint_interval=2` 没有权重，不能作为可用模型；本 run
-  可评估的 BEST 是 ep16。后续若要把峰值纳入主表口径，需要把 interval 改成 1 重跑。
+- ep15 的全轮峰值 `43.1449` 因 `checkpoint_interval=2` 没有对应权重；按统一口径它仍是本 run
+  的上限，必须记录，但不能作为可用模型。best saved 是 ep16 `42.2904`，主对照仍用固定窗口。
 - 口径限制：本 run 截断于 ep21 val，ep22-24 未跑；seed0 完整到 ep23。三个 seed 的主比较
   统一使用 ep12-16 与 ep18-20 两个固定窗口，不比较 LAST。
 

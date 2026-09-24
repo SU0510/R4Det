@@ -65,7 +65,7 @@
 
 ### 1.4 一句话总结整个项目
 
-> 把 RSSM（循环状态空间模型）接进 R4Det 的 BEV 时序融合位置，经过 5 个阶段（模块落地 → 帧数/容量消融 → 预训练+检测头 → 机制拆解 → 类别专项），最终**主线模型 = 预训练 backbone + N=4 Motion-Aligned RSSM + head-v2**，三 seed 复现 **Overall 3D moderate = 40.42 ± 0.51**【已验证】，显著优于无时序基线 35.59 与 GRU 时序基线（18e 口径 34.50）；Pedestrian strict ≈ 0 被证实为 BEV 分辨率/点云稀疏的物理瓶颈，所有试图修复它的支线（refinement / CenterHead / 高分辨率 BEV / 尺寸先验 / probe）均未通过门控。
+> 把 RSSM（循环状态空间模型）接进 R4Det 的 BEV 时序融合位置，经过 5 个阶段（模块落地 → 帧数/容量消融 → 预训练+检测头 → 机制拆解 → 类别专项），最终**主线模型 = 预训练 backbone + N=4 Motion-Aligned RSSM + head-v2**。三 seed 的主对照口径为 **ep12-16 窗口均值 39.00 ± 0.53**，全轮峰值为 **40.42 ± 0.51**（两者并列报告；后者未落盘时不算可用权重）【已验证】，显著优于无时序基线 35.59 与 GRU 时序基线（18e 口径 34.50）；Pedestrian strict ≈ 0 被证实为 BEV 分辨率/点云稀疏的物理瓶颈，所有试图修复它的支线（refinement / CenterHead / 高分辨率 BEV / 尺寸先验 / probe）均未通过门控。
 
 ---
 
@@ -279,7 +279,7 @@ RSSM 状态:   h_state ∈ (B,256,216,248),  z_state ∈ (B,256,216,248)   # lat
 08-06 seq_len=3 支持（`80742aa`）→ Run 6 (N3/hdim64, BEST 34.27)；08-09~08-11 N4/hdim128 → Run 7 (34.05)、Run 8 (N3/hdim128, 32.87)、N4/hdim64 (33.00)；08-12 下载 TJ4D 官方预训练权重（detectron2 stub 系列 fix）；08-13 **head-v2**（`d24e1e4`：Ped 3 anchor + ignore_dir + IoU branch；KL warmup 12→10、30e→24e）；08-13 Run 9（N4+pretrain 30e, BEST ep19 37.94）；08-15 **Run 10**（head-v2 24e, 已存 BEST ep14 39.65 / 峰 ep11 40.60 未存盘）。
 
 ### 阶段 3：anchor / mask / BPTT 变体（08-15 ~ 08-20）
-Run 11 Truck×3 anchor（38.45，Car −5）；Run 12 Car-large anchor（38.11，Truck −5.98）；Run 13 Doppler 动静 mask（36.21，全场回退）；Run 14 N4 BPTT（37.84）；Run 15 N2 BPTT（38.08）。08-17 自主实验协议文档（`f017cda`）。08-21~08-24 **Run 10 三 seed 复现**（deterministic、3 卡）：40.42±0.51，seed2 ep14=40.88 为 released 候选（§19）。
+Run 11 Truck×3 anchor（38.45，Car −5）；Run 12 Car-large anchor（38.11，Truck −5.98）；Run 13 Doppler 动静 mask（36.21，全场回退）；Run 14 N4 BPTT（37.84）；Run 15 N2 BPTT（38.08）。08-17 自主实验协议文档（`f017cda`）。08-21~08-24 **Run 10 三 seed 复现**（deterministic、3 卡）：ep12-16 窗口均值 39.00±0.53，全轮峰值 40.42±0.51，seed2 ep14=40.88 为 released 候选（§19）。
 
 ### 阶段 4：RSSM 机制消融（08-24 ~ 08-31）
 §20 No-Temporal（35.59）→ §21 Deterministic latent（38.44）→ §22 KL=0 seed0（40.35）→ §23 FixedNoise（38.42）→ §24 Posterior-only learnable-std（39.66@ep10，窗口 37.04）→ §25 KL0 三 seed 复现 → **结论：保留完整 RSSM（KL/prior + posterior sampling 共同必需）**。
@@ -316,10 +316,10 @@ Run 11 Truck×3 anchor（38.45，Car −5）；Run 12 Car-large anchor（38.11�
 | 10 | head-v2 24e（原单次） | 检测头 v2 | 40.60 @ep11（未存）/39.65 已存 | ✅ | 【已验证】40.5950/日志；快照 spg=4×4卡=16、interval=2 |
 | 11 | + Truck×3 anchor | anchors | 38.45 @ep11 | ❌ Car −5.01 | 【记录口径】ckpt 已清 |
 | 12 | + Car-large anchor | anchors | 38.11 @ep14 | ❌ Truck −5.98 | 【记录口径】 |
-| 13 | Doppler 动静 mask | +score 通道+velocity 门控 | 36.21 @ep8 | ❌ 全线回退 | 【已验证】BEST/日志；⚠️ 实为 3卡×spg4=batch12（记录未注明） |
+| 13 | Doppler 动静 mask | +score 通道+velocity 门控 | 36.21 @ep8 | ❌ 全线回退 | 【已验证】峰值/日志；⚠️ 实为 3卡×spg4=batch12（记录未注明） |
 | 14 | N4 BPTT | rssm_bptt_steps=1 | 37.84 @ep14 | ❌ 负收益 | 【记录口径】 |
 | 15 | N2 BPTT | N4→N2/hdim128→64 | 38.08 @ep14 | ❌ 仍低于 Run10 | 【记录口径】 |
-| §19 | Run10 三 seed 复现 | seed 1/2 + 3 卡 | **40.42±0.51**（s0 39.88/s1 40.51/s2 40.88） | ✅ 论文口径 | 【已验证】三 seed BEST 逐位一致 |
+| §19 | Run10 三 seed 复现 | seed 1/2 + 3 卡 | 窗口 **39.00±0.53** / 峰值 **40.42±0.51** | ✅ 论文口径 | 【已验证】三 seed 窗口与峰值逐位一致；s1 峰值 ep15 未落盘 |
 | §20 | No-Temporal | temporal_fusion=None | 35.59 @ep20 | ✅（作对照） | 【已验证】 |
 | §21 | Deterministic latent | 删随机性 | 38.44 @ep13 | ⚠️ −1.31 vs RSSM | 【已验证】 |
 | §22 | KL=0 seed0 | 关 KL 梯度 | 40.35 @ep22 | ⚠️ 单点更好 | 【已验证】 |
@@ -381,8 +381,13 @@ Run 11 Truck×3 anchor（38.45，Car −5）；Run 12 Car-large anchor（38.11�
 
 - **Run 9**（N4 hdim128 30e + `pretrained_tj4d.pth`）：BEST ep19 37.94【已验证】，+3.23 vs 无预训练，Car strict +12.62——**预训练是全项目最大单点增益**；代价 Cyclist loose −4.85。30e 过长（ep19 后过拟合）。
 - **Run 10**（head-v2 24e，唯一差异=检测头）：峰值 ep11 40.60【已验证 40.5950】但 interval=2 未存盘；已存 ep14=39.65；Car strict ep20 53.04。head-v2 带来 loose 口径全面提升（Car +8.71/Cyc +11.32/Trk +5.22），BEV_mod +5.53。**教训：interval=2 丢峰值 → 之后全部 interval=1**。
-- **§19 三 seed 复现**（deterministic、3卡 batch12）：39.88 / 40.51 / 40.88，**40.42±0.51**【已验证逐位】；峰值稳定在 ep12-16；原 40.60 非 cherry-pick；seed2 ep14=40.88 为 released checkpoint 候选。逐类别方差集中在 Car loose/Cyc strict/Truck strict；Ped strict 全 seed 0.10–0.15 → 物理瓶颈再次确认。
-- **论文报告口径**（§18/§19.9 定稿）：主表报三 seed mean±std；单点 BEST 仅附录。
+- **§19 三 seed 复现**（deterministic、3卡 batch12）：ep12-16 窗口均值为
+  38.39 / 39.20 / 39.40，**39.00±0.53**；全轮峰值为 39.88 / 40.51 / 40.88，
+  **40.42±0.51**【已验证逐位】。seed_1 峰值 ep15 因 interval=2 未落盘，best saved 回退
+  ep12=39.05；seed_2 ep14=40.88 已落盘，为 released checkpoint 候选。逐类别方差集中在
+  Car loose/Cyc strict/Truck strict；Ped strict 全 seed 0.10–0.15 → 物理瓶颈再次确认。
+- **论文报告口径**（§18/§19.9 定稿）：主表并列报告 ep12-16 窗口均值与全轮峰值；
+  best saved 只用于 checkpoint 可用性说明，不参与性能排名。
 
 ### 8.4 阶段四：anchor/mask/BPTT 变体（Run 11–15，均 vs Run 10）
 
@@ -396,9 +401,9 @@ Run 11 Truck×3 anchor（38.45，Car −5）；Run 12 Car-large anchor（38.11�
 
 ### 8.5 阶段五：RSSM 机制消融（§20–25，全部 seed0 deterministic、3卡 batch12、24e；窗口=ep12-16 均值）
 
-| 配置 | 窗口 Overall | BEST | 判定 |
+| 配置 | 窗口 Overall | 全轮峰值 | 判定 |
 |---|---:|---:|---|
-| No-Temporal | 34.65 | 35.59 | 时序融合净收益 ≈ **+3.7 窗口 / +4.29 BEST**【已验证】 |
+| No-Temporal | 34.65 | 35.59 | 时序融合净收益 ≈ **+3.7 窗口 / +4.29 峰值**【已验证】 |
 | Deterministic（删随机性） | 37.08 | 38.44 | 确定性传播贡献大部分但**不全部** |
 | KL=0 | 39.06 | 40.35 | seed0 单点比完整 RSSM 还好 → 疑问 |
 | FixedNoise 0.1 | 36.35 | 38.42 | 固定噪声不是答案（甚至 −0.73 vs Det） |
@@ -473,7 +478,7 @@ Run 11 Truck×3 anchor（38.45，Car −5）；Run 12 Car-large anchor（38.11�
 
 ### 9.3 口径/方法论问题（影响结论解读）
 1. **Overall 混合口径**（Car/Trk strict + Ped/Cyc loose）导致 anchor 类实验的排名会随权重翻转（§16：等权 vs 频率加权排名不同）；
-2. **单点 BEST vs 平台均值**：Run 10 的 39.65/40.60 是平台上沿；平台 ep12-24=38.56±0.97；后续一律用窗口均值对比；
+2. **全轮峰值 vs 窗口均值**：Run 10 的 39.65/40.60 是单点上沿；平台 ep12-24=38.56±0.97；后续主对照一律用 ep12-16 窗口均值，全轮峰值只作上限单列；
 3. 平台期噪声量级：Overall 逐 epoch σ≈1.5、Car σ≈3-4 → 小于 1.5 的「增益」大多不显著（§44.7.4）；
 4. 预注册门控线写死基于错误基线时，宁可记「未通过」也不事后改线（§44.4）。
 
@@ -552,7 +557,7 @@ Run 11 Truck×3 anchor（38.45，Car −5）；Run 12 Car-large anchor（38.11�
 
 1. **等 CycCls seed2 完成**，按既定口径补全三 seed 配对均值与逐 seed 双结论，正式给 CycCls 分支定性（预期：记「仅 Car strict 跨 seed 正向、Overall 未被支持」并停止）。
 2. **冻结主线**：把主配置回退成 clean（shared_stem=False）并打 tag/存档快照，避免复现事故；~~修复 `BEVRSSMTemporalFusion` return~~（2026-09-22 已完成）。
-3. **论文口径补强**：clean full RSSM 40.42±0.51 为主表；KL0 多 seed 作机制消融附录；No-Temporal/Deterministic 作时序收益分解；频率加权口径作部署讨论。
+3. **论文口径补强**：clean full RSSM 主表并列 ep12-16 窗口均值 39.00±0.53 与全轮峰值 40.42±0.51；KL0 多 seed 作机制消融附录；No-Temporal/Deterministic 作时序收益分解；频率加权口径作部署讨论。
 4. **若继续刷 Overall**：唯一有跨 seed 证据的方向是 **Car**（CycCls 的 Car strict +2.9）；可试「只保留 CycCls 分支收益、去掉 stem」或对 Car 的 anchor/分配器做单变量（注意 Cyclist 红线）。
 5. **若解决 Truck**：拆分类专属 prediction tower（§28.8 候选 2）或先做 Car–Truck 混淆专项诊断（分类 vs 定位）——但注意 §26.6 诊断已显示 Truck 首要是定位（长轴/中心）而非分类。
 6. **若解决 Ped strict**：跳出 anchor 范式（point/center-based 专属头 + 输入侧稠密化），或在论文中如实报告该物理瓶颈并采用 §39 的 strict 优先工作点作消融。
