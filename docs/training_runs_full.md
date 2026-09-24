@@ -1321,11 +1321,12 @@ epoch 区间不完全一致，因此只适合同配方横向参考，不能替�
 - 用 `python3 tools/summarize_run.py <work_dir> --tail 5` 再核一遍 best/last。
 - 本次清理未执行删除，因为实际候选删除文件已为 0；后续清理由脚本 dry-run 后人工触发。
 
-### 17.5 盘点（2026-09-24，dry-run，未执行删除）
+### 17.5 盘点（2026-09-24，已执行 6 个 run 的清理）
 
 按 17.1 规则逐目录核对 `best saved`、`last`、`latest.pth` 指向，并扫描 `configs/`、`tools/`、`docs/`
 里对 `*.pth` 的显式引用（下游 `load_from` / `resume_from`、诊断脚本 `--checkpoint`、文档固定选点）。
-下表是纯 dry-run 结果，**本次未删除任何文件**；后续人工确认后再执行。
+下表第 17.5.1 小节是 dry-run 结果；其中 6 个 run 经确认后已于 2026-09-24 执行删除（见 17.5.2），
+其余目录仍未删除，留待后续人工确认。
 
 排除项：
 
@@ -1342,18 +1343,18 @@ epoch 区间不完全一致，因此只适合同配方横向参考，不能替�
 | `run10_headv2_multiseed/seed_2/epoch_14.pth` | `TJ4D-R4Det_ped_centerhead_stage1_3x2x2_12e_seed2.py` |
 | `ped_centerhead_stage1_3x2x2_12e_seed0/epoch_7.pth` | `..._stage2_dim_...py`、`..._highres_centerhead_3x2x2_3e_raw.py`、`..._6e_identity_lr1e-4.py`、`..._gradfix_3x2x2_3e_seed0.py` |
 | `fgfull_N4_2x4_24e_seed0/epoch_16.pth` | `tools/diagnose_temporal_shortcut.py` |
-| `fgfull_N4_2x4_24e_seed0/epoch_2.pth` | 文档第 47 节的断点续训固定记录（仅叙述引用，可按需释放） |
+| `fgfull_N4_2x4_24e_seed0/epoch_2.pth` | 文档第 47 节的断点续训固定记录（仅叙述引用，已于 17.5.2 释放） |
 
-可删除候选（202 个文件，合计 99.2 GB）：
+#### 17.5.1 可删除候选（dry-run，202 个文件，合计 99.2 GB）
 
-| run | 现有 | 保留 | 删除数 | 删除 epoch | 可释放 |
-|---|---:|---|---:|---|---:|
-| `run10_headv2_multiseed/seed_2` | 24 | ep14(best+依赖), ep24(last) | 22 | 1-13, 15-23 | 11.8 GB |
-| `fgfull_N4_2x4_24e_seed0` | 12 | ep2(文档), ep16(best+依赖), ep24(last) | 9 | 4,6,8,10,12,14,18,20,22 | 7.1 GB |
-| `cyccls_branch_N4_2x4_24e_seed0` | 15 | ep12(best), ep24(last) | 13 | 10,11,13-23 | 7.1 GB |
-| `fgfull_N3_h128_2x4_24e_seed0` | 10 | ep14(best), ep20(last) | 8 | 2,4,6,8,10,12,16,18 | 6.3 GB |
-| `fgfull_N4_no2d_igdr_2x4_24e_seed0` | 11 | ep14(best), ep22(last) | 9 | 2,4,6,8,10,12,16,18,20 | 5.8 GB |
-| `run10_headv2_multiseed/seed_0` | 12 | ep16(best+依赖), ep24(last) | 10 | 2,4,6,8,10,12,14,18,20,22 | 5.3 GB |
+| run | 现有 | 保留 | 删除数 | 删除 epoch | 可释放 | 状态 |
+|---|---:|---|---:|---|---:|---|
+| `run10_headv2_multiseed/seed_2` | 24 | ep14(best+依赖), ep24(last) | 22 | 1-13, 15-23 | 11.8 GB | **已执行** |
+| `fgfull_N4_2x4_24e_seed0` | 12 | ep2(文档), ep16(best+依赖), ep24(last) | 9 | 4,6,8,10,12,14,18,20,22 | 7.1 GB | **已执行**（含 ep2） |
+| `cyccls_branch_N4_2x4_24e_seed0` | 15 | ep12(best), ep24(last) | 13 | 10,11,13-23 | 7.1 GB | **已执行** |
+| `fgfull_N3_h128_2x4_24e_seed0` | 10 | ep14(best), ep20(last) | 8 | 2,4,6,8,10,12,16,18 | 6.3 GB | **已执行** |
+| `fgfull_N4_no2d_igdr_2x4_24e_seed0` | 11 | ep14(best), ep22(last) | 9 | 2,4,6,8,10,12,16,18,20 | 5.8 GB | **已执行** |
+| `run10_headv2_multiseed/seed_0` | 12 | ep16(best+依赖), ep24(last) | 10 | 2,4,6,8,10,12,14,18,20,22 | 5.3 GB | **已执行** |
 | `fgfull_N4_no2d_igdr_2x4_24e_seed1` | 10 | ep16(best), ep20(last) | 8 | 2,4,6,8,10,12,14,18 | 5.1 GB |
 | `crossmodal_fusion_N4_2x4_24e_seed0` | 10 | ep16(best+last) | 9 | 7-15 | 4.8 GB |
 | `run10_headv2_multiseed/seed_1` | 12 | ep12(best), ep14(依赖), ep24(last) | 9 | 2,4,6,8,10,16,18,20,22 | 4.8 GB |
@@ -1373,6 +1374,39 @@ epoch 区间不完全一致，因此只适合同配方横向参考，不能替�
 | `ped_highres_centerhead_gradfix_3x2x2_3e_seed0` | 3 | ep3(best+last) | 2 | 1,2 | 0.4 GB |
 | `ped_highres_centerhead_3x2x2_3e_seed0_raw` | 3 | ep2(best), ep3(last) | 1 | 1 | 0.2 GB |
 | `ped_centerhead_stage2_delta_ioufix_3x2x2_3e_seed0` | 3 | ep1(best), ep3(last) | 1 | 2 | 0.2 GB |
+
+#### 17.5.2 已执行删除（2026-09-24，6 个 run）
+
+按 17.1 规则保留 `best saved` + `last`，删除中间 epoch。best 分期**由日志逐 epoch 复算两遍**
+（`tools/summarize_run.py` 与独立 raw-line 解析，并用四类构成项重算 `Overall_3D_moderate` 交叉验证），
+确认每项 top-1 后再删；`latest.pth` 指向的 last 权重均保留。
+
+| run | 保留 best saved | 保留 last | 删除 | 释放 |
+|---|---|---|---|---|
+| `run10_headv2_multiseed/seed_2` | **ep14 = 40.88** | ep24 = 37.91 | 22 | 11.76 GB |
+| `fgfull_N4_2x4_24e_seed0` | **ep16 = 40.69** | ep24 = 38.54 | 10 | 7.93 GB |
+| `cyccls_branch_N4_2x4_24e_seed0` | **ep12 = 40.64** | ep24 = 38.38 | 13 | 7.06 GB |
+| `fgfull_N3_h128_2x4_24e_seed0` | **ep14 = 39.38** | ep20 = 36.38 | 8 | 6.34 GB |
+| `fgfull_N4_no2d_igdr_2x4_24e_seed0` | **ep14 = 40.39** | ep22 = 38.71 | 9 | 5.76 GB |
+| `run10_headv2_multiseed/seed_0` | **ep16 = 39.88** | ep24 = 37.71 | 10 | 5.35 GB |
+
+合计删除 72 个文件，释放 44.19 GB；`/data` 可用空间 48 GB -> 92 GB。
+
+best 判定易错点及本次核对结果：
+
+- `fgfull_N3_h128_2x4_24e_seed0`：全轮峰值 40.28 @ ep9 **没有权重**，best saved 是 **ep14 39.38**；
+  ep16 的 39.36 只差 0.02，已用两遍独立复算确认 ep14 胜出，未误留。
+- `fgfull_N4_2x4_24e_seed0`：ep10 的 40.27 高于 last，但仍低于 ep16 的 40.69，故 best 取 ep16。
+- 上述 run 的日志均无同 epoch 重复 val 记录（无重启双计），无需做 last-record-per-epoch 去重歧义。
+- `fgfull_N4_2x4_24e_seed0/epoch_2.pth` 本次一并删除。它只出现在第 47 节的断点续训历史叙述里，
+  不存在于任何 config 的 `load_from` / `resume_from`，删除后无代码依赖受影响。
+
+删除后复验：
+
+- 6 个目录均只剩 2 个 `.pth`，`latest.pth` 全部解析正常，无悬挂链接。
+- 全仓库 `latest.pth` 悬挂检查通过（0 个）。
+- 硬依赖复查：`run10_headv2_multiseed/seed_{0,1,2}` 被引用的 ep16/ep14/ep14、
+  `ped_centerhead_stage1_3x2x2_12e_seed0/epoch_7.pth`、`fgfull_N4_2x4_24e_seed0/epoch_16.pth` 均仍在位。
 
 说明：
 
