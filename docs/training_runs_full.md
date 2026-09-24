@@ -1321,6 +1321,67 @@ epoch 区间不完全一致，因此只适合同配方横向参考，不能替�
 - 用 `python3 tools/summarize_run.py <work_dir> --tail 5` 再核一遍 best/last。
 - 本次清理未执行删除，因为实际候选删除文件已为 0；后续清理由脚本 dry-run 后人工触发。
 
+### 17.5 盘点（2026-09-24，dry-run，未执行删除）
+
+按 17.1 规则逐目录核对 `best saved`、`last`、`latest.pth` 指向，并扫描 `configs/`、`tools/`、`docs/`
+里对 `*.pth` 的显式引用（下游 `load_from` / `resume_from`、诊断脚本 `--checkpoint`、文档固定选点）。
+下表是纯 dry-run 结果，**本次未删除任何文件**；后续人工确认后再执行。
+
+排除项：
+
+- `fgfull_N4_no2d_igdr_2x4_24e_seed2`：seed2 仍在运行（GPU 5/6/7），整个目录不在清理范围。
+- `checkpoints/pretrained_tj4d.pth`：所有 pretrained 训练的 `load_from` 输入。
+- `epoch_avg_12_14_16.pth`、`iter_100.pth`、`latest.pth` 符号链接：不在 `epoch_<N>.pth` 清理范围内。
+
+依赖保护：以下中间 epoch 不是所在 run 的 best saved，但被仓库显式引用，必须保留。
+
+| 被引用的文件 | 引用方 |
+|---|---|
+| `run10_headv2_multiseed/seed_0/epoch_16.pth` | `TJ4D-R4Det_ped_centerhead_stage1_3x2x2_12e.py`、`tools/diagnose_z_utilization.py` |
+| `run10_headv2_multiseed/seed_1/epoch_14.pth` | `TJ4D-R4Det_ped_centerhead_stage1_3x2x2_12e_seed1.py`、`..._seed1_restore_ep15.py` |
+| `run10_headv2_multiseed/seed_2/epoch_14.pth` | `TJ4D-R4Det_ped_centerhead_stage1_3x2x2_12e_seed2.py` |
+| `ped_centerhead_stage1_3x2x2_12e_seed0/epoch_7.pth` | `..._stage2_dim_...py`、`..._highres_centerhead_3x2x2_3e_raw.py`、`..._6e_identity_lr1e-4.py`、`..._gradfix_3x2x2_3e_seed0.py` |
+| `fgfull_N4_2x4_24e_seed0/epoch_16.pth` | `tools/diagnose_temporal_shortcut.py` |
+| `fgfull_N4_2x4_24e_seed0/epoch_2.pth` | 文档第 47 节的断点续训固定记录（仅叙述引用，可按需释放） |
+
+可删除候选（202 个文件，合计 99.2 GB）：
+
+| run | 现有 | 保留 | 删除数 | 删除 epoch | 可释放 |
+|---|---:|---|---:|---|---:|
+| `run10_headv2_multiseed/seed_2` | 24 | ep14(best+依赖), ep24(last) | 22 | 1-13, 15-23 | 11.8 GB |
+| `fgfull_N4_2x4_24e_seed0` | 12 | ep2(文档), ep16(best+依赖), ep24(last) | 9 | 4,6,8,10,12,14,18,20,22 | 7.1 GB |
+| `cyccls_branch_N4_2x4_24e_seed0` | 15 | ep12(best), ep24(last) | 13 | 10,11,13-23 | 7.1 GB |
+| `fgfull_N3_h128_2x4_24e_seed0` | 10 | ep14(best), ep20(last) | 8 | 2,4,6,8,10,12,16,18 | 6.3 GB |
+| `fgfull_N4_no2d_igdr_2x4_24e_seed0` | 11 | ep14(best), ep22(last) | 9 | 2,4,6,8,10,12,16,18,20 | 5.8 GB |
+| `run10_headv2_multiseed/seed_0` | 12 | ep16(best+依赖), ep24(last) | 10 | 2,4,6,8,10,12,14,18,20,22 | 5.3 GB |
+| `fgfull_N4_no2d_igdr_2x4_24e_seed1` | 10 | ep16(best), ep20(last) | 8 | 2,4,6,8,10,12,14,18 | 5.1 GB |
+| `crossmodal_fusion_N4_2x4_24e_seed0` | 10 | ep16(best+last) | 9 | 7-15 | 4.8 GB |
+| `run10_headv2_multiseed/seed_1` | 12 | ep12(best), ep14(依赖), ep24(last) | 9 | 2,4,6,8,10,16,18,20,22 | 4.8 GB |
+| `cyccls_branch_N4_2x4_24e_multiseed/seed_2` | 10 | ep14(best), ep18(last) | 8 | 9-13,15-17 | 4.3 GB |
+| `cyccls_branch_N4_2x4_24e_multiseed/seed_1` | 10 | ep15(best), ep22(last) | 8 | 13,14,16-21 | 4.3 GB |
+| `shared_stem_N4_2x4_24e_seed0` | 10 | ep14(best), ep16(last) | 8 | 7-13,15 | 4.3 GB |
+| `fgfull_N4_temporal_baseline_seed0` | 10 | ep18(best), ep20(last) | 8 | 2,4,6,8,10,12,14,16 | 4.3 GB |
+| `rssm_kl0_N4_2x4_24e_seed0` | 10 | ep22(best), ep24(last) | 8 | 15-21,23 | 4.3 GB |
+| `rssm_kl0_N4_2x4_24e/seed_2` | 10 | ep17(best), ep24(last) | 8 | 15,16,18-23 | 4.3 GB |
+| `rssm_kl0_N4_2x4_24e/seed_1` | 10 | ep20(best), ep24(last) | 8 | 15-19,21-23 | 4.3 GB |
+| `no_temporal_N4_2x4_24e_seed0` | 10 | ep20(best), ep24(last) | 8 | 15-19,21-23 | 3.3 GB |
+| `ped_centerhead_stage1_3x2x2_12e_seed2` | 12 | ep1(best), ep12(last) | 10 | 2-11 | 1.8 GB |
+| `ped_centerhead_stage1_3x2x2_12e_seed0` | 12 | ep7(best+依赖), ep12(last) | 10 | 1-6,8-11 | 1.8 GB |
+| `ped_centerhead_stage1_3x2x2_12e_seed1` | 10 | ep6(best), ep10(last) | 8 | 1-5,7-9 | 1.5 GB |
+| `ped_highres_centerhead_gradfix_3x2x2_6e_seed0` | 6 | ep6(best+last) | 5 | 1-5 | 1.0 GB |
+| `ped_highres_centerhead_identity_3x2x2_6e_lr1e-4_seed0` | 6 | ep5(best), ep6(last) | 4 | 1-4 | 0.8 GB |
+| `ped_highres_centerhead_gradfix_3x2x2_3e_seed0` | 3 | ep3(best+last) | 2 | 1,2 | 0.4 GB |
+| `ped_highres_centerhead_3x2x2_3e_seed0_raw` | 3 | ep2(best), ep3(last) | 1 | 1 | 0.2 GB |
+| `ped_centerhead_stage2_delta_ioufix_3x2x2_3e_seed0` | 3 | ep1(best), ep3(last) | 1 | 2 | 0.2 GB |
+
+说明：
+
+- 上表 `best` 一律指 `best saved`（实际有权重的 val 最高点），不是全轮峰值；全轮峰值另见各 run 正文，可能没有权重。
+- `last` 指 val 曲线最后一个 epoch。部分 run 的 `latest.pth` 指向的 checkpoint 序号大于最后一个 val epoch（例如 `fgfull_N3_h128` 的 ep20 对 val ep21、`fgfull_N4_no2d_igdr_2x4_24e_seed1` 的 ep20 对 val ep21、`ped_centerhead_stage1_3x2x2_12e_seed1` 的 ep10 对 val ep9、`cyccls_branch_..._multiseed/seed_2` 的 ep18 对 val ep17），按 17.1 规则保留磁盘上的 last 权重。
+- 已合规、无需处理的目录（仅 best saved + last）：`deterministic_latent_N4_2x4_24e_seed0`、`ped_centerhead_stage2_delta_3x2x2_3e_seed0`、`ped_centerhead_stage2_dim_3x2x2_6e_seed0`、`ped_highres_centerhead_3x2x2_3e_prior_smoke`、`ped_highres_centerhead_3x2x2_3e_seed0_smoke`、`ped_refine_N4_2x4_24e_seed0`、`pedrot4_N4_2x4_24e_seed0`、`posterior_only_learnable_std_N4_2x4_24e_seed0`、`rssm_N2_2x4_24e_pretrained_v2_head_bptt`、`rssm_N4_2x4_24e_pretrained_v2_head`、`rssm_N4_2x4_24e_pretrained_v2_head_bptt`、`rssm_N4_2x4_24e_pretrained_v2_head_dynmask`、`rssm_N4_2x4_24e_pretrained_v2_head_truck`、`rssm_N4_2x4_24e_pretrained_v2_head_truck_car2`、`rssm_N4_2x4_30e`、`rssm_N4_2x4_30e_lr2e4`、`rssm_N4_2x4_30e_pretrained`、`rssm_N4_fixednoise_posterior_seed0`、`seed1_ep15_restore`、`truck_tower_N4_2x4_24e_seed0`。
+- 非 checkpoint 的可回收项（未计入上表）：`diag_dumps/` 约 545 MB、各 run `figures_path/` 合计约 3.0 GB。这些是诊断/可视化中间产物，需按项目需要单独确认。
+
+
 ---
 
 ## 18. 论文最终报告口径（定稿）
