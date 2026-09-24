@@ -374,6 +374,67 @@ resume_from:     None -> v1 latest.pth   (续训 v1)
 > Auxiliary modules from pretraining (proposal_layer_former/latter, rangeview_foreground) not in detection forward path.
 > seq_len=4, hidden_dim=128, samples_per_gpu=4, lr=1.5e-4, CosineAnnealing, 30 epochs, grad_accum=2.
 
+### 9.0 N=4 30e 无 pretrain 对照组（Run 9 的对照基线）
+
+> 第 9.3 节与第 16 节都引用了这条 run 的数值（BEST `34.71`、last-5 `33.67`），但此前没有独立
+> 章节。本次审计按磁盘日志补账，它是正式训练而非 smoke。
+
+- 工作目录：`/data/lurui/work_dirs/rssm_N4_2x4_30e`。
+- 配置：`configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_30e.py`
+  （`load_from=None`，其余 30e / seq_len=4 / hidden_dim=128 / samples_per_gpu=4 /
+  lr=1.5e-4 / CosineAnnealing / grad_accum=2 与 Run 9 相同）。
+- 2026-08-11 02:49 UTC 有一次启动后立即中止（`20260811_024942.log` 只有环境与配置，无训练 iter）；
+  实际训练从 02:52:01 UTC 开始（`20260811_025201.log(.json)`），ep30 val 于 20:54:21 UTC 写完。
+- 30 个 epoch 全部有 val 行；`checkpoint_config=dict(interval=2)`，磁盘有 `epoch_22.pth`、
+  `epoch_30.pth`，`latest.pth -> epoch_30.pth`；BEST ep22 的权重已落盘。
+
+完整 val 曲线（`pts_bbox/KITTI/*`）：
+
+| epoch | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 5.4317 | 8.3427 | 10.2460 | 10.7706 | 0.1991 | 0.5111 |
+| 2 | 12.8657 | 16.7716 | 21.1037 | 25.2004 | 3.1672 | 1.9914 |
+| 3 | 15.9292 | 20.9450 | 20.6740 | 26.6351 | 8.7386 | 7.6692 |
+| 4 | 20.6816 | 26.1808 | 24.4629 | 42.7281 | 11.0507 | 4.4847 |
+| 5 | 21.0176 | 28.0571 | 19.0098 | 35.6480 | 16.3832 | 13.0295 |
+| 6 | 26.8640 | 33.0792 | 29.0752 | 39.8438 | 18.5251 | 20.0118 |
+| 7 | 29.0485 | 35.7267 | 29.5329 | 45.2979 | 20.6814 | 20.6819 |
+| 8 | 27.7829 | 35.0507 | 25.6262 | 47.3229 | 22.6327 | 15.5500 |
+| 9 | 31.1969 | 38.8825 | 33.1912 | 47.7149 | 23.3121 | 20.5693 |
+| 10 | 31.9248 | 39.4064 | 33.7537 | 45.0553 | 24.0706 | 24.8195 |
+| 11 | 29.4525 | 36.1264 | 33.9373 | 37.7132 | 21.5164 | 24.6429 |
+| 12 | 30.4216 | 36.6946 | 27.4097 | 44.0986 | 25.6003 | 24.5778 |
+| 13 | 31.1247 | 39.3288 | 31.1769 | 44.9317 | 22.2686 | 26.1217 |
+| 14 | 31.9362 | 39.3138 | 29.8750 | 42.4488 | 26.4193 | 29.0018 |
+| 15 | 32.4261 | 41.6730 | 30.7512 | 45.1131 | 27.3925 | 26.4475 |
+| 16 | 33.3552 | 41.9668 | 34.1614 | 45.5273 | 26.0722 | 27.6596 |
+| 17 | 30.7963 | 39.3221 | 31.1591 | 41.5369 | 24.0539 | 26.4351 |
+| 18 | 32.1473 | 41.1823 | 34.2524 | 38.9210 | 28.1125 | 27.3033 |
+| 19 | 32.3735 | 39.9132 | 32.3466 | 41.8781 | 26.5473 | 28.7219 |
+| 20 | 34.3669 | 43.4006 | 34.2292 | 46.8998 | 27.3312 | 29.0070 |
+| 21 | 33.5068 | 41.9425 | 33.0988 | 44.4770 | 27.6070 | 28.8443 |
+| 22 | **34.7083** | 43.8497 | 36.3351 | 46.2762 | 27.4171 | 28.8048 |
+| 23 | 34.3833 | 43.8906 | 31.9399 | 46.2110 | 30.7037 | 28.6788 |
+| 24 | 33.0742 | 42.1690 | 36.0561 | 44.6847 | 25.9899 | 25.5663 |
+| 25 | 34.3330 | 43.2907 | 31.4963 | 47.3707 | 26.9394 | 31.5259 |
+| 26 | 33.8185 | 43.7186 | 32.1002 | 47.4625 | 28.2404 | 27.4708 |
+| 27 | 33.9518 | 43.5700 | 30.9198 | 47.8426 | 27.6156 | 29.4290 |
+| 28 | 33.4243 | 42.4675 | 33.5324 | 44.7486 | 27.2772 | 28.1392 |
+| 29 | 33.1884 | 43.0669 | 31.3980 | 45.1728 | 28.1170 | 28.0657 |
+| 30 | 33.9915 | 43.0370 | 34.7521 | 46.2863 | 27.3774 | 27.5504 |
+
+BEST 与平台：
+
+| 口径 | epoch | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| BEST | 22 | **34.7083** | 43.8497 | 36.3351 | 46.2762 | 27.4171 | 28.8048 |
+| LAST | 30 | 33.9915 | 43.0370 | 34.7521 | 46.2863 | 27.3774 | 27.5504 |
+
+- last-5（ep26-30）等权 Overall 均值为 `33.6749`、频率加权为 `34.14`（与第 16 节 `33.67 / 34.14`
+  一致）。BEST ep22 的权重已落盘，可直接复评。
+- 与 Run 9（同配方 + pretrained，BEST `37.94`）相比，pretrained 权重带来 `+3.23` Overall，
+  主要集中在 Car strict（`36.34 → 48.96`）；这是第 9.3 节结论的数据来源。
+
 ### Run 9: N=4 Pretrained RSSM (seq_len=4, hdim=128, 30e)
 
 - config: configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_30e_pretrained.py
@@ -468,6 +529,57 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 3. 30 epochs too long: peaked ep19, overfitting ep20-30. Best checkpoint: ep19
 4. Cyclist loose -4.85: foreground supervision makes backbone features more conservative on cyclists (precision↑ recall↓). Cyclists are 21.5% of dataset (2790/5706 frames), not a rare class
 5. Pedestrian strict near zero (0.07): consistent across all runs, detection head bottleneck
+
+### 9.7 N=4 30e lr2e4 变体（negative run，未跑完）
+
+> 该 run 只在第 16 节频率加权总表里出现过一行（`N4 30e lr2e4 = 28.30 ± 1.22`），此前没有独立记录。
+> 本次审计按磁盘日志补账。**它不是正式主表 run，而是一次 lr 放大失败的负向尝试。**
+
+- 工作目录：`/data/lurui/work_dirs/rssm_N4_2x4_30e_lr2e4`。
+- 配置快照：同目录下的
+  `TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_30e_lr2e4.py`（仓库内没有提交对应 config）。
+- 与 Run 9（`N4_2x4_30e_pretrained`）的差异：`lr` 从 `1.5e-4` 放大到 `2e-4`，
+  并把 `load_from` 置为 `None`（不加载 pretrained 权重）；其余 30e / samples_per_gpu=4 /
+  CosineAnnealing / checkpoint_interval=2 与 Run 9 相同。
+- 2026-08-12 01:30 启动，日志 `20260812_013046.log(.json)`；`checkpoint_config=dict(interval=2)`，
+  磁盘只有 `epoch_12.pth` / `epoch_14.pth`，`latest.pth -> epoch_14.pth`。
+- 训练在 ep15 iter 100/714 处中断（最后一条日志 2026-08-12 09:59:27 UTC），ep15 没有 val 行；
+  属于**未跑完的负向 run**，不能与完整 30e run 直接比较。
+
+完整 val 曲线（`pts_bbox/KITTI/*`，val 写到 ep14）：
+
+| epoch | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 5.0308 | 6.4537 | 9.1358 | 7.8443 | 2.6283 | 0.5147 |
+| 2 | 12.2053 | 15.5320 | 15.6949 | 24.0696 | 3.4445 | 5.6123 |
+| 3 | 14.4329 | 18.3290 | 17.1589 | 35.8316 | 2.4341 | 2.3071 |
+| 4 | 18.5879 | 24.5679 | 19.5221 | 40.0354 | 6.0661 | 8.7280 |
+| 5 | 23.6179 | 29.7422 | 21.7181 | 43.5485 | 18.1949 | 11.0100 |
+| 6 | 26.8642 | 33.9331 | 25.5705 | 45.8394 | 18.4087 | 17.6384 |
+| 7 | 28.5554 | 36.2970 | 25.0540 | 46.1537 | 24.8047 | 18.2094 |
+| 8 | 28.8649 | 35.5137 | 25.9161 | 48.3771 | 21.9073 | 19.2590 |
+| 9 | 27.5870 | 34.2866 | 30.2644 | 41.7532 | 25.9336 | 12.3969 |
+| 10 | 28.8201 | 35.6477 | 34.5154 | 39.7876 | 23.6978 | 17.2796 |
+| 11 | 27.0096 | 36.6799 | 29.7362 | 46.3569 | 14.3875 | 17.5577 |
+| 12 | 30.0844 | 38.8798 | 31.0891 | 43.4304 | 25.2556 | 20.5624 |
+| 13 | 28.2174 | 37.2982 | 31.6215 | 38.8671 | 22.0208 | 20.3604 |
+| 14 | 27.3748 | 37.1936 | 31.9762 | 37.9077 | 23.2034 | 16.4117 |
+
+BEST 与落盘权重：
+
+| 口径 | epoch | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| BEST val | 12 | 30.0844 | 38.8798 | 31.0891 | 43.4304 | 25.2556 | 20.5624 |
+| LAST val | 14 | 27.3748 | 37.1936 | 31.9762 | 37.9077 | 23.2034 | 16.4117 |
+| last disk | 14 | 27.3748 | 37.1936 | 31.9762 | 37.9077 | 23.2034 | 16.4117 |
+
+读数：
+
+- 该 run 的 BEST `30.0844` 比 Run 9（pretrained，30e）的 BEST `37.94` 低 `7.86`；两者最先分叉的
+  不是 pretrained 权重本身就是 lr 与 pretrained 同时改变，所以只能作为「去掉 pretrained 且放大 lr
+  的负向尝试」记录，不能当作纯 lr 消融。
+- 后段 ep10-14 在 27-30 平台震荡，没有追赶 Run 9 的 pretrained 曲线；ep15 未跑完，ep15-30 未知。
+- 记录目的：避免后续再看到 `28.30 ± 1.22`（第 16 节 last-5 表）时误以为它是一条可比主 run。
 6. RSSM stochastic states contribute minimally (clamp 99.9%): posterior collapsed to prior, model relies on deterministic path. Normal for free_nats=1.0, not hurting detection
 7. Detection head losses decreasing: bbox 1.35->0.14, cls 1.05->0.08
 
@@ -2861,6 +2973,7 @@ Truck strict 30.4303、Cyclist loose 50.4709，与训练日志一致，0 差异�
 ### 35.2 训练配置
 
 - config：`TJ4D-R4Det_ped_centerhead_stage2_dim_3x2x2_6e.py`
+- work_dir：`/data/lurui/work_dirs/ped_centerhead_stage2_dim_3x2x2_6e_seed0`
 - load_from = stage1 `epoch_7.pth`；`ped_stage2_dim=True`
 - seed 0，GPU 5/6/7，lr 2e-4，samples_per_gpu 2，cumulative_iters 2（有效 batch 12），max_epochs 6。
 
