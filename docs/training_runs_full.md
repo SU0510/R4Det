@@ -6006,4 +6006,13 @@ seed1 停止后，GPU 5/6/7 已释放并立即接上 seed2：
 - 为与 seed1 保持对称，seed2 也按同一判据在 ep21 val 后截断（ep22 不落盘）；截断动作
   **尚未自动执行**，需要在 ep21 val 写出后人工 kill（或另加 watcher）。主比较窗口仍为
   ep12-16 与 ep18-20；
+- 2026-09-24 13:14 UTC 起挂 `tools/epoch_report_watch.py`（PID 1138719，`setsid` 常驻）：
+  每读完一个新 epoch 的 val 记录，就用 `codex queue --thread` 把该 epoch 的
+  Overall 3D moderate（主指标）、easy/hard/BEV、四类构成项、与 seed0/seed1 同 epoch 的
+  横向数值、以及 ep12-16 窗口均值（窗口未满时标注已出点数）回报到当前 Codex 会话；
+  状态文件 `/tmp/epochwatch/seed2.state` 记录 `last_reported`，重启不会重复播报。
+  该 watcher 只读日志、不写 work_dir，也不参与截断判定；`--stop-epoch 21` 只让 watcher
+  在播报 ep21 后自行退出并提示可 kill，**不会自动 kill 训练进程**；
+- 截至 2026-09-24 13:14 UTC，seed2 val 已写到 ep9（Overall 3D moderate `41.7916`），
+  ep10 训练中；磁盘已落盘 ep2/4/6/8；
 - 跑完后在本节追加 seed2 结果、三 seed 均值/标准差，并与 temporal baseline 做同窗口对照。
