@@ -522,6 +522,20 @@ class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
         self.assertEqual(self.fusion.prior_future.out_channels, 1)
         self.assertEqual(self.fusion.posterior_future.out_channels, 1)
 
+    def test_future_heads_normalize_latent_input(self):
+        """Future loss should constrain direction, not latent magnitude."""
+        feat1 = torch.randn(1, 256, 8, 8)
+        feat2 = torch.randn(1, 256, 8, 8) * 100.0
+
+        self.fusion.train()
+        self.fusion.reset_state()
+        with torch.no_grad():
+            self.fusion(feat1)
+        self.fusion.future_state = feat2.detach()
+        with torch.no_grad():
+            _, _, _, _, _, stats = self.fusion(feat2)
+            self.assertLess(stats['stat_future_loss'].item(), 10.0)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -35,7 +35,7 @@ custom_hooks = [
         type='KLScaleSchedulerHook',
         start_epoch=0,
         end_epoch=12,
-        start_value=0.0,
+        start_value=0.01,
         end_value=1.0,
     ),
 ]

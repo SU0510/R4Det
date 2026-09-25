@@ -1276,8 +1276,10 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             target_mean = target.mean(dim=(2, 3), keepdim=True)
             target_std = target.std(dim=(2, 3), keepdim=True).clamp_min(1e-4)
             target = (target - target_mean) / target_std
-            posterior_future_pred = self.posterior_future(z_t)
-            prior_future_pred = self.prior_future(mu_p)
+            z_t_future_input = F.normalize(z_t, dim=1)
+            mu_p_future_input = F.normalize(mu_p, dim=1)
+            posterior_future_pred = self.posterior_future(z_t_future_input)
+            prior_future_pred = self.prior_future(mu_p_future_input)
             future_loss = (
                 F.mse_loss(posterior_future_pred, target)
                 + F.mse_loss(prior_future_pred, target)
