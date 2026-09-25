@@ -503,6 +503,20 @@ class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
         self.assertIn('stat_future_loss', stats_with_target)
         self.assertNotIn('stat_future_loss', stats_without_target)
 
+    def test_future_target_is_spatially_pooled_and_normalized(self):
+        """Raw BEV scale must not dominate the prior/KL objective."""
+        feat1 = torch.randn(2, 256, 8, 8)
+        feat2 = torch.randn(2, 256, 8, 8) * 100.0
+
+        self.fusion.train()
+        self.fusion.reset_state()
+        self.fusion(feat1)
+        self.fusion.future_state = feat2.detach()
+        _, _, _, _, _, stats = self.fusion(feat2)
+
+        self.assertEqual(stats['stat_future_loss'].ndim, 0)
+        self.assertLess(stats['stat_future_loss'].item(), 1e4)
+
 
 if __name__ == '__main__':
     unittest.main()

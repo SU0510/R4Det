@@ -1123,6 +1123,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         else:
             self.latent_pool_layer = nn.AdaptiveAvgPool2d(1)
         self.global_pool = nn.AdaptiveAvgPool2d(1)
+        if self.use_future_consistency:
+            self.future_target_pool = nn.AdaptiveAvgPool2d(self.latent_size)
 
         self.h_state = None
         self.z_state = None
@@ -1271,19 +1273,12 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             target = self.future_state.detach()
             if target.shape[1] != self.predict_future_channels:
                 target = target[:, :self.predict_future_channels]
+            target = self.future_target_pool(target)
+            target_mean = target.mean(dim=(2, 3), keepdim=True)
+            target_std = target.std(dim=(2, 3), keepdim=True).clamp_min(1e-4)
+            target = (target - target_mean) / target_std
             posterior_future_pred = self.posterior_future(z_t)
             prior_future_pred = self.prior_future(mu_p)
-            future_size = target.shape[-2:]
-            posterior_future_pred = F.interpolate(
-                posterior_future_pred,
-                size=future_size,
-                mode='bilinear',
-                align_corners=False)
-            prior_future_pred = F.interpolate(
-                prior_future_pred,
-                size=future_size,
-                mode='bilinear',
-                align_corners=False)
             future_loss = (
                 F.mse_loss(posterior_future_pred, target)
                 + F.mse_loss(prior_future_pred, target)
