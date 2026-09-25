@@ -896,7 +896,7 @@ class R4Det(MVXFasterRCNN):
             if feat_or_dict == 0:
                 # Prev frame: run RSSM to update internal h/z state
                 bev_feats_cache = bev_feats
-                bev_feats, rssm_recon, rssm_kl, _, _, rssm_stats = \
+                bev_feats, rssm_recon, rssm_kl, _, rssm_latent_loss, rssm_stats = \
                     self.temporal_fusion(
                         bev_feats, use_posterior=True,
                         deterministic=rssm_deterministic,
@@ -908,7 +908,7 @@ class R4Det(MVXFasterRCNN):
             else:
                 # Curr frame: full RSSM forward with gradients + losses
                 bev_feats_cache = bev_feats
-                bev_feats, rssm_recon, rssm_kl, _, _, rssm_stats = \
+                bev_feats, rssm_recon, rssm_kl, _, rssm_latent_loss, rssm_stats = \
                     self.temporal_fusion(
                         bev_feats, use_posterior=True,
                         deterministic=rssm_deterministic)
@@ -972,6 +972,7 @@ class R4Det(MVXFasterRCNN):
                     precise_depth=precise_depth,
                     rssm_kl=rssm_kl,
                     rssm_recon_loss=rssm_recon_loss,
+                    rssm_latent_loss=rssm_latent_loss,
                     rssm_stats=rssm_stats)
 
     def voxelpainting_depth_aware(self, context, pv_logits, depth_logits, points, lidar2img, temperature=1.0):
@@ -1438,12 +1439,17 @@ class R4Det(MVXFasterRCNN):
         precise_depth = feature_dict['precise_depth']
         rssm_kl = feature_dict.get('rssm_kl')
         rssm_recon_loss = feature_dict.get('rssm_recon_loss')
+        rssm_latent_loss = feature_dict.get('rssm_latent_loss')
         rssm_stats = feature_dict.get('rssm_stats')
 
         # compute all losses
         losses = dict()
 
-        if self.temporal_fusion is not None and rssm_recon_loss is not None:
+        if self.temporal_fusion is not None and rssm_latent_loss is not None:
+            losses['loss_rssm_latent'] = rssm_latent_loss
+            if rssm_stats is not None:
+                losses.update(rssm_stats)
+        elif self.temporal_fusion is not None and rssm_recon_loss is not None:
             if history_rssm_losses:
                 rssm_recon_loss = (
                     sum(loss[0] for loss in history_rssm_losses) + rssm_recon_loss

@@ -1220,7 +1220,7 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             stat_posterior_std=torch.exp(logstd_q).mean().detach(),
             stat_prior_std=torch.exp(logstd_p).mean().detach(),
         )
-        return kl_effective.mean(), stats
+        return kl_effective.mean() / (self.latent_dim * self.latent_size[0] * self.latent_size[1]), stats
 
     @auto_fp16(apply_to=['feat', 'velocity'])
     def forward(self, feat, velocity=None, use_posterior=True,

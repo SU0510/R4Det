@@ -18,7 +18,7 @@ model = dict(
         hidden_dim=128,
         action_dim=0,
         kl_scale=1.0,
-        free_nats=0.0,
+        free_nats=0.1,
         min_std=0.1,
         init_std=0.2,
         latent_pool='adaptive',
@@ -29,3 +29,13 @@ model = dict(
         gate_init_bias=-1.0,
     ),
 )
+
+custom_hooks = [
+    dict(
+        type='KLScaleSchedulerHook',
+        start_epoch=0,
+        end_epoch=12,
+        start_value=0.0,
+        end_value=1.0,
+    ),
+]
