@@ -400,7 +400,8 @@ resume_from:     None -> v1 latest.pth   (续训 v1)
 > Branch: Nframerssm. Based on Run 7 config, only added load_from=pretrained_tj4d.pth.
 > Pretrained weights from TJ4D author (HuggingFace: Hoeyy/R4Det), covers image backbone, radar backbone, depth net, BEV encoder.
 > Auxiliary modules from pretraining (proposal_layer_former/latter, rangeview_foreground) not in detection forward path.
-> seq_len=4, hidden_dim=128, samples_per_gpu=4, lr=1.5e-4, CosineAnnealing, 30 epochs, grad_accum=2.
+> seq_len=4, hidden_dim=128, samples_per_gpu=4, lr=1.5e-4, CosineAnnealing, 30 epochs。
+> 该 run 在 4 卡上训练，**没有梯度累积**，有效 batch 为 4×4=16。
 
 ### 9.0 N=4 30e 无 pretrain 对照组（Run 9 的对照基线）
 
@@ -410,7 +411,7 @@ resume_from:     None -> v1 latest.pth   (续训 v1)
 - 工作目录：`/data/lurui/work_dirs/rssm_N4_2x4_30e`。
 - 配置：`configs/r4det/TJ4D-R4Det_motion_align_rssm_det3d_N4_2x4_30e.py`
   （`load_from=None`，其余 30e / seq_len=4 / hidden_dim=128 / samples_per_gpu=4 /
-  lr=1.5e-4 / CosineAnnealing / grad_accum=2 与 Run 9 相同）。
+  lr=1.5e-4 / CosineAnnealing 与 Run 9 相同；同为 4 卡、无梯度累积，有效 batch 16）。
 - 2026-08-11 02:49 UTC 有一次启动后立即中止（`20260811_024942.log` 只有环境与配置，无训练 iter）；
   实际训练从 02:52:01 UTC 开始（`20260811_025201.log(.json)`），ep30 val 于 20:54:21 UTC 写完。
 - 30 个 epoch 全部有 val 行；`checkpoint_config=dict(interval=2)`，磁盘有 `epoch_22.pth`、
@@ -636,7 +637,11 @@ KL loss warms up ep1-8 then stabilizes at 1.0 (free_nats threshold). Recon loss 
 > 3. **IoU-aware quality 分支**：`use_iou_branch=True`，训练期给 L1 回归信号，推理不打分（避免与 N 帧 RSSM 前向冲突）
 > 4. ~~per-class FocalLoss alpha~~ 已回退 `alpha=0.25`（CUDA kernel 只支持 float）
 >
-> 24 epochs，samples_per_gpu=4，lr=1.5e-4（CosineAnnealing），grad_accum=2，`load_from=pretrained_tj4d.pth`，**`checkpoint_interval=2`（注意：奇数 epoch 不存）**。
+> 24 epochs，samples_per_gpu=4，lr=1.5e-4（CosineAnnealing），`load_from=pretrained_tj4d.pth`，**`checkpoint_interval=2`（注意：奇数 epoch 不存）**。
+> 该 run 在 4 卡上训练，**没有梯度累积**，有效 batch 为 4×4=16。累积 hook 在仓库其他分支
+> 早有使用（如 2026-08-19 的 N2 BPTT、08-24 的 no-temporal），但**本 config 直到
+> 2026-09-01（commit `6221e6a`）才被加上** `GradientCumulativeOptimizerHook(cumulative_iters=2)`，
+> 因此 Run 10 本身与多 seed 复现之间存在 batch 口径差异。
 
 ### Run 10: N=4 Pretrained RSSM + head-v2
 
@@ -1438,22 +1443,28 @@ best 判定易错点及本次核对结果：
 
 > 日期：2026-08-21 ~ 2026-08-24。以 Run 10 配置（N=4, hdim=128, pretrained, head-v2, 24e, lr=1.5e-4）为基础，
 > 用三个不同随机种子重跑，验证单次 Run 10 峰值 40.60（ep11，原运行未存盘）的可复现性和方差。
-> 三个 seed 配置完全相同，唯一差异是随机种子、work_dir、以及 checkpoint_interval（seed_0/seed_1=2，seed_2=1）。
-> 硬件：3 卡 GPU 5/6/7（原 Run 10 为 4 卡），有效 batch 12 vs 原 Run 10 的 16。
+> 三个 seed 之间配置完全相同，唯一差异是随机种子、work_dir、以及 checkpoint_interval
+> （seed_0/seed_1=2，seed_2=1）。这一组整体相对原 Run 10 另有 batch 口径差异，见下表。
+> 硬件：3 卡 GPU 5/6/7（原 Run 10 为 4 卡）。本组为 `samples_per_gpu=2` + `cumulative_iters=2`，
+> 有效 batch 12；原 Run 10 为 `samples_per_gpu=4` 且**没有梯度累积**，有效 batch 16。
 
 ### 19.0 实验设置
 
 | 项 | seed_0 | seed_1 | seed_2 | 原 Run 10 |
 |---|---|---|---|---|
-| config | 同 Run 10 | 同 Run 10 | 同 Run 10 | -- |
+| config | 同 Run 10 配方，但 batch 口径改为 3 卡 spg2+累积2 | 同 seed_0 | 同 seed_0 | 4 卡 spg4、无累积 |
 | work_dir | `run10_headv2_multiseed/seed_0` | `.../seed_1` | `.../seed_2` | `rssm_N4_2x4_24e_pretrained_v2_head` |
 | GPUs | 5,6,7 (3卡) | 5,6,7 (3卡) | 5,6,7 (3卡) | 4卡 |
+| samples_per_gpu | 2 | 2 | 2 | 4 |
+| cumulative_iters | 2 | 2 | 2 | 无（无累积 hook） |
 | 有效 batch | 12 | 12 | 12 | 16 |
 | checkpoint_interval | 2 | 2 | 1 | 2 |
 | load_from | pretrained_tj4d.pth | pretrained_tj4d.pth | pretrained_tj4d.pth | pretrained_tj4d.pth |
 | seed | 0 (default) | 1 | 2 | 0 (default) |
 
-seed_0 与原 Run 10 用的是同一 default seed（0），但 3 卡 vs 4 卡导致 BN 统计量 / 梯度累积不同，严格说不完全等价。
+seed_0 与原 Run 10 用的是同一 default seed（0），但两组的 batch 组成不同：多 seed 组靠 3 卡 ×
+spg 2 × 累积 2 凑出有效 batch 12，原 Run 10 是 4 卡 × spg 4、无累积凑出 16。因此卡数、
+单卡 batch 与是否累积三项都不同，BN 统计量与梯度累积路径随之变化，严格说不完全等价。
 
 ### 19.1 Overall 3D_moderate 逐 epoch 曲线
 
@@ -1567,7 +1578,9 @@ epoch 中 val 最高的点。seed_0/seed_1 的 `checkpoint_interval=2`，seed_2 
 | 全轮峰值 epoch | ep11 | ep14/15/16 | 峰值后移 3-5 epoch |
 
 - 原 Run 10 的 ep11=40.60 不是 cherry-pick：三 seed mean 40.42，std 0.51，40.60 在 1 std 以内。
-- BEST epoch 从 ep11 后移到 ep14-16，可能来自 3 卡 vs 4 卡的有效 batch 差异（12 vs 16），更小 batch 需要更多 epoch 收敛到峰值。
+- BEST epoch 从 ep11 后移到 ep14-16，方向上与「有效 batch 从 16 降到 12、需要更多 epoch 收敛」
+  一致，但两组同时变了卡数（4→3）、单卡 batch（spg 4→2）和累积设置（无→2），三者无法解耦，
+  因此这里只能记为**可疑原因**，不能断言是单变量效应。
 - seed_0/seed_2 的全轮峰值已落盘；seed_1 的 ep15 峰值因 `checkpoint_interval=2` 未落盘，
   可用 best saved 是 ep12。原 Run 10 ep11 未存的问题在本组只修复了 2/3。
 
@@ -1592,7 +1605,8 @@ epoch 中 val 最高的点。seed_0/seed_1 的 `checkpoint_interval=2`，seed_2 
 1. Run 10 head-v2 的 40+ 水平是可复现的：三 seed mean=40.42+/-0.51，原 Run 10 单次 40.60 在区间内，不是 cherry-pick。
 2. 三 seed 中最好的是 seed_2 ep14=40.88（已存）；seed_0 ep16=39.88 已存，seed_1 ep15=40.51
    **没有对应权重**，best saved 回退 ep12=39.05。
-3. 峰值稳定在 ep12-16（原 Run 10 在 ep11），3 卡 vs 4 卡的有效 batch 差异可能导致峰值后移，但不影响上限。
+3. 峰值稳定在 ep12-16（原 Run 10 在 ep11）。峰值后移与有效 batch 16→12 的方向一致，但该对比
+   混杂了卡数、单卡 batch、梯度累积三项变化，归因待单变量实验；上限水平本身不受影响。
 4. 主指标方差极小（std=0.51），适合论文报告 mean+/-std 作为确定性证据。
 5. 逐类别方差集中在 Car loose / Cyclist strict / Truck strict——这些是共享 head 正样本分配的敏感点，进一步佐证 Car-Truck 混淆是下一步要解决的根因。
 6. Pedestrian strict 约 0 在所有 seed 中一致（0.10-0.15），再次确认是 BEV 分辨率物理瓶颈。
@@ -1616,7 +1630,9 @@ epoch 中 val 最高的点。seed_0/seed_1 的 `checkpoint_interval=2`，seed_2 
 ### 20.0 实验设置
 
 - 目的：回答「时序融合模块到底贡献多少」，把当前最大因果缺口从检测头拆出来。
-- 配置：在 Run 10 head-v2 的 24e 配置上只改一项：`temporal_fusion=None`。
+- 配置：在多 seed 复现用的 24e 配方（3 卡 / `samples_per_gpu=2` + `cumulative_iters=2`，
+  有效 batch 12）上只改一项：`temporal_fusion=None`。注意对照的是第 19 节多 seed 那套，
+  **不是**原始 Run 10：原 Run 10 为 4 卡 / `samples_per_gpu=4` / 无梯度累积，有效 batch 16。
 - 保持固定不变的变量：`seq_len=4`、数据 pipeline、head-v2 检测头、`samples_per_gpu=2`、`GradientCumulativeOptimizerHook(cumulative_iters=2)`、`max_epochs=24`、`checkpoint_interval=1`、pretrained checkpoint。
 - 运行设置：`seed=0`、`--deterministic`、3 进程，物理 GPU 5/6/7。
 - 工作目录：`work_dirs/no_temporal_N4_2x4_24e_seed0`
