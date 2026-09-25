@@ -1111,9 +1111,9 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
 
         if self.use_future_consistency:
             self.prior_future = nn.Conv2d(
-                latent_dim, self.predict_future_channels, 1)
+                latent_dim, 1, 1)
             self.posterior_future = nn.Conv2d(
-                latent_dim, self.predict_future_channels, 1)
+                latent_dim, 1, 1)
         else:
             self.prior_future = None
             self.posterior_future = None
@@ -1271,8 +1271,7 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         if (self.training and self.use_future_consistency
                 and self.future_state is not None):
             target = self.future_state.detach()
-            if target.shape[1] != self.predict_future_channels:
-                target = target[:, :self.predict_future_channels]
+            target = target.square().mean(dim=1, keepdim=True).sqrt()
             target = self.future_target_pool(target)
             target_mean = target.mean(dim=(2, 3), keepdim=True)
             target_std = target.std(dim=(2, 3), keepdim=True).clamp_min(1e-4)

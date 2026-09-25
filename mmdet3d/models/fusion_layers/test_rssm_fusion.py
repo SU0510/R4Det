@@ -517,6 +517,11 @@ class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
         self.assertEqual(stats['stat_future_loss'].ndim, 0)
         self.assertLess(stats['stat_future_loss'].item(), 1e4)
 
+    def test_future_target_is_one_channel_energy_map(self):
+        """The exclusive task predicts next-frame BEV energy, not raw channels."""
+        self.assertEqual(self.fusion.prior_future.out_channels, 1)
+        self.assertEqual(self.fusion.posterior_future.out_channels, 1)
+
 
 if __name__ == '__main__':
     unittest.main()
