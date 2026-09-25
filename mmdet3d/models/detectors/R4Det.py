@@ -881,6 +881,16 @@ class R4Det(MVXFasterRCNN):
         rssm_recon_loss = None
         rssm_stats = None
         if self.temporal_fusion is not None:
+            if getattr(self.temporal_fusion, 'use_future_consistency', False):
+                if feat_or_dict == 0:
+                    # The pending target is set by the previous history frame.
+                    self.temporal_fusion.future_state = getattr(
+                        self, 'rssm_pending_future_state', None)
+                    self.rssm_pending_future_state = bev_feats.detach()
+                else:
+                    self.temporal_fusion.future_state = getattr(
+                        self, 'rssm_pending_future_state', None)
+                    self.rssm_pending_future_state = None
             if rssm_deterministic is None:
                 rssm_deterministic = not self.training
             if feat_or_dict == 0:
@@ -1077,6 +1087,29 @@ class R4Det(MVXFasterRCNN):
 
         return low_res_gt_map.unsqueeze(0).unsqueeze(0)
 
+    def forward_test(self, points, img_metas, img=None, **kwargs):
+        """Test forward with batch support.
+
+        ``Base3DDetector.forward_test`` infers the number of test-time
+        augmentations from ``len(points)``.  For this detector every sample is
+        a sequence of frames, so without TTA the collated batch already gives
+        ``len(points) == batch_size`` and batch>1 was mis-routed to
+        ``aug_test``.  Here the augmentation axis is derived from
+        ``img_metas``: for a non-TTA batch it is always a list of per-sample
+        frame lists, whereas a genuine TTA input nests one more level
+        (``img_metas[0][0]`` is itself a list).
+        """
+        if hasattr(img_metas, 'data'):
+            img_metas = img_metas.data
+        if img_metas and not isinstance(img_metas[0], list):
+            img_metas = [img_metas]
+
+        inner = img_metas[0][0] if img_metas and img_metas[0] else None
+        if isinstance(inner, list):
+            # genuine test-time augmentation: outer axis is the aug axis
+            return self.aug_test(points, img_metas, img, **kwargs)
+        return self.simple_test(points, img_metas, img, **kwargs)
+
     def simple_test(self,
                     points,
                     img_metas,
@@ -1086,29 +1119,52 @@ class R4Det(MVXFasterRCNN):
                     gt_labels_3d=None,
                     gt_labels=None,
                     gt_bboxes=None, **kwargs):
-        """Test function without augmentaiton."""
-        outs_pts = None
-        # img_metas is list[list[dict]]: batch_size × N_frames.
-        # Each meta[t] is the single-frame img_meta dict for frame t.
-        # Test runs with batch≥1: points is a length-seq_len list (one entry
-        # per frame); img shape [seq_len, C, H, W]; img_metas[i] is a
-        # length-seq_len list of per-frame metas for sample i.
+        """Test function without augmentaiton.
 
-        # When val batch=1, base.py:43 strips one level from the collated
-        # DataContainer, yielding a flat N-frame list.  Detect and re-wrap.
+        Layout: points is list[B] of per-sample frame lists; img is
+        [B, N, C, H, W]; img_metas is list[B] of length-N per-frame meta
+        lists; gt is list[B] of length-N per-frame GT.  B=1 and B>1 are
+        handled by the same indexing, so batch size cannot change results.
+        """
+        outs_pts = None
+
+        # Normalise to instance-major: points[B][N], img[B, N, C, H, W],
+        # img_metas[B][N], gt[B][N].  Callers that bypass MMDataParallel (and
+        # therefore the collate/scatter unwrapping) hand in single-instance
+        # frame-major inputs; wrap those instead of guessing from tensor dims.
         if hasattr(img_metas, 'data'):
             img_metas = img_metas.data
         if img_metas and not isinstance(img_metas[0], list):
             img_metas = [img_metas]
+        if points and not isinstance(points[0], (list, tuple)):
+            points = [points]
+        if img is not None and img.dim() == 4:
+            img = img.unsqueeze(0)
+        if gt_bboxes_3d is not None and gt_bboxes_3d and \
+                not isinstance(gt_bboxes_3d[0], (list, tuple)):
+            gt_bboxes_3d = [gt_bboxes_3d]
+        if gt_labels_3d is not None and gt_labels_3d and \
+                not isinstance(gt_labels_3d[0], (list, tuple)):
+            gt_labels_3d = [gt_labels_3d]
+        if gt_labels is not None and gt_labels and \
+                not isinstance(gt_labels[0], (list, tuple)):
+            gt_labels = [gt_labels]
+        if gt_bboxes is not None and gt_bboxes and \
+                not isinstance(gt_bboxes[0], (list, tuple)):
+            gt_bboxes = [gt_bboxes]
 
         N = self.seq_len
-        frame_points = [points[t] for t in range(N)]
-        frame_img = [img[t, ...] for t in range(N)]
+        B = len(img_metas)
+        # frame-major slicing, same convention as forward_train: frame_points[t]
+        # is the per-sample list for frame t, frame_img[t] is [B, C, H, W].
+        frame_points = [[p[t] for p in points] for t in range(N)]
+        frame_img = [img[:, t, ...] for t in range(N)] if img.dim() == 5 else \
+            [img[t, ...] for t in range(N)]
         frame_img_metas = [[meta[t] for meta in img_metas] for t in range(N)]
         frame_valid = [torch.tensor([meta[t]['is_prev_frame_valid'] for meta in img_metas],
                                     device=img.device) for t in range(N)]
 
-        # Current-frame GT (frame N-1)
+        # Current-frame GT (frame N-1), per batch sample
         gt_bboxes_3d = [gt[N - 1] for gt in gt_bboxes_3d] if gt_bboxes_3d is not None else None
         gt_labels_3d = [gt[N - 1] for gt in gt_labels_3d] if gt_labels_3d is not None else None
         gt_labels = [gt[N - 1] for gt in gt_labels] if gt_labels is not None else None
@@ -1325,6 +1381,7 @@ class R4Det(MVXFasterRCNN):
         # Always reset RSSM state at the start of each training step
         if self.temporal_fusion is not None:
             self.temporal_fusion.reset_state()
+            self.rssm_pending_future_state = None
 
         if self.temporal_fusion is not None:
             # Older frames serve as burn-in state without gradient.
@@ -1780,90 +1837,79 @@ class R4Det(MVXFasterRCNN):
                 bbox_Mask = torch.zeros((len(batch_img_metas), 1, h_down, w_down), dtype=torch.float32).to(device)
             bbox_Mask = F.interpolate(bbox_Mask, (h_down, w_down), mode='bilinear', align_corners=True)
         else:
-            batch_img_metas = batch_img_metas[0]
-            if 'segmentation' in batch_img_metas:
-                orig_seg = batch_img_metas['segmentation']
-            if 'radar_depth' in batch_img_metas:
-                radar_depth_orig = batch_img_metas['radar_depth']
-            if 'depth_comple' in batch_img_metas:
-                depth_comple_orig = batch_img_metas['depth_comple']
+            # Evaluation path.  batch_img_metas is list[B] of per-frame meta
+            # dicts for the current frame.  Everything below is vectorised
+            # over B so that val batch size > 1 is numerically equivalent to
+            # running the same samples one by one.
+            B = len(batch_img_metas)
+            h, w = batch_img_metas[0]['img_shape']
 
-            h, w = batch_img_metas['img_shape']
-            if 'gt_bboxes_3d' in batch_img_metas:
-                gt_bboxes_3d = [batch_img_metas['gt_bboxes_3d']]
-            else:
-                gt_bboxes_3d = []
-            if 'gt_labels_3d' in batch_img_metas:
-                gt_labels_3d = [batch_img_metas['gt_labels_3d']]
-            else:
-                gt_labels_3d = []
-            if 'gt_bboxes_2d' in batch_img_metas:
-                gt_bboxes_2d = [batch_img_metas['gt_bboxes_2d']]
+            gt_bboxes_3d = [meta['gt_bboxes_3d'] for meta in batch_img_metas
+                            if 'gt_bboxes_3d' in meta]
+            gt_labels_3d = [meta['gt_labels_3d'] for meta in batch_img_metas
+                            if 'gt_labels_3d' in meta]
+            gt_bboxes_2d = [meta['gt_bboxes_2d'] for meta in batch_img_metas
+                            if 'gt_bboxes_2d' in meta]
+            gt_labels_2d = [meta['gt_labels_2d'] for meta in batch_img_metas
+                            if 'gt_labels_2d' in meta]
 
+            if 'gt_depths' in batch_img_metas[0]:
+                gt_depths = torch.stack([meta['gt_depths'] for meta in batch_img_metas]).unsqueeze(1)
             else:
-                gt_bboxes_2d = []
-            if 'gt_labels_2d' in batch_img_metas:
-                gt_labels_2d = [batch_img_metas['gt_labels_2d']]
-            else:
-                gt_labels_2d = []
-            if 'gt_depths' in batch_img_metas:
-                gt_depths = [batch_img_metas['gt_depths']]
-                gt_depths = torch.stack(gt_depths).unsqueeze(1)  # B, 1, H, W
-                gt_depths = gt_depths.to(device)
-            else:
-                gt_depths = torch.zeros((1, 1, h, w)).to(device)
-            H, W = batch_img_metas['img_shape']
+                gt_depths = torch.zeros((B, 1, h, w))
+            gt_depths = gt_depths.to(device)
+            H, W = h, w
 
-            cam_aware = batch_img_metas['cam_aware']
-            cam_aware = [[x.to(device)] for x in cam_aware]
-            cam_aware = [torch.stack(x, dim=0) for x in cam_aware]
-            img_aug_matrix = [batch_img_metas['img_aug_matrix']]
-            img_aug_matrix = torch.tensor(np.stack(img_aug_matrix, axis=0))
-            img_aug_matrix = img_aug_matrix.to(device)
-            if 'lidar_aug_matrix' in batch_img_metas:
-                lidar_aug_matrix = [batch_img_metas['lidar_aug_matrix']]
-                lidar_aug_matrix = torch.tensor(np.stack(lidar_aug_matrix, axis=0)).to(torch.float32)
-                bda_rot = [batch_img_metas['bda_rot']]
-                bda_rot = torch.tensor(np.stack(bda_rot, axis=0)).to(torch.float32)
+            # cam_aware: list of per-sample tuples -> one stacked tensor per
+            # component, shape [B, ...].
+            cam_aware = [meta['cam_aware'] for meta in batch_img_metas]
+            cam_aware = [torch.stack([x[i] for x in cam_aware], dim=0).to(device)
+                         for i in range(len(cam_aware[0]))]
+            img_aug_matrix = torch.tensor(
+                np.stack([meta['img_aug_matrix'] for meta in batch_img_metas], axis=0)).to(device)
+            if 'lidar_aug_matrix' in batch_img_metas[0]:
+                lidar_aug_matrix = torch.tensor(
+                    np.stack([meta['lidar_aug_matrix'] for meta in batch_img_metas], axis=0)).to(torch.float32)
+                bda_rot = torch.tensor(
+                    np.stack([meta['bda_rot'] for meta in batch_img_metas], axis=0)).to(torch.float32)
             else:
-                lidar_aug_matrix = torch.eye(4).unsqueeze(0)
+                lidar_aug_matrix = torch.eye(4).unsqueeze(0).repeat(B, 1, 1)
                 bda_rot = lidar_aug_matrix
-
             lidar_aug_matrix = lidar_aug_matrix.to(device)
             bda_rot = bda_rot.to(device)
-            gt_bev_mask = torch.zeros((1, 1, self.bev_h_, self.bev_w_)).to(device)
-            batch_img_metas = self.reorganize_lidar2img([batch_img_metas])  # begin list again
-            calib = []
-            mat = batch_img_metas[0]['final_lidar2img']
-            mat = torch.Tensor(mat).to(device)
-            final_lidar2img = torch.stack([mat])
-            if 'depth_comple' in batch_img_metas[0].keys():
-                depth_comple = [batch_img_metas[0]['depth_comple']] if isinstance(batch_img_metas, list) else [
-                    batch_img_metas['depth_comple']]
-                depth_comple = torch.tensor(np.stack(depth_comple, axis=0)).to(device).unsqueeze(1)
+
+            gt_bev_mask = torch.zeros((B, 1, self.bev_h_, self.bev_w_)).to(device)
+            batch_img_metas = self.reorganize_lidar2img(batch_img_metas)
+            final_lidar2img = torch.stack(
+                [torch.Tensor(meta['final_lidar2img']).to(device) for meta in batch_img_metas])
+
+            if 'depth_comple' in batch_img_metas[0]:
+                depth_comple = torch.tensor(np.stack(
+                    [meta['depth_comple'] for meta in batch_img_metas], axis=0)).to(device).unsqueeze(1)
             else:
-                depth_comple = torch.zeros((1, 1, H, W)).to(device)
+                depth_comple = torch.zeros((B, 1, H, W)).to(device)
             if 'radar_depth' in batch_img_metas[0]:
-                radar_depth = [batch_img_metas[0]['radar_depth']]
-                radar_depth = torch.tensor(np.stack(radar_depth, axis=0)).to(device).unsqueeze(1)
+                radar_depth = torch.tensor(np.stack(
+                    [meta['radar_depth'] for meta in batch_img_metas], axis=0)).to(device).unsqueeze(1)
             else:
-                radar_depth = torch.zeros((1, 1, H, W)).to(device)
+                radar_depth = torch.zeros((B, 1, H, W)).to(device)
             radar_depth = radar_depth.to(torch.float32)
+
             h, w = batch_img_metas[0]['img_shape']
             h_down, w_down = h // self.downsample, w // self.downsample
-            if 'segmentation' in batch_img_metas[0].keys():
-                segmentation = [batch_img_metas[0]['segmentation'].astype(np.float32)] if isinstance(batch_img_metas,
-                                                                                                     list) else [
-                    batch_img_metas['segmentation']]
-                segmentation = torch.tensor(np.stack(segmentation, axis=0)).to(device).unsqueeze(1)
-                segmentation = F.interpolate(segmentation, (h_down, w_down), mode='bilinear', align_corners=True)
+            if 'segmentation' in batch_img_metas[0]:
+                segmentation = torch.tensor(np.stack(
+                    [meta['segmentation'].astype(np.float32) for meta in batch_img_metas],
+                    axis=0)).to(device).unsqueeze(1)
+                segmentation = F.interpolate(segmentation, (h_down, w_down),
+                                             mode='bilinear', align_corners=True)
             else:
-                segmentation = torch.zeros((1, 1, h_down, w_down)).to(device)
+                segmentation = torch.zeros((B, 1, h_down, w_down)).to(device)
             if 'bbox_Mask' in batch_img_metas[0]:
-                bbox_Mask = [batch_img_metas[0]['bbox_Mask']]
-                bbox_Mask = torch.tensor(np.stack(bbox_Mask, axis=0)).to(device).unsqueeze(1)
+                bbox_Mask = torch.tensor(np.stack(
+                    [meta['bbox_Mask'] for meta in batch_img_metas], axis=0)).to(device).unsqueeze(1)
             else:
-                bbox_Mask = torch.zeros((1, 1, h_down, w_down)).to(device)
+                bbox_Mask = torch.zeros((B, 1, h_down, w_down)).to(device)
             bbox_Mask = F.interpolate(bbox_Mask, (h_down, w_down), mode='bilinear', align_corners=True)
 
         return batch_img_metas, gt_bboxes_3d, gt_labels_3d, gt_bboxes_2d, gt_labels_2d, depth_comple, bbox_Mask, segmentation, radar_depth, \

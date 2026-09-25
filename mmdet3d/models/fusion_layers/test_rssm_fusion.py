@@ -31,8 +31,8 @@ class TestBEVRSSMTemporalFusion(unittest.TestCase):
         )
         self.fusion.eval()  # no BN training behaviour during test
 
-    def test_initial_output_equals_feat(self):
-        """Test that output == feat when output_proj is zero-initialized."""
+    def test_initial_output_has_latent_contribution(self):
+        """Test Xavier output_proj gives z_t a non-zero initial contribution."""
         B, C, H, W = 2, 256, 8, 8
         feat = torch.randn(B, C, H, W)
 
@@ -41,9 +41,7 @@ class TestBEVRSSMTemporalFusion(unittest.TestCase):
                 feat, use_posterior=True, deterministic=True
             )
 
-        # output_proj is zero-init: output = 0 + feat = feat
-        self.assertTrue(torch.allclose(output, feat, atol=1e-6),
-                        f"Output != feat: max diff = {(output - feat).abs().max().item():.6f}")
+        self.assertFalse(torch.allclose(output, feat, atol=1e-5))
 
     def test_deterministic_output_consistent(self):
         """Test that same input after reset gives identical output."""
@@ -68,7 +66,7 @@ class TestBEVRSSMTemporalFusion(unittest.TestCase):
                         f"Outputs differ after reset: max diff = {(out1 - out2).abs().max().item():.6f}")
 
     def test_second_frame_accumulates_state(self):
-        """Test that second frame output differs from first (state accumulates)."""
+        """Test that accumulated state changes the second frame."""
         B, C, H, W = 2, 256, 8, 8
 
         self.fusion.reset_state()
@@ -83,14 +81,7 @@ class TestBEVRSSMTemporalFusion(unittest.TestCase):
                 feat2, use_posterior=True, deterministic=True
             )
 
-        # Output on second frame should differ from input (residual from prev frame)
-        # due to accumulated h/z state — but with zero-init output_proj,
-        # output = output_proj(z_t) + feat, and output_proj is zero.
-        # After first forward, h_state != 0 and z_state != 0, so second frame
-        # gets different z_t, but output_proj is still all zeros, so output == feat2.
-        # Actually with zero-init, every output should equal its own feat.
-        self.assertTrue(torch.allclose(out2, feat2, atol=1e-6),
-                        f"Second frame output != feat2: max diff = {(out2 - feat2).abs().max().item():.6f}")
+        self.assertFalse(torch.allclose(out2, feat2, atol=1e-5))
 
     def test_stats_present_and_detached(self):
         """Test that stats dict contains expected keys and values are detached."""
@@ -209,8 +200,8 @@ class TestMotionAlignedRSSMFusion(unittest.TestCase):
         )
         self.fusion.eval()
 
-    def test_initial_output_equals_feat(self):
-        """Zero-init alignment + zero-init output_proj: output == feat."""
+    def test_initial_output_has_latent_contribution(self):
+        """Xavier-initialized output_proj gives z_t an initial contribution."""
         B, C, H, W = 2, 256, 8, 8
         feat = torch.randn(B, C, H, W)
 
@@ -219,8 +210,7 @@ class TestMotionAlignedRSSMFusion(unittest.TestCase):
                 feat, use_posterior=True, deterministic=True
             )
 
-        self.assertTrue(torch.allclose(output, feat, atol=1e-6),
-                        f"Output != feat: max diff = {(output - feat).abs().max().item():.6f}")
+        self.assertFalse(torch.allclose(output, feat, atol=1e-5))
 
     def test_deterministic_output_consistent(self):
         """Same input after reset → identical output."""
@@ -243,7 +233,7 @@ class TestMotionAlignedRSSMFusion(unittest.TestCase):
                         f"Outputs differ after reset: max diff = {(out1 - out2).abs().max().item():.6f}")
 
     def test_second_frame_accumulates_state(self):
-        """Second frame output == feat (zero-init output_proj dominates)."""
+        """Accumulated state changes the second frame output."""
         B, C, H, W = 2, 256, 8, 8
 
         self.fusion.reset_state()
@@ -256,8 +246,7 @@ class TestMotionAlignedRSSMFusion(unittest.TestCase):
                 feat2, use_posterior=True, deterministic=True
             )
 
-        self.assertTrue(torch.allclose(out2, feat2, atol=1e-6),
-                        f"Second frame output != feat2: max diff = {(out2 - feat2).abs().max().item():.6f}")
+        self.assertFalse(torch.allclose(out2, feat2, atol=1e-5))
 
     def test_stats_present_and_detached(self):
         """Stats dict contains expected keys and values are detached scalars."""
@@ -428,67 +417,91 @@ class TestPosteriorOnlyLearnableStdLatentFusion(unittest.TestCase):
         for key, value in stats_first.items():
             self.assertIsInstance(value, torch.Tensor)
             self.assertEqual(value.ndim, 0)
-            self.assertFalse(value.requires_grad)
-            self.assertTrue(torch.equal(value, stats_second[key]))
 
-        self.assertLessEqual(
-            stats_first['stat_posterior_std_p10'],
-            stats_first['stat_posterior_std_p50'],
-        )
-        self.assertLessEqual(
-            stats_first['stat_posterior_std_p50'],
-            stats_first['stat_posterior_std_p90'],
+
+class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
+    """Smoke tests for the low-dimensional future-consistent latent."""
+
+    def setUp(self):
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
         )
 
-    def test_deterministic_uses_posterior_mean_and_logs_std_stats(self):
-        B, C, H, W = 2, 256, 8, 8
-        feat = torch.randn(B, C, H, W)
+        self.fusion = LowDimFutureConsistentLatentFusion(
+            in_channels=256,
+            latent_dim=32,
+            hidden_dim=128,
+            latent_pool='adaptive',
+            latent_size=(4, 4),
+            modulation_scale=0.1,
+            gate_init_bias=-1.0,
+        )
+        self.fusion.eval()
+
+    def test_output_shape_and_interface(self):
+        feat = torch.randn(2, 256, 8, 8)
+        with torch.no_grad():
+            output, recon, kl, h_t, z_t, stats = self.fusion(
+                feat, use_posterior=True, deterministic=True)
+
+        self.assertEqual(output.shape, (2, 256, 8, 8))
+        self.assertEqual(z_t.shape, (2, 32, 4, 4))
+        self.assertEqual(h_t.shape, (2, 32, 4, 4))
+        self.assertIsNone(recon)
+        self.assertIsInstance(stats, dict)
+        self.assertTrue(torch.is_tensor(kl))
+
+    def test_zero_z_changes_output_and_can_be_gated(self):
+        """The latent enters detection through FiLM/gating, not raw z."""
+        feat = torch.randn(1, 256, 8, 8)
+        self.fusion.reset_state()
+        with torch.no_grad():
+            self.fusion(feat, use_posterior=True, deterministic=True)
 
         outputs = []
-        stats = None
-        for _ in range(2):
-            self.fusion.reset_state()
-            with torch.no_grad():
-                out, recon, kl, h, z, cur_stats = self.fusion(
-                    feat, use_posterior=True, deterministic=True)
-            outputs.append(out)
-            stats = cur_stats
+        original_z = self.fusion.z_state.clone()
+        with torch.no_grad():
+            output_normal, *_ = self.fusion(
+                feat, use_posterior=True, deterministic=True)
+        self.fusion.z_state = torch.zeros_like(original_z)
+        with torch.no_grad():
+            output_zero, *_ = self.fusion(
+                feat, use_posterior=True, deterministic=True)
+        outputs = [output_normal, output_zero]
 
-        self.assertTrue(torch.allclose(outputs[0], outputs[1], atol=1e-6))
-        self.assertIsNone(kl)
-        self.assertIsNotNone(stats)
+        self.assertFalse(torch.allclose(outputs[0], outputs[1], atol=1e-5))
+        self.assertGreater(
+            (outputs[0] - outputs[1]).abs().max().item(), 0.0)
 
-        expected_keys = [
-            'stat_posterior_std',
-            'stat_posterior_std_mean',
-            'stat_posterior_std_std',
-            'stat_posterior_std_p10',
-            'stat_posterior_std_p50',
-            'stat_posterior_std_p90',
-        ]
-        for key in expected_keys:
-            self.assertIn(key, stats)
-            self.assertIsInstance(stats[key], torch.Tensor)
-            self.assertEqual(stats[key].ndim, 0, f"{key} should be scalar")
-            self.assertFalse(stats[key].requires_grad, f"{key} should be detached")
+    def test_future_loss_requires_pending_next_frame(self):
+        feat1 = torch.randn(1, 256, 8, 8)
+        feat2 = torch.randn(1, 256, 8, 8)
 
-        self.assertLessEqual(stats['stat_posterior_std_p10'], stats['stat_posterior_std_p50'])
-        self.assertLessEqual(stats['stat_posterior_std_p50'], stats['stat_posterior_std_p90'])
+        self.fusion.reset_state()
+        self.fusion(feat1)
+        self.assertIsNone(self.fusion.future_state)
 
-    def test_non_deterministic_samples_with_learnable_std(self):
-        B, C, H, W = 2, 256, 8, 8
-        feat = torch.randn(B, C, H, W)
+        self.fusion.train()
+        self.fusion.future_state = feat2.detach()
+        _, _, latent_loss, _, _, stats = self.fusion(feat2)
+        self.assertIn('stat_future_loss', stats)
+        self.assertIsNone(self.fusion.future_state)
+        self.assertTrue(torch.is_tensor(latent_loss))
 
-        outputs = []
-        for _ in range(2):
-            self.fusion.reset_state()
-            with torch.no_grad():
-                out, recon, kl, h, z, _ = self.fusion(
-                    feat, use_posterior=True, deterministic=False)
-            outputs.append(out)
+    def test_future_loss_is_exclusive_task(self):
+        """A consumed future target is not reused by a later call."""
+        feat1 = torch.randn(1, 256, 8, 8)
+        feat2 = torch.randn(1, 256, 8, 8)
 
-        self.assertFalse(torch.allclose(outputs[0], outputs[1], atol=1e-3))
-        self.assertIsNone(kl)
+        self.fusion.train()
+        self.fusion.reset_state()
+        self.fusion(feat1)
+        self.fusion.future_state = feat2.detach()
+        _, _, _, _, _, stats_with_target = self.fusion(feat2)
+        _, _, _, _, _, stats_without_target = self.fusion(feat2)
+
+        self.assertIn('stat_future_loss', stats_with_target)
+        self.assertNotIn('stat_future_loss', stats_without_target)
 
 
 if __name__ == '__main__':

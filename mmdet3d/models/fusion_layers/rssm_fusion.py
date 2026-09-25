@@ -1002,3 +1002,323 @@ class PosteriorOnlyLearnableStdLatentFusion(MotionAlignedRSSMFusion):
             self.z_state = z_t
 
         return output, reconstruction, None, h_t, z_t, stats
+
+
+@FUSION_LAYERS.register_module()
+class LowDimFutureConsistentLatentFusion(BaseModule):
+    """Low-dimensional latent fusion with an exclusive next-frame task.
+
+    The previous full-resolution RSSM used a pixel-wise 256-channel posterior
+    that could be reconstructed from ``feat``/``h_t``.  Counterfactual
+    diagnostics showed that replacing ``z_t`` with another sample's posterior
+    mean changed the 3D-head output by only a few percent.
+
+    This variant removes that redundancy:
+
+    1. z is pooled to a small spatial grid (or a global vector);
+    2. z modulates the recurrent state with residual FiLM plus a gate;
+    3. during training z must predict the raw next-frame BEV feature.
+
+    The detector-facing six-tuple and state-reset interface are unchanged.
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels=None,
+        latent_dim=32,
+        hidden_dim=128,
+        action_dim=0,
+        kl_scale=1.0,
+        free_nats=0.0,
+        min_std=0.1,
+        init_std=0.2,
+        latent_pool='adaptive',
+        latent_size=(16, 16),
+        predict_future_channels=None,
+        future_loss_weight=0.1,
+        modulation_scale=0.1,
+        gate_init_bias=-1.0,
+        norm_cfg=dict(type='BN', requires_grad=True),
+        act_cfg=dict(type='ReLU', inplace=True),
+        init_cfg=None,
+    ):
+        super().__init__(init_cfg)
+
+        if out_channels is not None and out_channels != in_channels:
+            raise ValueError(
+                'LowDimFutureConsistentLatentFusion keeps the BEV channel '
+                'count unchanged; use output_proj modulation instead of '
+                'changing out_channels.')
+        if latent_pool not in ('adaptive', 'global'):
+            raise ValueError("latent_pool must be 'adaptive' or 'global'")
+
+        self.channels = in_channels
+        self.latent_dim = latent_dim
+        self.hidden_dim = hidden_dim
+        self.action_dim = action_dim
+        self.use_action = action_dim > 0
+        self.kl_scale = kl_scale
+        self.free_nats = free_nats
+        self.min_std = min_std
+        self.min_logstd = math.log(min_std)
+        self.init_std = init_std
+        self.latent_pool = latent_pool
+        self.latent_size = tuple(latent_size)
+        self.predict_future_channels = (
+            in_channels if predict_future_channels is None
+            else predict_future_channels
+        )
+        self.future_loss_weight = future_loss_weight
+        self.modulation_scale = modulation_scale
+        self.gate_init_bias = gate_init_bias
+        self.use_future_consistency = self.predict_future_channels > 0
+
+        self.encoder = nn.Sequential(
+            ConvModule(
+                in_channels,
+                hidden_dim,
+                3,
+                padding=1,
+                norm_cfg=norm_cfg,
+                act_cfg=act_cfg,
+            ),
+            ConvModule(
+                hidden_dim,
+                latent_dim,
+                3,
+                padding=1,
+                norm_cfg=None,
+                act_cfg=None,
+            ),
+        )
+        self.latent_gru = ConvGRUCell(
+            input_dim=latent_dim + (action_dim if self.use_action else 0),
+            hidden_dim=latent_dim,
+            kernel_size=3,
+        )
+
+        self.prior_mu = nn.Conv2d(latent_dim, latent_dim, 3, padding=1)
+        self.prior_logstd = nn.Conv2d(latent_dim, latent_dim, 3, padding=1)
+        self.posterior_mu = nn.Conv2d(
+            2 * latent_dim, latent_dim, 3, padding=1)
+        self.posterior_logstd = nn.Conv2d(
+            2 * latent_dim, latent_dim, 3, padding=1)
+
+        self.film_proj = nn.Linear(latent_dim, 2 * latent_dim)
+        self.gate_proj = nn.Linear(2 * latent_dim, latent_dim)
+        self.output_proj = nn.Conv2d(latent_dim, in_channels, 1)
+
+        if self.use_future_consistency:
+            self.prior_future = nn.Conv2d(
+                latent_dim, self.predict_future_channels, 1)
+            self.posterior_future = nn.Conv2d(
+                latent_dim, self.predict_future_channels, 1)
+        else:
+            self.prior_future = None
+            self.posterior_future = None
+
+        if self.latent_pool == 'adaptive':
+            self.latent_pool_layer = nn.AdaptiveAvgPool2d(self.latent_size)
+        else:
+            self.latent_pool_layer = nn.AdaptiveAvgPool2d(1)
+        self.global_pool = nn.AdaptiveAvgPool2d(1)
+
+        self.h_state = None
+        self.z_state = None
+        self.future_state = None
+        self.init_weights()
+
+    def init_weights(self):
+        super().init_weights()
+        for module in (
+            self.prior_mu,
+            self.prior_logstd,
+            self.posterior_mu,
+            self.posterior_logstd,
+            self.film_proj,
+            self.gate_proj,
+            self.output_proj,
+        ):
+            xavier_init(module, distribution='uniform')
+        for module in (
+            self.latent_gru.reset_conv,
+            self.latent_gru.update_conv,
+            self.latent_gru.candidate_conv,
+        ):
+            xavier_init(module, distribution='uniform')
+            if module.bias is not None:
+                nn.init.uniform_(module.bias, -0.1, 0.1)
+        bias_value = self.min_logstd + math.log(
+            self.init_std / self.min_std - 1.0)
+        nn.init.constant_(self.prior_logstd.bias, bias_value)
+        nn.init.constant_(self.posterior_logstd.bias, bias_value)
+        nn.init.zeros_(self.film_proj.bias)
+        nn.init.zeros_(self.gate_proj.bias)
+        self.gate_proj.bias.data.fill_(self.gate_init_bias)
+        # Keep the detection residual near identity at init, while retaining a
+        # non-zero gradient path from the low-dimensional latent.
+        nn.init.normal_(self.output_proj.weight, std=0.01)
+        nn.init.zeros_(self.output_proj.bias)
+        if self.use_future_consistency:
+            xavier_init(self.prior_future, distribution='uniform')
+            xavier_init(self.posterior_future, distribution='uniform')
+
+    def reset_state(self):
+        self.h_state = None
+        self.z_state = None
+        self.future_state = None
+
+    def reset_for_samples(self, mask):
+        if mask.any() and self.h_state is not None:
+            keep = ~mask
+            self.h_state = torch.where(
+                keep[:, None, None, None], self.h_state,
+                torch.zeros_like(self.h_state))
+            self.z_state = torch.where(
+                keep[:, None, None, None], self.z_state,
+                torch.zeros_like(self.z_state))
+            if self.future_state is not None and self.future_state.dim() == 4:
+                self.future_state = torch.where(
+                    keep[:, None, None, None], self.future_state,
+                    torch.zeros_like(self.future_state))
+
+    def _pool_latent(self, value):
+        return self.latent_pool_layer(value)
+
+    def _constrained_logstd(self, logstd):
+        logstd = self.min_logstd + F.softplus(logstd - self.min_logstd)
+        return torch.clamp(logstd, max=0.0)
+
+    def sample(self, mu, logstd):
+        logstd = self._constrained_logstd(logstd)
+        std = torch.exp(logstd)
+        return mu + std * torch.randn_like(std)
+
+    def kl_loss(self, mu_q, logstd_q, mu_p, logstd_p):
+        logstd_q = self._constrained_logstd(logstd_q)
+        logstd_p = self._constrained_logstd(logstd_p)
+        var_q = torch.exp(2.0 * logstd_q)
+        var_p = torch.exp(2.0 * logstd_p)
+        kl_raw = (
+            logstd_p - logstd_q
+            + (var_q + (mu_q - mu_p).square()) / (2.0 * var_p)
+            - 0.5
+        )
+        if self.free_nats > 0:
+            kl_effective = torch.clamp(kl_raw, min=self.free_nats)
+        else:
+            kl_effective = kl_raw
+        stats = dict(
+            stat_kl_raw_mean=kl_raw.mean().detach(),
+            stat_kl_effective_mean=kl_effective.mean().detach(),
+            stat_clamped_ratio=(
+                (kl_raw < self.free_nats).float().mean().detach()
+                if self.free_nats > 0 else torch.zeros((), device=kl_raw.device)
+            ),
+            stat_mu_diff_sq=(mu_q - mu_p).square().mean().detach(),
+            stat_posterior_std=torch.exp(logstd_q).mean().detach(),
+            stat_prior_std=torch.exp(logstd_p).mean().detach(),
+        )
+        return kl_effective.mean(), stats
+
+    @auto_fp16(apply_to=['feat', 'velocity'])
+    def forward(self, feat, velocity=None, use_posterior=True,
+                deterministic=True, detach_state=True):
+        B, C, H, W = feat.shape
+        if self.use_action:
+            if velocity is None:
+                velocity = torch.zeros(
+                    B, self.action_dim, device=feat.device)
+            velocity_map = velocity[:, :, None, None].expand(
+                B, self.action_dim, H, W)
+        else:
+            velocity_map = None
+
+        if self.h_state is None or self.h_state.shape[0] != B:
+            self.h_state = torch.zeros(
+                B, self.latent_dim, *self.latent_size,
+                device=feat.device, dtype=feat.dtype)
+            self.z_state = torch.zeros(
+                B, self.latent_dim, *self.latent_size,
+                device=feat.device, dtype=feat.dtype)
+
+        z_prev = self._pool_latent(self.z_state)
+        if self.use_action:
+            x = torch.cat([z_prev, velocity_map], dim=1)
+        else:
+            x = z_prev
+        h_t = self._pool_latent(self.h_state)
+        h_t = self.latent_gru(x, h_t)
+
+        mu_p = self.prior_mu(z_prev)
+        logstd_p = self.prior_logstd(z_prev)
+        e_t = self.encoder(feat)
+        e_pooled = self._pool_latent(e_t)
+        mu_q = self.posterior_mu(torch.cat([z_prev, e_pooled], dim=1))
+        logstd_q = self.posterior_logstd(torch.cat([z_prev, e_pooled], dim=1))
+
+        if use_posterior:
+            z_t = mu_q if deterministic else self.sample(mu_q, logstd_q)
+        else:
+            z_t = mu_p if deterministic else self.sample(mu_p, logstd_p)
+
+        kl, stats = self.kl_loss(mu_q, logstd_q, mu_p, logstd_p)
+
+        future_loss = None
+        if (self.training and self.use_future_consistency
+                and self.future_state is not None):
+            target = self.future_state.detach()
+            if target.shape[1] != self.predict_future_channels:
+                target = target[:, :self.predict_future_channels]
+            posterior_future_pred = self.posterior_future(z_t)
+            prior_future_pred = self.prior_future(mu_p)
+            future_size = target.shape[-2:]
+            posterior_future_pred = F.interpolate(
+                posterior_future_pred,
+                size=future_size,
+                mode='bilinear',
+                align_corners=False)
+            prior_future_pred = F.interpolate(
+                prior_future_pred,
+                size=future_size,
+                mode='bilinear',
+                align_corners=False)
+            future_loss = (
+                F.mse_loss(posterior_future_pred, target)
+                + F.mse_loss(prior_future_pred, target)
+            )
+            stats['stat_future_loss'] = future_loss.detach()
+        self.future_state = None
+
+        z_global = self.global_pool(z_t).flatten(1)
+        h_global = self.global_pool(h_t).flatten(1)
+        film = self.film_proj(z_global)
+        gamma = 1.0 + self.modulation_scale * torch.tanh(
+            film[:, :self.latent_dim])
+        beta = film[:, self.latent_dim:]
+        gate = torch.sigmoid(self.gate_proj(
+            torch.cat([z_global, h_global], dim=1)))
+        h_modulated = gamma[:, :, None, None] * h_t + beta[:, :, None, None]
+        h_gated = (1.0 - gate[:, :, None, None]) * h_t + \
+            gate[:, :, None, None] * h_modulated
+        latent_residual = self.output_proj(h_gated)
+        if latent_residual.shape[-2:] != feat.shape[-2:]:
+            latent_residual = F.interpolate(
+                latent_residual,
+                size=feat.shape[-2:],
+                mode='bilinear',
+                align_corners=False)
+        output = feat + latent_residual
+
+        if detach_state:
+            self.h_state = h_t.detach()
+            self.z_state = z_t.detach()
+        else:
+            self.h_state = h_t
+            self.z_state = z_t
+
+        latent_loss = kl * self.kl_scale
+        if future_loss is not None:
+            latent_loss = latent_loss + self.future_loss_weight * future_loss
+        return output, None, latent_loss, h_t, z_t, stats

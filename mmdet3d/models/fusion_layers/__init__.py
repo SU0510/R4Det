@@ -13,6 +13,7 @@ from .rssm_fusion import (
     DeterministicMotionAlignedLatentFusion,
     FixedNoisePosteriorLatentFusion,
     PosteriorOnlyLearnableStdLatentFusion,
+    LowDimFutureConsistentLatentFusion,
 )
 from .concat_conv_fusion import ConcatConvFusion
 from .ped_highres_branch import PedHighresBranch
@@ -23,5 +24,6 @@ __all__ = [
     'BEVRSSMTemporalFusion', 'MotionAlignedRSSMFusion',
     'DeterministicMotionAlignedLatentFusion', 'FixedNoisePosteriorLatentFusion',
     'PosteriorOnlyLearnableStdLatentFusion',
+    'LowDimFutureConsistentLatentFusion',
     'ConcatConvFusion', 'PedHighresBranch'
 ]
