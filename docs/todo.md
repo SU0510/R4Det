@@ -2,13 +2,11 @@
 
 ## 训练补充
 
-1. `no2d_igdr` N4 RSSM 三 seed 补齐（2026-09-25 完成）。
-   - seed0 val ep1-23、seed1 val ep1-21、seed2 val ep1-24 均已跑完，结果与三 seed 汇总见 `docs/training_runs_full.md` 48.2。
-   - 固定窗口：ep12-16 Overall 3D moderate `40.4400 ± 1.3475`，ep18-20 `39.5780 ± 1.0651`。
-   - 结论修正：seed 间 std（1.35）与 47.2 节单 seed 判定 no2d_igdr 劣于 FG-FULL N=4 的效应量（0.74）同量级，该单 seed 结论不可靠；要做论文口径需补 FG-FULL N=4 与 temporal baseline 的多 seed，或改用同 seed 配对。
-   - 遗留：seed2 的 ep2-24 中间权重未清理，需并入下一轮 checkpoint 清理。
-
-2. 给 `fgfull`（完整 FG-FULL N=4）和 `temporal baseline` 补 seed1/seed2，以支撑消融的配对比较（未开始，需要 GPU 5/6/7 空闲窗口）。
+1. 给 `fgfull`（完整 FG-FULL N=4）和 `temporal baseline` 补 seed1/seed2，以支撑消融的配对比较（未开始，需要 GPU 5/6/7 空闲窗口）。
+   - 起因：no2d_igdr 三 seed 的 ep12-16 标准差 1.35，与 47.2 节单 seed 得到的 0.74 效应量同量级，配对比较目前的样本量不足以支撑结论。
+2. 清理 `no2d_igdr` N4 RSSM seed2 的中间权重（未执行）。
+   - 目录 `fgfull_N4_no2d_igdr_2x4_24e_seed2` 保存了 ep2-24 全部偶数 epoch，按 17.5 规则应只留 best saved（ep14）与 last（ep24），其余 10 个可删，约释放 6.4 GiB。
+   - 该 run 在 2026-09-24 那轮清理时仍在训练，被整体排除，需并入下一轮。
 
 ## 训练效率
 
@@ -39,3 +37,9 @@
 
 1. 已存在的 `no2d_igdr` baseline 的两种口径（2026-09-23 完成）。
    - 已跑完 temporal/GRU 控制组，ep20 val 后按预设判据截断；结果见 `docs/training_runs_full.md` 47.5.2。
+
+2. `no2d_igdr` N4 RSSM 三 seed 补齐（2026-09-25 完成）。
+   - seed0 val ep1-23、seed1 val ep1-21、seed2 val ep1-24 均已跑完；逐 epoch 曲线与三 seed 汇总见 `docs/training_runs_full.md` 48.2。
+   - 固定窗口均值：ep12-16 Overall 3D moderate `40.4400 ± 1.3475`，ep18-20 `39.5780 ± 1.0651`；全轮峰值均值 `41.8296 ± 1.3843`（三 seed 峰值分别在 ep14/ep15/ep14）。
+   - 结论修正：seed 间 std（1.35）与 47.2 节单 seed 判定 no2d_igdr 劣于 FG-FULL N=4 的效应量（0.74）同量级，该单 seed 结论不可靠；后续补配对比较见「训练补充」第 1 项。
+   - 附注：seed2 原计划在 ep21 截断，因人工截断未执行而自然跑满 24e，是三个 seed 中唯一训完 24 轮的；其末尾权重清理单列为「训练补充」第 2 项。
