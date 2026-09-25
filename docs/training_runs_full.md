@@ -1458,6 +1458,9 @@ best 判定易错点及本次核对结果：
 | samples_per_gpu | 2 | 2 | 2 | 4 |
 | cumulative_iters | 2 | 2 | 2 | 无（无累积 hook） |
 | 有效 batch | 12 | 12 | 12 | 16 |
+| iter / epoch | 1902 | 1902 | 1902 | 714 |
+| optimizer step / epoch | 951 | 951 | 951 | 714 |
+| 24e 总 optimizer step | 22824 | 22824 | 22824 | 17136 |
 | checkpoint_interval | 2 | 2 | 1 | 2 |
 | load_from | pretrained_tj4d.pth | pretrained_tj4d.pth | pretrained_tj4d.pth | pretrained_tj4d.pth |
 | seed | 0 (default) | 1 | 2 | 0 (default) |
@@ -1465,6 +1468,40 @@ best 判定易错点及本次核对结果：
 seed_0 与原 Run 10 用的是同一 default seed（0），但两组的 batch 组成不同：多 seed 组靠 3 卡 ×
 spg 2 × 累积 2 凑出有效 batch 12，原 Run 10 是 4 卡 × spg 4、无累积凑出 16。因此卡数、
 单卡 batch 与是否累积三项都不同，BN 统计量与梯度累积路径随之变化，严格说不完全等价。
+
+迭代数差异（均由磁盘日志实测，`Epoch [e][i/total]` 字段）：
+
+- 训练 iter 数 **714 vs 1902（2.66×）**，因为 iter 由 `samples/epoch ÷ (卡数×spg)` 决定，
+  累积不减少 iter。
+- optimizer step 数 **714/epoch vs 951/epoch（1.33×）**，24e 累计 **17136 vs 22824**。
+  这个 1.33 就是有效 batch 的比值 16/12，即小 batch 用更多步换掉每步样本量。
+- 每 epoch 覆盖样本量几乎相同（11412 vs 11424，差 0.1%，来自 1902 与 714 的向上取整），
+  所以两者是**同一数据预算、不同拆解方式**，不是数据量差异。
+- CosineAnnealing 按 epoch 调度，逐 epoch lr 两边完全一致（24/24 epoch 无差异），
+  因此每个 epoch 的 lr 相同，但同一 lr 下多 seed 组做了更多次参数更新。
+- 两组还差一项：原 Run 10 是 `deterministic: False`（默认），多 seed 组是
+  `deterministic: True`（`--deterministic`；三个 seed 日志均为 True）。
+- BN 差异是累积无法弥补的那一类，需要分开看两层：
+  - **归一化统计量**：模型用普通 BatchNorm（非 SyncBN，全仓库 `SyncBN` 命中 0），DDP 下
+    每个进程只对自己**本卡 micro-batch**做归一化。于是 Run 10 的 BN 统计基于 4 样本、
+    多 seed 组基于 2 样本；累积只把梯度加到 12，不会把两个 micro-batch 拼进同一次 BN 计算。
+  - **running stats 更新**：BN 的 running stats 每个 micro-step 各更新一次，累积 2 次即每步
+    更新两遍，等效统计窗口与无累积不同。实测确认参数被设 `requires_grad=False` 的 BN 在
+    `train()` 下**依然**更新 running stats（PyTorch 验证），所以「冻结权重」不等于「冻结统计量」。
+  - 涉及范围：只有 `img_backbone`（ResNet，`frozen_stages=1` + `norm_eval=True`）因
+    `norm_eval` 显式把内部 BN 置为 eval、统计量冻结。`img_neck`（FPN）**没有** `norm_eval`，
+    它的 18 个 BN 虽然 `requires_grad=False`，仍处于训练态并更新 running stats；
+    `pts_voxel_encoder`（PFNLayer 的 BatchNorm1d）、`pts_backbone`（SECOND）、
+    RSSM fusion（`requires_grad=True`）同样是训练态 BN。这些都会随 micro-batch 大小
+    与累积次数改变行为，两块配置的差异无法抵消。
+  - mmcv 对这类组合本身有告警：`GradientCumulativeOptimizerHook may slightly decrease
+    performance if the model has BatchNorm layers.`，多 seed 组日志中确有该条。
+
+  结论：所谓「有效 batch 12」只是**梯度层面的等价**，不等于与原 Run 10 的 BN 行为等价。
+
+严格讲，这**不是单变量对照**：相对原 Run 10，多 seed 组同时改变了卡数（4→3）、单卡 batch
+（spg 4→2）、是否累积（无→2）、deterministic（False→True）四项；相对第 20 节及其后的
+各 ablation 才是干净的单变量对照（那些 run 全部沿用 3 卡 / spg2 / 累积2 / deterministic）。
 
 ### 19.1 Overall 3D_moderate 逐 epoch 曲线
 
@@ -6176,3 +6213,96 @@ ep16 `42.2904`。这不影响固定窗口对照，但选 released checkpoint 时
   后段平台没有额外收益，不改变固定窗口结论。
 - 下一步：若这条消融要进论文主表，优先给 FG-FULL N=4 与 temporal baseline 补 seed1/2，
   或改用同 seed 配对设计；在此之前只报三 seed 窗口均值 ± std，不报单点排名。
+
+---
+
+## 49. `z_t` 因果诊断（2026-09-25，冻结 checkpoint）
+
+### 49.0 摘要与结论
+
+这次诊断回答 TODO「方法探索 2」的第一优先级问题：`z_t` 是否真的影响检测输出。
+结论不是“z 完全失效”，而是更精细的“z 有强因果通道，但缺少样本级判别信息”：
+
+- `zero_z` 对当前帧 BEV 特征的扰动非常大（clean 主线约 62%，no2d_igdr 约 82.5%），对
+  3D-head 输出也有明显扰动（约 25% / 38%）。因此不能说 z 只是无用的 KL 统计量；
+  `output_proj(z_t) + feat` 确实把 z_t 接进了检测路径。
+- 但把同一 batch 内另一样本的 `z_t=mu_q` shuffle 进来，head 输出只变化
+  2.3%-4.7%；切换到 prior 均值 `mu_p` 也只变化 3.4%-5.9%。也就是说 z 的主要贡献更像
+  一个较强的公共偏置/底色，而不是携带当前样本判别信息。
+- 因此继续调 Gaussian、KL/free_nats、fixed noise 或 learnable std 不可能解决这个问题；
+  这些结果也与 21/22/23/24 节的既有训练消融方向一致。下一步应做低维 bottleneck，并给 z
+  只有它能完成的未来一致性任务。
+
+### 49.1 诊断方法
+
+工具：`tools/diagnose_z_utilization.py`。该工具对冻结 checkpoint 做只读反事实重放，
+历史帧先正常 burn-in，然后只对当前帧 `z_t` 做干预；`normal` 基线保持
+`z_t=mu_q`，`zero_z` 替换为 0，`shuffle_z` 替换为同 batch 另一样本的 `mu_q`，
+`prior_only` 使用 `mu_p`。评估时 `deterministic=True`，不采样，无随机数差异；
+模型在 `eval()` 模式下重放。指标是当前帧 `pts_feats[0]` 与 `pts_bbox_head` 输出
+flatten 后相对 `normal` 的 L2 ratio。
+
+本次新增运行：
+
+- 配置：`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr.py`
+- checkpoint：`/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_seed0/epoch_14.pth`
+- 选用 ep14 原因：该 run 的 ep16 权重已在历史清理中删除；ep14 是本 run 的全轮峰值
+  **41.0157 @ep14**，也是 best saved，适合作为冻结诊断权重。
+- 样本：validation 索引 `[3, 4, 5, 6]`，四条序列单样本重放；shuffle 源采用
+  `--shuffle-offset 0` 的循环下一样本。
+- 运行环境：物理 GPU 5，2026-09-25 09:31 UTC；JSON 输出
+  `/tmp/r4det_z_utilization_no2d_igdr_seed0_ep14.json`。
+
+### 49.2 no2d_igdr seed0 ep14：逐样本结果
+
+| index | feat norm | head norm | zero_z feat | zero_z head | shuffle_z feat | shuffle_z head | prior mu_p feat | prior mu_p head | KL raw | mu diff sq |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 3 | 3473.5083 | 23494.7012 | 0.8751 | 0.4101 | 0.1658 | 0.0525 | 0.1686 | 0.0614 | 0.6509 | 0.00715 |
+| 4 | 3822.2190 | 26628.0566 | 0.8015 | 0.3657 | 0.1291 | 0.0355 | 0.1559 | 0.0564 | 0.6495 | 0.00742 |
+| 5 | 3795.0173 | 26472.7227 | 0.8059 | 0.3689 | 0.1338 | 0.0366 | 0.1585 | 0.0594 | 0.6509 | 0.00745 |
+| 6 | 3713.6345 | 25821.8320 | 0.8187 | 0.3762 | 0.2428 | 0.0622 | 0.1576 | 0.0577 | 0.6478 | 0.00720 |
+| **mean** | 3701.0948 | 25604.3281 | **0.8253** | **0.3802** | **0.1679** | **0.0467** | **0.1602** | **0.0587** | 0.6498 | 0.00731 |
+
+### 49.3 clean Run10 head-v2 seed0 ep16：已有诊断汇总
+
+已有三个冻结诊断 JSON 均使用
+`me_rssm/configs/TJ4D-R4Det_clean_N4_2x4_24e_pretrained_v2_head_snapshot.py` 和
+`/data/lurui/work_dirs/run10_headv2_multiseed/seed_0/epoch_16.pth`，用于确认结论不是
+单一窗口或单一 shuffle 偏移造成。
+
+| JSON 样本集 | 样本数 | zero_z feat | zero_z head | shuffle_z feat | shuffle_z head | prior mu_p feat | prior mu_p head |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| indices `[3,4]`，shuffle offset 0 | 2 | 0.6236 | 0.2520 | 0.0899 | 0.0192 | 0.1140 | 0.0346 |
+| indices `[3,4,5,6]`，shuffle offset 0 | 4 | 0.6245 | 0.2531 | 0.1281 | 0.0280 | 0.1137 | 0.0343 |
+| indices `[100,101,102,103]`，shuffle offset 2 | 4 | 0.6104 | 0.2452 | 0.1076 | 0.0226 | 0.1145 | 0.0357 |
+
+clean 主线对应样本的 `stat_kl_raw_mean` 约 0.586-0.595，`stat_mu_diff_sq` 约
+0.0084-0.0092；no2d_igdr ep14 对应值约 0.648-0.651 和 0.0071-0.0074。两组 checkpoint
+都处于 prior/posterior 较近、free-bits 钳制的状态，但因果扰动模式一致。
+
+### 49.4 归因与边界
+
+1. **不是接线失效。** `zero_z` 的大扰动排除了“z_t 被残差路径盖住、检测头看不见”的假设。
+2. **不是样本级失效。** shuffle/prior 的小扰动说明不同样本的 posterior mean 可互相替换
+   后，head 仍保持接近原输出。z 当前承载的信息不足以区分“该样本该走哪条预测模式”。
+3. **不是 KL 超参单独能修的问题。** 诊断中 prior/posterior 已较接近；即使重新激活 KL 梯度，
+   也只会进一步约束分布，不会凭空引入当前架构缺失的任务。
+4. **不要把全分辨率 256ch 逐像素 Gaussian 直接替换成 categorical。** shuffle/prior 小扰动
+   的证据更支持先压缩表达空间、降低与 h/feat 的冗余，再观察是否有离散/多峰需求。
+
+### 49.5 下一步设计
+
+按最小可证伪顺序：
+
+1. **低维 bottleneck。** 把 `z_t` 从全分辨率 `B x 256 x H x W` 压到全局向量或粗空间
+   latent（例如 `B x 32` 或 `B x 32 x 16 x 16`），用 FiLM/gating 调制 `h_t`，而不是继续做
+   与 feat 同形状的残差加法。目标是让 shuffle/prior 的 head 扰动从当前 <6% 提升到可分辨
+   的样本级差异，同时避免再一次变成 feat 的复制品。
+2. **给 z 一个排他任务。** 训练 z 预测下一帧 BEV/occupancy/Doppler/box latent，用未来一致性
+   监督 prior，而不是只让 prior 拟合 posterior。若任务只存在于未来帧，z 就不能再被当前
+   h/feat 完全替代。
+3. **重做 KL/free-bits 口径。** 低维 bottleneck 后按 latent/spatial 聚合，再评估
+   DreamerV3 式 KL balancing；free-bits 若保留，应后期退火，避免长期钳成常数。
+4. **categorical/unimix 后置。** 只在低维 z 仍表现出多峰或离散切换表达不足时引入。
+
+本节只做冻结诊断，没有训练新模型，因此没有区间均值或全轮峰值；不更新任何 AP 主表。
