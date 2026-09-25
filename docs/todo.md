@@ -2,8 +2,13 @@
 
 ## 训练补充
 
-1. 最近需要对 `fgfull` 和 `no2d_igdr` 两种 N4rssm 做 seed1 和 seed2 补充。
-   - `no2d_igdr` N4 RSSM 的 seed1/seed2 已于 2026-09-23 起跑（GPU 5/6/7，顺序执行，work_dir `fgfull_N4_no2d_igdr_2x4_24e_seed1/2`）。
+1. `no2d_igdr` N4 RSSM 三 seed 补齐（2026-09-25 完成）。
+   - seed0 val ep1-23、seed1 val ep1-21、seed2 val ep1-24 均已跑完，结果与三 seed 汇总见 `docs/training_runs_full.md` 48.2。
+   - 固定窗口：ep12-16 Overall 3D moderate `40.4400 ± 1.3475`，ep18-20 `39.5780 ± 1.0651`。
+   - 结论修正：seed 间 std（1.35）与 47.2 节单 seed 判定 no2d_igdr 劣于 FG-FULL N=4 的效应量（0.74）同量级，该单 seed 结论不可靠；要做论文口径需补 FG-FULL N=4 与 temporal baseline 的多 seed，或改用同 seed 配对。
+   - 遗留：seed2 的 ep2-24 中间权重未清理，需并入下一轮 checkpoint 清理。
+
+2. 给 `fgfull`（完整 FG-FULL N=4）和 `temporal baseline` 补 seed1/seed2，以支撑消融的配对比较（未开始，需要 GPU 5/6/7 空闲窗口）。
 
 ## 训练效率
 
