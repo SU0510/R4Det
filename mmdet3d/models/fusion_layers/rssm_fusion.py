@@ -1245,7 +1245,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
                 B, self.latent_dim, *self.latent_size,
                 device=feat.device, dtype=feat.dtype)
 
-        z_prev = self._pool_latent(self.z_state)
+        pooled_z = self._pool_latent(self.z_state)
+        z_prev = F.normalize(pooled_z, dim=1)
         if self.use_action:
             x = torch.cat([z_prev, velocity_map], dim=1)
         else:
@@ -1253,10 +1254,10 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         h_t = self._pool_latent(self.h_state)
         h_t = self.latent_gru(x, h_t)
 
+        e_t = self.encoder(feat)
+        e_pooled = F.normalize(self._pool_latent(e_t), dim=1)
         mu_p = self.prior_mu(z_prev)
         logstd_p = self.prior_logstd(z_prev)
-        e_t = self.encoder(feat)
-        e_pooled = self._pool_latent(e_t)
         mu_q = self.posterior_mu(torch.cat([z_prev, e_pooled], dim=1))
         logstd_q = self.posterior_logstd(torch.cat([z_prev, e_pooled], dim=1))
 
