@@ -500,8 +500,8 @@ class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
         _, _, _, _, _, stats_with_target = self.fusion(feat2)
         _, _, _, _, _, stats_without_target = self.fusion(feat2)
 
-        self.assertIn('stat_future_loss', stats_with_target)
-        self.assertNotIn('stat_future_loss', stats_without_target)
+        self.assertGreater(stats_with_target['stat_future_loss'].item(), 0.0)
+        self.assertEqual(stats_without_target['stat_future_loss'].item(), 0.0)
 
     def test_future_target_is_spatially_pooled_and_normalized(self):
         """Raw BEV scale must not dominate the prior/KL objective."""

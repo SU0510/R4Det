@@ -1268,7 +1268,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
 
         kl, stats = self.kl_loss(mu_q, logstd_q, mu_p, logstd_p)
 
-        future_loss = None
+        future_loss = torch.zeros((), device=feat.device, dtype=feat.dtype)
+        has_future_target = False
         if (self.training and self.use_future_consistency
                 and self.future_state is not None):
             target = self.future_state.detach()
@@ -1285,7 +1286,7 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
                 F.mse_loss(posterior_future_pred, target)
                 + F.mse_loss(prior_future_pred, target)
             )
-            stats['stat_future_loss'] = future_loss.detach()
+            has_future_target = True
         self.future_state = None
 
         z_global = self.global_pool(z_t).flatten(1)
@@ -1316,6 +1317,7 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             self.z_state = z_t
 
         latent_loss = kl * self.kl_scale
-        if future_loss is not None:
+        if has_future_target:
             latent_loss = latent_loss + self.future_loss_weight * future_loss
+        stats['stat_future_loss'] = future_loss.detach()
         return output, None, latent_loss, h_t, z_t, stats
