@@ -879,39 +879,52 @@ class R4Det(MVXFasterRCNN):
             bev_mask_logit_former = None
         rssm_kl = None
         rssm_recon_loss = None
+        rssm_latent_loss = None
         rssm_stats = None
         if self.temporal_fusion is not None:
-            if getattr(self.temporal_fusion, 'use_future_consistency', False):
-                if feat_or_dict == 0:
-                    # The pending target is set by the previous history frame.
-                    self.temporal_fusion.future_state = getattr(
-                        self, 'rssm_pending_future_state', None)
-                    self.rssm_pending_future_state = bev_feats.detach()
-                else:
-                    self.temporal_fusion.future_state = getattr(
-                        self, 'rssm_pending_future_state', None)
-                    self.rssm_pending_future_state = None
+            # Legacy RSSMs return `kl` at index 2 and rely on the
+            # reconstruction loss at index 1; the low-dim latent returns the
+            # already-combined (KL + future) objective at index 2 instead.
+            uses_latent_loss = getattr(
+                self.temporal_fusion, 'latent_loss_is_primary', False)
             if rssm_deterministic is None:
                 rssm_deterministic = not self.training
             if feat_or_dict == 0:
                 # Prev frame: run RSSM to update internal h/z state
                 bev_feats_cache = bev_feats
-                bev_feats, rssm_recon, rssm_kl, _, rssm_latent_loss, rssm_stats = \
-                    self.temporal_fusion(
-                        bev_feats, use_posterior=True,
-                        deterministic=rssm_deterministic,
-                        detach_state=rssm_detach_state)
-                if rssm_history_losses is not None and rssm_recon is not None:
-                    rssm_history_losses.append(
-                        (F.mse_loss(rssm_recon, bev_feats_cache),
-                         rssm_kl, rssm_stats))
+                fusion_out = self.temporal_fusion(
+                    bev_feats, use_posterior=True,
+                    deterministic=rssm_deterministic,
+                    detach_state=rssm_detach_state)
+                bev_feats, rssm_recon = fusion_out[0], fusion_out[1]
+                if uses_latent_loss:
+                    rssm_latent_loss = fusion_out[2]
+                else:
+                    rssm_kl = fusion_out[2]
+                rssm_stats = fusion_out[5]
+                if rssm_history_losses is not None:
+                    if rssm_recon is not None:
+                        rssm_history_losses.append(
+                            (F.mse_loss(rssm_recon, bev_feats_cache),
+                             rssm_kl, rssm_stats))
+                    elif uses_latent_loss and rssm_latent_loss is not None:
+                        # Latent path: index 0 is the per-frame training
+                        # objective (KL + future consistency) to be averaged
+                        # with the current frame below.
+                        rssm_history_losses.append(
+                            (rssm_latent_loss, None, rssm_stats))
             else:
                 # Curr frame: full RSSM forward with gradients + losses
                 bev_feats_cache = bev_feats
-                bev_feats, rssm_recon, rssm_kl, _, rssm_latent_loss, rssm_stats = \
-                    self.temporal_fusion(
-                        bev_feats, use_posterior=True,
-                        deterministic=rssm_deterministic)
+                fusion_out = self.temporal_fusion(
+                    bev_feats, use_posterior=True,
+                    deterministic=rssm_deterministic)
+                bev_feats, rssm_recon = fusion_out[0], fusion_out[1]
+                if uses_latent_loss:
+                    rssm_latent_loss = fusion_out[2]
+                else:
+                    rssm_kl = fusion_out[2]
+                rssm_stats = fusion_out[5]
                 if rssm_recon is not None:
                     rssm_recon_loss = F.mse_loss(rssm_recon, bev_feats_cache)
                 if is_valid_mask is not None:
@@ -1382,7 +1395,6 @@ class R4Det(MVXFasterRCNN):
         # Always reset RSSM state at the start of each training step
         if self.temporal_fusion is not None:
             self.temporal_fusion.reset_state()
-            self.rssm_pending_future_state = None
 
         if self.temporal_fusion is not None:
             # Older frames serve as burn-in state without gradient.
@@ -1446,6 +1458,15 @@ class R4Det(MVXFasterRCNN):
         losses = dict()
 
         if self.temporal_fusion is not None and rssm_latent_loss is not None:
+            if history_rssm_losses:
+                # History frames contribute their own KL + future objectives;
+                # average them with the current frame so the low-dim latent
+                # is trained on every frame of the folded window instead of
+                # only the last one.
+                rssm_latent_loss = (
+                    sum(loss[0] for loss in history_rssm_losses)
+                    + rssm_latent_loss
+                ) / (len(history_rssm_losses) + 1)
             losses['loss_rssm_latent'] = rssm_latent_loss
             if rssm_stats is not None:
                 losses.update(rssm_stats)

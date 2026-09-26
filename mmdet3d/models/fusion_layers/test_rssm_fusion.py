@@ -479,29 +479,49 @@ class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
 
         self.fusion.reset_state()
         self.fusion(feat1)
-        self.assertIsNone(self.fusion.future_state)
+        self.assertIsNone(self.fusion.pending_future_pred)
 
         self.fusion.train()
-        self.fusion.future_state = feat2.detach()
         _, _, latent_loss, _, _, stats = self.fusion(feat2)
-        self.assertIn('stat_future_loss', stats)
-        self.assertIsNone(self.fusion.future_state)
+        # First training call only stores the prediction for the next frame.
+        self.assertIn('stat_future_mse', stats)
+        self.assertEqual(stats['stat_future_mse'].item(), 0.0)
+        self.assertIsNotNone(self.fusion.pending_future_pred)
+        _, _, _, _, _, stats_next = self.fusion(feat2)
+        self.assertGreater(stats_next['stat_future_mse'].item(), 0.0)
         self.assertTrue(torch.is_tensor(latent_loss))
 
-    def test_future_loss_is_exclusive_task(self):
-        """A consumed future target is not reused by a later call."""
+    def test_future_loss_is_scored_one_frame_later(self):
+        """Frame t predicts frame t+1; the task is forward-looking."""
         feat1 = torch.randn(1, 256, 8, 8)
         feat2 = torch.randn(1, 256, 8, 8)
 
         self.fusion.train()
         self.fusion.reset_state()
-        self.fusion(feat1)
-        self.fusion.future_state = feat2.detach()
-        _, _, _, _, _, stats_with_target = self.fusion(feat2)
-        _, _, _, _, _, stats_without_target = self.fusion(feat2)
+        # Nothing was predicted yet, so frame 0 has nothing to score.
+        _, _, _, _, _, stats_first = self.fusion(feat1)
+        # The prediction made while seeing feat1 is scored against feat2.
+        _, _, _, _, _, stats_second = self.fusion(feat2)
 
-        self.assertGreater(stats_with_target['stat_future_loss'].item(), 0.0)
-        self.assertEqual(stats_without_target['stat_future_loss'].item(), 0.0)
+        self.assertEqual(stats_first['stat_future_mse'].item(), 0.0)
+        self.assertGreater(stats_second['stat_future_mse'].item(), 0.0)
+
+    def test_return_tuple_contract(self):
+        """Detector reads index 2 as the loss and index 4 as z_t.
+
+        Regression guard: index 4 (z_t) was once wired into the training
+        loss, which silently optimised the latent mean instead of KL.
+        """
+        feat = torch.randn(2, 256, 8, 8)
+        self.fusion.train()
+        self.fusion.reset_state()
+        output, recon, latent_loss, h_t, z_t, stats = self.fusion(feat)
+
+        self.assertIsNone(recon)
+        self.assertEqual(latent_loss.ndim, 0)
+        self.assertGreaterEqual(latent_loss.item(), 0.0)
+        self.assertEqual(z_t.shape, (2, 32, 4, 4))
+        self.assertEqual(h_t.shape, (2, 32, 4, 4))
 
     def test_future_target_is_spatially_pooled_and_normalized(self):
         """Raw BEV scale must not dominate the prior/KL objective."""
@@ -511,11 +531,30 @@ class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
         self.fusion.train()
         self.fusion.reset_state()
         self.fusion(feat1)
-        self.fusion.future_state = feat2.detach()
         _, _, _, _, _, stats = self.fusion(feat2)
 
-        self.assertEqual(stats['stat_future_loss'].ndim, 0)
-        self.assertLess(stats['stat_future_loss'].item(), 1e4)
+        self.assertEqual(stats['stat_future_mse'].ndim, 0)
+        self.assertLess(stats['stat_future_mse'].item(), 1e4)
+
+    def test_future_loss_is_a_spatial_mean_not_a_sum(self):
+        """A zero-equivalent prediction must give an O(1) standardized MSE.
+
+        The target is standardized to unit variance, so an untrained head
+        predicting ~0 scores about 1.0. Regression guard: broadcasting the
+        validity mask as (B, 1, 1, 1) made the denominator count samples
+        instead of (sample, cell) pairs, inflating the loss by the number of
+        latent cells (~128x at 16x16).
+        """
+        feat1 = torch.randn(2, 256, 8, 8)
+        feat2 = torch.randn(2, 256, 8, 8)
+
+        self.fusion.train()
+        self.fusion.reset_state()
+        self.fusion(feat1)
+        with torch.no_grad():
+            _, _, _, _, _, stats = self.fusion(feat2)
+
+        self.assertLess(stats['stat_future_mse'].item(), 8.0)
 
     def test_future_target_is_one_channel_energy_map(self):
         """The exclusive task predicts next-frame BEV energy, not raw channels."""
@@ -523,18 +562,30 @@ class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
         self.assertEqual(self.fusion.posterior_future.out_channels, 1)
 
     def test_future_heads_normalize_latent_input(self):
-        """Future loss should constrain direction, not latent magnitude."""
+        """Future loss must not depend on the BEV feature scale.
+
+        The target is standardized and both future heads see L2-normalized
+        latents, so the objective is invariant to multiplying the input BEV by
+        a constant. Assert that invariance directly instead of pinning an
+        absolute value that only reflects the random head at init.
+        """
         feat1 = torch.randn(1, 256, 8, 8)
         feat2 = torch.randn(1, 256, 8, 8) * 100.0
 
         self.fusion.train()
-        self.fusion.reset_state()
+        scale_1 = torch.randn(1, 256, 8, 8)
         with torch.no_grad():
+            self.fusion.reset_state()
             self.fusion(feat1)
-        self.fusion.future_state = feat2.detach()
-        with torch.no_grad():
-            _, _, _, _, _, stats = self.fusion(feat2)
-            self.assertLess(stats['stat_future_loss'].item(), 10.0)
+            _, _, _, _, _, stats_1 = self.fusion(scale_1)
+            self.fusion.reset_state()
+            self.fusion(feat1)
+            _, _, _, _, _, stats_100 = self.fusion(scale_1 * 100.0)
+
+        self.assertAlmostEqual(
+            stats_1['stat_future_mse'].item(),
+            stats_100['stat_future_mse'].item(),
+            places=4)
 
 
 if __name__ == '__main__':

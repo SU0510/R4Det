@@ -1073,6 +1073,10 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         self.modulation_scale = modulation_scale
         self.gate_init_bias = gate_init_bias
         self.use_future_consistency = self.predict_future_channels > 0
+        # Tells the detector that index 2 of the forward tuple is the complete
+        # per-frame objective (KL + future consistency) rather than a bare KL
+        # term that still needs the reconstruction loss paired with it.
+        self.latent_loss_is_primary = True
 
         self.encoder = nn.Sequential(
             ConvModule(
@@ -1128,7 +1132,11 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
 
         self.h_state = None
         self.z_state = None
-        self.future_state = None
+        # Prediction made at frame t, consumed at frame t+1 against that
+        # frame's BEV. Holding it across the two calls is what makes the
+        # exclusive task forward-looking instead of a copy of the input.
+        self.pending_future_pred = None
+        self.pending_future_valid = None
         self.init_weights()
 
     def init_weights(self):
@@ -1169,7 +1177,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
     def reset_state(self):
         self.h_state = None
         self.z_state = None
-        self.future_state = None
+        self.pending_future_pred = None
+        self.pending_future_valid = None
 
     def reset_for_samples(self, mask):
         if mask.any() and self.h_state is not None:
@@ -1180,10 +1189,11 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             self.z_state = torch.where(
                 keep[:, None, None, None], self.z_state,
                 torch.zeros_like(self.z_state))
-            if self.future_state is not None and self.future_state.dim() == 4:
-                self.future_state = torch.where(
-                    keep[:, None, None, None], self.future_state,
-                    torch.zeros_like(self.future_state))
+            if self.pending_future_valid is not None:
+                # Invalid samples must be dropped from the next frame's
+                # future-consistency mean instead of being scored against a
+                # stale target.
+                self.pending_future_valid = self.pending_future_valid & keep
 
     def _pool_latent(self, value):
         return self.latent_pool_layer(value)
@@ -1222,7 +1232,10 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             stat_posterior_std=torch.exp(logstd_q).mean().detach(),
             stat_prior_std=torch.exp(logstd_p).mean().detach(),
         )
-        return kl_effective.mean() / (self.latent_dim * self.latent_size[0] * self.latent_size[1]), stats
+        # kl_effective is already a per-element mean over
+        # (batch, latent_dim, latent_h, latent_w); do NOT divide by the
+        # element count again.
+        return kl_effective.mean(), stats
 
     @auto_fp16(apply_to=['feat', 'velocity'])
     def forward(self, feat, velocity=None, use_posterior=True,
@@ -1270,24 +1283,51 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
 
         future_loss = torch.zeros((), device=feat.device, dtype=feat.dtype)
         has_future_target = False
-        if (self.training and self.use_future_consistency
-                and self.future_state is not None):
-            target = self.future_state.detach()
-            target = target.square().mean(dim=1, keepdim=True).sqrt()
-            target = self.future_target_pool(target)
-            target_mean = target.mean(dim=(2, 3), keepdim=True)
-            target_std = target.std(dim=(2, 3), keepdim=True).clamp_min(1e-4)
-            target = (target - target_mean) / target_std
+        if self.training and self.use_future_consistency:
+            # Predict the NEXT frame's BEV from the latent of the CURRENT
+            # frame. Consuming the stored prediction one frame later is what
+            # keeps the task forward-looking; scoring z_t against the frame it
+            # was just encoded from would be trivially solvable from e_t.
             z_t_future_input = F.normalize(z_t, dim=1)
             mu_p_future_input = F.normalize(mu_p, dim=1)
             posterior_future_pred = self.posterior_future(z_t_future_input)
             prior_future_pred = self.prior_future(mu_p_future_input)
-            future_loss = (
-                F.mse_loss(posterior_future_pred, target)
-                + F.mse_loss(prior_future_pred, target)
-            )
-            has_future_target = True
-        self.future_state = None
+
+            if self.pending_future_pred is not None:
+                valid = self.pending_future_valid
+                if valid is None:
+                    valid = torch.ones(
+                        feat.shape[0], dtype=torch.bool, device=feat.device)
+                if valid.any():
+                    target = feat.detach()
+                    target = target.square().mean(dim=1, keepdim=True).sqrt()
+                    target = self.future_target_pool(target)
+                    target_mean = target.mean(dim=(2, 3), keepdim=True)
+                    target_std = target.std(
+                        dim=(2, 3), keepdim=True).clamp_min(1e-4)
+                    target = (target - target_mean) / target_std
+                    pending_post, pending_prior = self.pending_future_pred
+                    # Broadcast to the target's full shape before summing:
+                    # `valid[:, None, None, None]` is (B, 1, 1, 1), so summing
+                    # it directly would count samples instead of
+                    # (sample, spatial) elements and inflate the mean by the
+                    # number of latent cells.
+                    valid_map = valid[:, None, None, None].to(
+                        target.dtype).expand_as(target)
+                    denom = valid_map.sum().clamp_min(1.0)
+                    future_loss = (
+                        ((pending_post - target).square() * valid_map).sum()
+                        + ((pending_prior - target).square() * valid_map).sum()
+                    ) / (2.0 * denom)
+                    has_future_target = True
+
+            self.pending_future_pred = (
+                posterior_future_pred, prior_future_pred)
+            self.pending_future_valid = torch.ones(
+                feat.shape[0], dtype=torch.bool, device=feat.device)
+        else:
+            self.pending_future_pred = None
+            self.pending_future_valid = None
 
         z_global = self.global_pool(z_t).flatten(1)
         h_global = self.global_pool(h_t).flatten(1)
@@ -1319,5 +1359,10 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         latent_loss = kl * self.kl_scale
         if has_future_target:
             latent_loss = latent_loss + self.future_loss_weight * future_loss
-        stats['stat_future_loss'] = future_loss.detach()
+        # NOTE: the key must not contain the substring 'loss'. mmdet's
+        # _parse_losses() sums every log_var whose name contains 'loss' into
+        # the reported total, so a 'stat_*loss*' name would silently inflate
+        # (or, for negative values, deflate) the training loss. Keep this as a
+        # pure diagnostic.
+        stats['stat_future_mse'] = future_loss.detach()
         return output, None, latent_loss, h_t, z_t, stats
