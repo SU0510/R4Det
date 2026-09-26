@@ -33,10 +33,11 @@
 1. 探索原 DreamerV3 的 BlockGRU scaling 方法和超参数使用方法。
 2. 解决 `z_t` 失效：冻结 checkpoint 因果诊断已于 2026-09-25 完成，详见 `docs/training_runs_full.md` 第 49 节；继续调 Gaussian、KL/free_nats、fixed noise 或 learnable std 都不会解决。
    - 因果诊断结论：`zero_z` 在 no2d_igdr seed0 ep14 上使 BEV 特征平均变化 82.53%、head 输出平均变化 38.02%，所以 z 不是完全无因果作用；但 `shuffle_z` 只使 head 平均变化 4.67%，prior `mu_p` 只使 head 平均变化 5.87%，clean 主线也得到同构结果。这说明 z 主要是公共偏置/底色，缺少样本级判别信息。
-   - **进度（2026-09-26）**：低维 bottleneck + 排他未来任务已实现，但首轮正式训练因 detector 解包接线错误（把 `z_t` 当 loss、丢弃真正的 KL+future 目标）而无效，ep1-4 全部作废，详见 `docs/training_runs_full.md` 第 50 节。接线、未来任务方向、KL 二次归一化、mask 广播、`stat_*loss` 命名共 5 处已修复（commit `f5d900f`），29 个单测 + 450 iter 冒烟通过，24e 正式训练已重新启动；结论待跑完后补第 50 节。
-   - 再做低维 bottleneck：将 z 从全分辨率 256ch 改为全局或粗空间 latent（如 16x16x32），通过 FiLM/门控调制 `h_t`，避免与 h/feat 信息重复。
-   - 给 z 增加只有它能做的任务：预测下一帧 BEV/occupancy/Doppler/box latent，用未来一致性训练 prior，而不是只让 prior 拟合 posterior。
-   - 重做 KL 平衡与 free-bits 口径：按 latent/spatial 聚合，考虑 DreamerV3 式 KL balancing，并让 free-bits 后期退火。
+   - **进度（2026-09-26）**：低维 bottleneck + 排他未来任务已实现，但首轮正式训练因 detector 解包接线错误（把 `z_t` 当 loss、丢弃真正的 KL+future 目标）而无效，ep1-4 全部作废，详见 `docs/training_runs_full.md` 第 50 节。接线、未来任务方向、KL 二次归一化、mask 广播、`stat_*loss` 命名共 5 处已修复（commit `f5d900f`），29 个单测 + 450 iter 冒烟通过，随后重启 24e 正式训练（结果见下条）。
+   - **结果（2026-09-26，负结果）**：低维 bottleneck（16×16×32）+ 排他未来任务训练到 ep12 后按预设止损终止。ep8-12（n=5，实际跨度，窗口不完整）Overall 3D moderate `33.3887`，低于 no2d_igdr 三 seed 同窗口 `39.8979 ± 0.9554` 达 **6.51 点**；全轮峰值 `35.6352 @ ep9`（该 epoch 无对应权重），best saved `34.4123 @ ep6`。KL 被 free-bits 完全截断（`clamped_ratio → 0.980`），`mu_diff²` 腰斩（0.0256→0.0024），future MSE ep9 后平台化。完整曲线、逐类别拆解与归因见 `docs/training_runs_full.md` 第 50.6 节。**该配置判为负结果，不再继续训练。**
+   - **归因（2026-09-26）**：三条已核实——① 本变体删掉了 decoder/重建项（`rssm_fusion.py:1008` 起的类没有 `self.decoder`），而重建是标准 RSSM 里把 `z_t` 锚定到当前观测的唯一梯度源；② 先验/后验被改成只看 `z_prev`（`prior_mu(z_prev)`，标准应为 `h_t`），predict-correct 结构被破坏；③ 输出经 FiLM 门控旁路（`gate_init_bias=-1.0`），z 更易被绕开。对照证据：标准 `MotionAlignedRSSMFusion` 的 KL 同样长期被钳（`clamped_ratio≈0.998`、`loss_rssm_kl≈1.00`），但它靠 `loss_rssm_recon≈0.0037` 锚定 z，指标可用。**结论：KL/free-bits 不是首要病因，优先级下调。**
+   - 下一步按最小可证伪顺序：① 适配 `tools/diagnose_z_utilization.py`（该工具注册 `fusion.decoder` 的 hook，本变体没有该属性，需先改）对 `epoch_12.pth` 补 z 反事实诊断（zero_z / shuffle_z / prior_only）；② 加回当前帧重建/自编码项；③ 把 prior/后验条件改回 `h_t`；④ 前三步落地后再做 free-bits 退火与 DreamerV3 式 KL balancing（α 0.8→0.5）。**不要在缺少重建项时单独调 free-bits。**
+   - 低维 bottleneck 与排他未来任务这两个设计方向**尚未被证伪**；本轮证伪的是「在无重建锚定 + prior 脱离 `h_t` 的前提下使用它们」。标准 RSSM 的四条关键要素（prior 依赖 `h_t`、观测似然/重建项、KL balancing、输出吃 `(h_t,z_t)`）与逐条对照见第 50.6.7 节。
    - categorical/unimix 放在上述步骤之后验证，只在低维 z 仍表现出多峰/离散切换表达不足时再引入；不要直接把逐像素 256ch Gaussian 全量替换成 categorical。
 
 ## 已完成
