@@ -1019,6 +1019,24 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
     2. z modulates the recurrent state with residual FiLM plus a gate;
     3. during training z must predict the raw next-frame BEV feature.
 
+    Two elements of the standard RSSM layout are required for z to stay
+    informative and are kept here:
+
+    * ``p(z_t | h_t)`` and ``q(z_t | h_t, e_t)``: the prior is a prediction
+      from the deterministic state, the posterior corrects it with the current
+      observation. Conditioning on ``z_prev`` instead would make the
+      recurrence a pure z -> z chain and take ``h_t`` off the latent path.
+    * an observation likelihood: ``decoder(h_t, z_t)`` reconstructs a pooled,
+      normalized view of the current BEV feature. This is the only term that
+      anchors ``z_t`` to the current observation; without it, free-bits can
+      clamp the whole KL term and leave z with no gradient that requires it to
+      carry observation information.
+
+    The reconstruction is folded into the primary objective at index 2 with
+    ``recon_loss_weight`` (index 1 stays ``None`` so the detector's legacy
+    reconstruction path is untouched); ``stat_recon_mse`` exposes it for
+    logging.
+
     The detector-facing six-tuple and state-reset interface are unchanged.
     """
 
@@ -1037,6 +1055,7 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         latent_size=(16, 16),
         predict_future_channels=None,
         future_loss_weight=0.1,
+        recon_loss_weight=0.1,
         modulation_scale=0.1,
         gate_init_bias=-1.0,
         norm_cfg=dict(type='BN', requires_grad=True),
@@ -1070,6 +1089,14 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             else predict_future_channels
         )
         self.future_loss_weight = future_loss_weight
+        self.recon_loss_weight = recon_loss_weight
+        if self.recon_loss_weight > 0 and (
+                self.latent_pool == 'global' or min(self.latent_size) < 2):
+            # The recon target is standardized across each sample, so a 1x1
+            # grid collapses to a constant and would be trivially predictable.
+            raise ValueError(
+                'reconstruction needs a spatial latent target; use '
+                "latent_pool='adaptive' with latent_size >= 2 in both dims")
         self.modulation_scale = modulation_scale
         self.gate_init_bias = gate_init_bias
         self.use_future_consistency = self.predict_future_channels > 0
@@ -1109,6 +1136,21 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         self.posterior_logstd = nn.Conv2d(
             2 * latent_dim, latent_dim, 3, padding=1)
 
+        # Reconstructs a pooled, normalized view of the current BEV feature
+        # from cat(h_t, z_t). This is the observation-likelihood term that
+        # anchors z_t to what the current frame actually contains.
+        self.decoder = nn.Sequential(
+            ConvModule(
+                2 * latent_dim,
+                hidden_dim,
+                3,
+                padding=1,
+                norm_cfg=norm_cfg,
+                act_cfg=act_cfg,
+            ),
+            nn.Conv2d(hidden_dim, in_channels, 3, padding=1),
+        )
+
         self.film_proj = nn.Linear(latent_dim, 2 * latent_dim)
         self.gate_proj = nn.Linear(2 * latent_dim, latent_dim)
         self.output_proj = nn.Conv2d(latent_dim, in_channels, 1)
@@ -1146,6 +1188,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             self.prior_logstd,
             self.posterior_mu,
             self.posterior_logstd,
+            self.decoder[0].conv,
+            self.decoder[1],
             self.film_proj,
             self.gate_proj,
             self.output_proj,
@@ -1269,10 +1313,12 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
 
         e_t = self.encoder(feat)
         e_pooled = F.normalize(self._pool_latent(e_t), dim=1)
-        mu_p = self.prior_mu(z_prev)
-        logstd_p = self.prior_logstd(z_prev)
-        mu_q = self.posterior_mu(torch.cat([z_prev, e_pooled], dim=1))
-        logstd_q = self.posterior_logstd(torch.cat([z_prev, e_pooled], dim=1))
+        # Standard RSSM: the prior predicts from the deterministic state and
+        # the posterior corrects it with the observation encoding.
+        mu_p = self.prior_mu(h_t)
+        logstd_p = self.prior_logstd(h_t)
+        mu_q = self.posterior_mu(torch.cat([h_t, e_pooled], dim=1))
+        logstd_q = self.posterior_logstd(torch.cat([h_t, e_pooled], dim=1))
 
         if use_posterior:
             z_t = mu_q if deterministic else self.sample(mu_q, logstd_q)
@@ -1280,6 +1326,18 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             z_t = mu_p if deterministic else self.sample(mu_p, logstd_p)
 
         kl, stats = self.kl_loss(mu_q, logstd_q, mu_p, logstd_p)
+
+        # Observation likelihood: reconstruct the pooled, per-whole-map
+        # normalized current BEV from cat(h_t, z_t). Normalizing both sides
+        # keeps this an O(1) target instead of letting the raw BEV scale
+        # dominate the KL and future terms.
+        target = self._pool_latent(feat).detach()
+        target_mean = target.mean(dim=(1, 2, 3), keepdim=True)
+        target_std = target.std(dim=(1, 2, 3), keepdim=True).clamp_min(1e-4)
+        target = (target - target_mean) / target_std
+        reconstruction = self.decoder(torch.cat([h_t, z_t], dim=1))
+        recon_loss = F.mse_loss(reconstruction, target)
+        stats['stat_recon_mse'] = recon_loss.detach()
 
         future_loss = torch.zeros((), device=feat.device, dtype=feat.dtype)
         has_future_target = False
@@ -1357,6 +1415,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             self.z_state = z_t
 
         latent_loss = kl * self.kl_scale
+        if self.recon_loss_weight > 0:
+            latent_loss = latent_loss + self.recon_loss_weight * recon_loss
         if has_future_target:
             latent_loss = latent_loss + self.future_loss_weight * future_loss
         # NOTE: the key must not contain the substring 'loss'. mmdet's
@@ -1365,4 +1425,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         # (or, for negative values, deflate) the training loss. Keep this as a
         # pure diagnostic.
         stats['stat_future_mse'] = future_loss.detach()
+        # Index 1 stays None: the reconstruction here is pooled/normalized and
+        # its MSE is already folded into index 2 with recon_loss_weight, so
+        # the detector's legacy full-resolution recon path must not double-count
+        # it (nor compare a 16x16 map against the full BEV grid).
         return output, None, latent_loss, h_t, z_t, stats

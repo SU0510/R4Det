@@ -21,7 +21,6 @@ import argparse
 import json
 import logging
 import os
-import sys
 import types
 import warnings
 
@@ -30,12 +29,6 @@ logging.getLogger('mmcv').setLevel(logging.ERROR)
 
 import numpy as np
 import torch
-from mmcv import Config
-from mmcv.parallel import DataContainer
-from mmcv.runner import load_checkpoint
-
-from mmdet3d.datasets import build_dataset
-from mmdet3d.models import build_detector
 
 
 DEFAULT_CONFIG = (
@@ -78,6 +71,8 @@ def parse_args():
 
 def unwrap(value):
     """Recursively unwrap mmcv DataContainer objects without collating."""
+    from mmcv.parallel import DataContainer
+
     if isinstance(value, DataContainer):
         return unwrap(value.data)
     if isinstance(value, list):
@@ -170,6 +165,13 @@ def select_indices(dataset, args):
 
 
 def resolve_shuffle_sources(indices, offset):
+    """Map each index to a *different* index used as its shuffled latent.
+
+    A source equal to the target would make ``shuffle_z`` bit-identical to
+    ``normal`` and silently understate latent usage, so refuse it outright.
+    """
+    if len(indices) < 2:
+        raise ValueError('shuffle requires at least two samples')
     sources = {}
     for pos, index in enumerate(indices):
         if offset == 0:
@@ -178,6 +180,10 @@ def resolve_shuffle_sources(indices, offset):
             source_pos = (pos + offset) % len(indices)
         else:
             source_pos = (pos + offset) % len(indices)
+        if source_pos == pos:
+            raise ValueError(
+                f'shuffle offset {offset} maps index {index} to itself; '
+                'pick an offset with |offset| < number of samples')
         sources[index] = indices[source_pos]
     return sources
 
@@ -227,7 +233,21 @@ def head_score_summary(outs):
 
 
 class ZIntervention:
-    """Apply one z_t intervention to the current frame only."""
+    """Apply one z_t intervention to the current frame only.
+
+    The intervention rewrites ``posterior_mu`` at its source instead of
+    patching ``output_proj`` or ``decoder``. ``mu_q`` is the single upstream
+    value behind the current-frame latent (``z_t = mu_q`` for deterministic
+    replay, ``mu_q + std * eps`` otherwise), so editing it intervenes on every
+    downstream consumer at once: the detection residual, the reconstruction
+    head, the FiLM/gate modulation of ``h_t``, and the recurrent ``z_state``
+    handed to the next frame.
+
+    Hook the branch modules instead, and a latent that only reaches the state
+    or the gate is reported as causally inert; that is exactly the failure the
+    diagnostic exists to measure, so the probe must sit upstream of all of
+    them.
+    """
 
     def __init__(self, fusion, mode, seq_len, replacement_z=None):
         self.fusion = fusion
@@ -241,21 +261,11 @@ class ZIntervention:
         self.last_z = None
         self.last_z_norm = None
 
-    def _make_hook(self, kind):
-        def hook(module, inputs):
-            if not self.active or not inputs:
+    def _make_hook(self):
+        def hook(module, inputs, output):
+            if not self.active:
                 return None
-            tensor = inputs[0]
-            if kind == 'output_proj':
-                z = tensor
-                return (self._replace_z(z),)
-            if kind == 'decoder':
-                combined = tensor
-                latent_dim = self.fusion.latent_dim
-                h = combined[:, :-latent_dim]
-                z = combined[:, -latent_dim:]
-                return (torch.cat([h, self._replace_z(z)], dim=1),)
-            return None
+            return self._replace_z(output)
         return hook
 
     def _replace_z(self, z):
@@ -288,6 +298,20 @@ class ZIntervention:
                 z_t = torch.zeros_like(z_t)
             elif self.mode == 'replace_z':
                 z_t = self._replace_z(z_t)
+            # With deterministic replay z_t is exactly mu_q, so out[4] must
+            # already be the intervened latent. If the hook only reached
+            # output_proj/decoder, the tuple still holds the untouched mu_q and
+            # every delta below would understate the true effect.
+            if deterministic:
+                if self.mode == 'zero_z' and out[4].abs().max().item() != 0.0:
+                    raise AssertionError(
+                        'zero_z did not propagate to out[4] (z_t)')
+                if self.mode == 'replace_z':
+                    expected = self.replacement_z.to(
+                        device=out[4].device, dtype=out[4].dtype)
+                    if not torch.equal(out[4].detach(), expected.detach()):
+                        raise AssertionError(
+                            'shuffled z did not propagate to out[4] (z_t)')
             self.last_z = z_t
             self.last_z_norm = float(
                 z_t.detach().float().pow(2).sum().sqrt().item())
@@ -304,18 +328,23 @@ class ZIntervention:
                 feat, velocity=velocity, use_posterior=use_posterior,
                 deterministic=deterministic, detach_state=detach_state)
 
-        self.fusion.forward = types.MethodType(forward_override, self.fusion)
+        self._installed_forward = types.MethodType(
+            forward_override, self.fusion)
+        self.fusion.forward = self._installed_forward
         if self.mode in ('zero_z', 'replace_z'):
-            self.hooks.append(self.fusion.output_proj.register_forward_pre_hook(
-                self._make_hook('output_proj')))
-            self.hooks.append(self.fusion.decoder.register_forward_pre_hook(
-                self._make_hook('decoder')))
+            self.hooks.append(
+                self.fusion.posterior_mu.register_forward_hook(
+                    self._make_hook()))
         return self
 
     def __exit__(self, exc_type, exc, tb):
         for hook in self.hooks:
             hook.remove()
-        self.fusion.forward = self.original_forward
+        # The override lives in the instance __dict__ and shadows the bound
+        # class method. Remove it (rather than reassigning a captured bound
+        # method) so the module goes back to normal dispatch.
+        if self.fusion.__dict__.get('forward') is self._installed_forward:
+            self.fusion.__dict__.pop('forward', None)
         return False
 
 
@@ -499,6 +528,12 @@ def print_summary(per_sample, indices):
 
 
 def main():
+    from mmcv import Config
+    from mmcv.runner import load_checkpoint
+
+    from mmdet3d.datasets import build_dataset
+    from mmdet3d.models import build_detector
+
     args = parse_args()
     if args.batch_size >= 2 and args.limit < 2:
         raise ValueError('--limit must be >=2 when --batch-size >=2')
@@ -517,6 +552,10 @@ def main():
     }
     os.makedirs(cfg.model['meta_info']['figures_path'], exist_ok=True)
 
+    # `samples_per_gpu` is a dataloader key that the training/eval loop pops
+    # before constructing the dataset; drop it here or TJ4DDataset rejects it.
+    cfg.data.val.pop('samples_per_gpu', None)
+    cfg.data.val.pop('workers_per_gpu', None)
     dataset = build_dataset(cfg.data.val)
     model = build_detector(cfg.model, train_cfg=None, test_cfg=None)
     load_checkpoint(model, args.checkpoint, map_location='cpu')

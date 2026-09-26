@@ -438,6 +438,44 @@ class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
         )
         self.fusion.eval()
 
+    def test_reconstruction_anchors_z_and_is_reported(self):
+        """The observation-likelihood term must exist, train z, and be logged."""
+        feat = torch.randn(2, 256, 8, 8)
+        self.fusion.train()
+        self.fusion.reset_state()
+        output, recon, latent_loss, h_t, z_t, stats = self.fusion(
+            feat, use_posterior=True, deterministic=True)
+
+        self.assertIn('stat_recon_mse', stats)
+        self.assertGreater(stats['stat_recon_mse'].item(), 0.0)
+        # recon is folded into the primary objective, so index 1 must stay None
+        # to avoid the detector re-scoring a 4x4 map against the full BEV grid.
+        self.assertIsNone(recon)
+        self.assertTrue(latent_loss.requires_grad)
+
+        latent_loss.backward()
+        self.assertIsNotNone(self.fusion.posterior_mu.weight.grad)
+        self.assertGreater(
+            self.fusion.posterior_mu.weight.grad.abs().sum().item(), 0.0)
+        self.assertIsNotNone(self.fusion.decoder[1].weight.grad)
+
+    def test_prior_and_posterior_condition_on_h_t(self):
+        """z must be generated from h_t, not from the previous latent."""
+        feat_a = torch.randn(1, 256, 8, 8)
+        feat_b = torch.randn(1, 256, 8, 8)
+
+        self.fusion.reset_state()
+        with torch.no_grad():
+            first, _, _, _, z_first, _ = self.fusion(
+                feat_a, use_posterior=True, deterministic=True)
+        self.fusion.z_state = torch.zeros_like(self.fusion.z_state)
+        with torch.no_grad():
+            second, _, _, _, z_second, _ = self.fusion(
+                feat_b, use_posterior=True, deterministic=True)
+
+        # Same zeroed z_prev but a different h_t/observation must change mu_q.
+        self.assertFalse(torch.allclose(z_first, z_second, atol=1e-6))
+
     def test_output_shape_and_interface(self):
         feat = torch.randn(2, 256, 8, 8)
         with torch.no_grad():

@@ -5,6 +5,11 @@
 # 16x16x32 recurrent latent, residual FiLM/gating, and a pending next-frame
 # BEV consistency task. Same backbone, detector head, data, schedule, and
 # no2d_igdr ablation scope.
+#
+# Standard-RSSM structure restoration (2026-09-26): the latent now conditions
+# on h_t (p(z_t|h_t), q(z_t|h_t,e_t)) and carries an observation-likelihood
+# term (decoder(h_t,z_t) -> pooled normalized BEV, weight 0.1). The previous
+# run without either anchor collapsed z into a near-constant common bias.
 # ---------------------------------------------------------------------------
 
 _base_ = './TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr.py'
@@ -25,6 +30,7 @@ model = dict(
         latent_size=(16, 16),
         predict_future_channels=256,
         future_loss_weight=0.1,
+        recon_loss_weight=0.1,
         modulation_scale=0.1,
         gate_init_bias=-1.0,
     ),
