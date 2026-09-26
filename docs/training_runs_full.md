@@ -6753,3 +6753,243 @@ median 0.0024 m、p95 0.0383 m、95.5% 在 5 cm 内。
   完全一致（42.3523）。该差异在退回 `c0c53ba` 后同样存在，**不是** batch 改动引入的；
   疑为离线 eval harness（`ds.evaluate` 直接调用、无 `evaluation.pipeline`）与训练内
   EvalHook 的差异，本次未继续追。因 51.2 已用同 harness 做了 A/B，等效性结论不受影响。
+
+---
+
+## 51. 修正反事实诊断并恢复标准 RSSM 结构（2026-09-26）
+
+### 51.0 摘要
+
+第 50.6 节把低维 z 的失败归因为「无重建锚定 + prior 脱离 `h_t`」，但当时的诊断工具
+本身有两个缺陷，归因缺少直接的因果证据；同时该工具**只能用于本变体之外的形状**。本节
+先修工具、再按修正后的探针重测 ep12 权重，最后落地结构修复并跑机制门控。
+
+结论有三条：
+
+1. **修正后的探针把 ep12 的「公共偏置」判定坐实了。** `zero_z` 使 head 变化
+   `0.0214`，而 `shuffle_z` 只有 `0.000097`（约 0.0097%）、`prior_only` 只有 `0.00065`。
+   三者都跨三个样本窗一致。zero 高、shuffle/prior 极低，是「z 是公共偏置、几乎不含
+   样本判别信息」的教科书式特征（判读见 51.1.4）。
+2. **结构修复已落地**：prior/posterior 条件改回 `h_t`，加回 `decoder(h_t,z_t)` 观测似然项。
+3. **机制门控已启动**：100/450 iter 两道冒烟通过（recon 1.1714→0.6565，future
+   1.0388→0.9274 同步下降），ep6 冻结诊断待跑。
+
+### 51.1 反事实探针的缺陷与修正
+
+#### 51.1.1 缺陷一：hook 位置在 z 的下游，覆盖不全
+
+旧实现注册 `fusion.output_proj` 和 `fusion.decoder` 的 **forward pre-hook**，把 z 在这
+两个模块内部替换掉。问题是这两处并不是 z 的全部去处：
+
+- `LowDimFutureConsistentLatentFusion` 里 z 先经 `film_proj`/`gate_proj` 调制 `h_t`，
+  再经 `output_proj` 变成残差；deformable/标准变体里 z 还直接写回 `z_state`。
+- 只替换 `output_proj`/`decoder` 的输入，等于**只干预了两条分支**，而 FiLM/gate 调制、
+  写回递归状态的 z 仍是原值。若模型恰好把 z 的作用放在被绕开的那条路上，诊断会
+  报「dormant」，而这不是真实的因果结论。
+- 更直接的问题：本变体（第 50 节）根本没有 `decoder` 属性，`__enter__` 里
+  `self.fusion.decoder.register_forward_pre_hook(...)` 直接 `AttributeError`，所以
+  旧工具**从未在本变体上跑成功过**。
+
+#### 51.1.2 修正：改 hook `posterior_mu` 的输出
+
+现在替换点在 `mu_q` 的**产出处**（`register_forward_hook`，不是 pre-hook）：
+
+```
+zero_z       mu_q -> 0
+replace_z    mu_q -> 另一个样本的 mu_q（batch shuffle）
+prior_only   不改图，forward 时传 use_posterior=False，走 mu_p
+```
+
+因为确定性重放时 `z_t = mu_q`（`deterministic=True`），改写 `mu_q` 的输出即同时改写
+**所有**下游：FiLM/gate 调制、`output_proj` 残差、decoder 重建、写回下一帧的
+`z_state`。探针只依赖 `posterior_mu` 这一个所有 RSSM 变体都有的属性，因此对低维变体与
+标准 `MotionAlignedRSSMFusion` 都能直接跑，不需要分支判断。
+
+#### 51.1.3 新增回归保护（`tools/test_diagnose_z_utilization.py`）
+
+除探针本身，新增 10 条单测覆盖：
+
+- `out[4]` 必须等于干预后的 z：`zero_z` 断言 `out[4]` 全零、`replace_z` 断言逐位等于
+  替换张量，且 `z_state` 也已替换。若有人把 hook 挪回下游分支，这条会立刻失败
+  （旧实现下 `out[4]` 仍是原 `mu_q`）。
+- lowdim 与标准 RSSM 两种形状都能跑：两者都只用 `posterior_mu`，测试确认
+  `_forward_hooks` 在退出上下文后已清空。
+- `normal` 重复运行逐位一致：两次 `torch.equal`（重置状态后重放同一样本）。
+- shuffle 来源不能是自己：`resolve_shuffle_sources` 对 `offset=0` 取下一个、循环到最后一个
+  折回首个；若 offset 使某样本映射回自身（如单样本列表）直接 `ValueError`，避免
+  「shuffle 后与 normal 逐位相同」把用法问题误判成 z 无用。
+- `__exit__` 必须真正撤销 forward 覆盖（旧实现把捕获的 bound method 重新赋回
+  实例字典，`fusion.forward` 被永久遮蔽），现在断言实例字典中的 `forward` 键被移除。
+
+测试运行：GPU 5，`Ran 10 tests ... OK`（含真实模块形状那条）。
+
+#### 51.1.4 判读规则
+
+| 现象 | 结论 |
+|---|---|
+| zero 高、shuffle 低 | z 是公共偏置：关掉它会变，但换成别的样本几乎不变 |
+| zero 低、shuffle 低 | z 完全未被使用 |
+| shuffle 高 | z 携带样本判别信息 |
+| prior_only 低 | posterior 校正无价值，先验已够 |
+
+### 51.2 用修正探针重测 ep12（旧结构）
+
+为把「工具修正」与「结构修复」的影响分开，先在 `9ec5992`（修改前）的代码上、用修正后的
+探针重测已归档的 ep12 权重。做法是 `git worktree add /tmp/r4det_legacy 9ec5992`，再把
+修正后的 `tools/diagnose_z_utilization.py` 拷进去，从而只有探针是新的、模型代码仍是旧的。
+
+- config：`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z.py`
+- checkpoint：`/data/lurui/work_dirs/lowdim_z_future_consistent_3x2x2_24e_seed0/epoch_12.pth`
+- 物理 GPU 5/6，2026-09-26 15:58 UTC
+
+**三个样本窗，每窗 4 条（head 输出相对 `normal` 的 L2 ratio）：**
+
+| 样本窗 | zero_z head | shuffle_z head | prior_only head | zero_z feat | shuffle_z feat | prior_only feat |
+|---|---:|---:|---:|---:|---:|---:|
+| `[3,4,5,6]`（offset 0） | 0.021387 | **0.000097** | **0.000650** | 0.180370 | 0.000969 | 0.007608 |
+| `[100,101,102,103]`（offset 2） | 0.019556 | **0.000052** | **0.000640** | 0.184483 | 0.000286 | 0.008098 |
+| `[1800,1801,1802,1803]`（offset -1） | 0.024875 | **0.000088** | **0.000661** | 0.139870 | 0.001077 | 0.002162 |
+
+配套动力学量（`normal` 重放的 `stat_*`）：
+
+| 样本窗 | `kl_raw_mean` | `mu_diff²` |
+|---|---:|---:|
+| `[3,4,5,6]` | 0.0270-0.0271 | 0.00215-0.00219 |
+| `[100..103]` | 0.0252-0.0260 | 0.00194-0.00209 |
+| `[1800..1803]` | 0.0235-0.0242 | 0.00153-0.00164 |
+
+**与旧探针的差异（同为 `[3,4,5,6]`）：**
+
+| 探针 | zero_z head | shuffle_z head | prior_only head |
+|---|---:|---:|---:|
+| 旧（hook `output_proj`/`decoder`；本节新工具在旧代码上跑） | 0.021387 | 0.000097 | 0.000650 |
+| 第 49 节旧工具在 no2d_igdr 上（另一权重，不可直接比） | 0.3802 | 0.0467 | 0.0587 |
+
+低维变体的数值在两套 hook 位置下**恰好一致**，因为该变体的 z 本来就主要通过 residual/FiLM
+路径起作用，而这条路径在旧实现里被覆盖到；真正被旧实现漏掉的是写回 `z_state` 和 gate
+那部分。这也解释了为什么旧工具在 no2d_igdr 上得到的是「zero 0.38 / shuffle 0.047」
+这类偏温和的数——标准变体的 z 有相当一部分作用经 `z_state` 递归到后续帧，单帧
+hook 拿不到。
+
+**修正探针在标准 RSSM 上的对照（no2d_igdr seed0 ep14，`[3,4,5,6]`）：**
+
+| 变体 | feat ratio | head ratio |
+|---|---:|---:|
+| zero_z | 0.825313 | 0.380213 |
+| shuffle_z | 0.167877 | 0.046724 |
+| prior_only | 0.160151 | 0.058739 |
+
+与第 49.2 节旧工具给出的 `0.8253 / 0.3802 / 0.1679 / 0.0467 / 0.1602 / 0.0587`
+**逐位一致**，说明修正后的探针是旧工具的严格超集（旧路径全部保留），而非换了一套口径。
+
+#### 51.2.1 判读
+
+ep12 落在「**zero 高、shuffle 低**」这一格：关掉 z 会让 head 变 2%，但换成另一个样本的
+posterior mean 只变 0.0097%，用先验均值也只变 0.065%。也就是说 z 的因果作用几乎完全是
+一个**与样本无关的公共偏置**，检测头无法从 z 读出「这是哪个样本」。第 50.6 节基于
+`clamped_ratio`/`mu_diff²` 的推断由此获得直接的因果证据。
+
+### 51.3 结构修复（commit `dd2fb75`）
+
+按 50.6.7 的对照表，一次落地两项，不做残缺的中间正式实验：
+
+```
+h_t   = ConvGRU(pool(z_{t-1}), pool(h_{t-1}))      # 保留
+p(z_t) = prior(h_t)                                 # 修正：原来是 prior(z_prev)
+q(z_t) = posterior(cat[h_t, e_pooled])              # 修正：原来是 posterior(cat[z_prev, e_pooled])
+recon  = decoder(cat[h_t, z_t]) -> target          # 新增：pooled 且逐样本标准化的当前帧 BEV
+```
+
+**重建设计**（保持 `z: 32×16×16`，不上采样到完整 BEV）：
+
+- `decoder input: cat(h_t, z_t)` = 64×16×16；`Conv 64→128→256`（`ConvModule` + 3×3 conv）。
+- target：`adaptive_pool(feat.detach(), 16×16)` 后按样本做 zero-mean/unit-std 标准化。
+  标准化是必要的——不归一化时原始 BEV 尺度过大，重建项会支配检测损失（与 50.6 中 future
+  任务的处理一致）。`latent_pool='global'` 或 `latent_size < 2` 时构造期直接报错，
+  因为此时标准化后的 target 退化为常数、重建无意义。
+- loss：`F.mse_loss(reconstruction, target)`，`recon_loss_weight=0.1`。
+- **总目标**：`L_latent = KL + 0.1 * L_recon + 0.1 * L_future`，全部折进返回 tuple 的
+  index 2（`latent_loss_is_primary=True` 的既有契约），index 1 保持 `None`，避免 detector
+  侧再拿一个 16×16 的 recon 去和全分辨率 BEV 算一次 MSE 而重复计账。
+
+**新增/保留的诊断键**（全部不得含 `loss` 子串，否则会被 `_parse_losses()` 误加进总损失）：
+
+| 键 | 含义 |
+|---|---|
+| `stat_recon_mse` | 新增：观测似然项 |
+| `stat_future_mse` | 保留：下一帧 BEV 一致性 |
+| `stat_kl_raw_mean` | 保留：钳制前 KL |
+| `stat_clamped_ratio` | 保留：被 free-bits 钳掉的比例 |
+| `stat_mu_diff_sq` | 保留：`(mu_q - mu_p)²` 均值 |
+| `stat_posterior_std` / `stat_prior_std` | 保留：两侧 std 均值 |
+
+新增单测：重建项存在且可反传（`posterior_mu.weight.grad` 与 `decoder[1].weight.grad` 均非零）、
+`recon` 折叠进 index 2 时 index 1 仍为 `None`、零化 `z_state` 后换不同观测必须改变 `mu_q`
+（证明 prior/posterior 确实吃 `h_t` 而非 `z_prev`）。RSSM 全量单测 **31 条通过**。
+
+### 51.4 机制门控
+
+#### 51.4.1 第 1 道：100 iter 接口/显存/梯度冒烟
+
+config：`me_rssm/sanity/lowdim_z_smoke_100iter.py`；work_dir：`/tmp/lowdim_recon_smoke`；
+GPU 5/6/7，DDP 3×2 samples/GPU。
+
+| iter | `loss_rssm_latent` | `stat_recon_mse` | `stat_future_mse` | `stat_kl_raw_mean` | `stat_clamped_ratio` | `stat_mu_diff_sq` | memory |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 50 | 0.4532 | 1.1750 | 1.0411 | 0.2040 | 0.5267 | 0.0162 | 21116 MiB |
+| 100 | 0.3752 | 1.1164 | 1.0207 | 0.1228 | 0.6347 | 0.0100 | 21116 MiB |
+
+接口、显存、梯度均正常，两个目标项都在下降。
+
+#### 51.4.2 第 2 道：450 iter 确认 recon/future 同时下降
+
+config：`/tmp/lowdim_z_smoke_450iter.py`（同 config，`IterBasedRunner max_iters=450`）；
+work_dir：`/tmp/lowdim_recon_smoke450`。
+
+| iter | `stat_recon_mse` | `stat_future_mse` | `stat_kl_raw_mean` | `stat_clamped_ratio` | `stat_mu_diff_sq` |
+|---:|---:|---:|---:|---:|---:|
+| 50 | 1.1714 | 1.0388 | 0.2012 | 0.531 | 0.01600 |
+| 100 | 1.0613 | 1.0083 | 0.1056 | 0.673 | 0.00870 |
+| 150 | 0.9134 | 0.9820 | 0.0789 | 0.746 | 0.00670 |
+| 200 | 0.7847 | 0.9640 | 0.0637 | 0.801 | 0.00540 |
+| 250 | 0.7209 | 0.9507 | 0.0550 | 0.841 | 0.00470 |
+| 300 | 0.6862 | 0.9380 | 0.0499 | 0.865 | 0.00430 |
+| 350 | 0.6565 | 0.9274 | 0.0479 | 0.875 | 0.00420 |
+| 450 | **0.6420** | **0.9239** | 0.0468 | 0.880 | 0.00410 |
+
+recon `1.1714 → 0.6420`（−45%），future `1.0388 → 0.9239`（−11%），两项同时下降，
+机制门控的条件满足。注意 450 iter 尺度上 `clamped_ratio` 仍在爬（0.53→0.88）、
+`mu_diff²` 仍在压（0.016→0.0041），这与第 50 节负结果的趋势相同；**这些量是否随重建项
+的存在而改变，只能看正式训练，不能由 450 iter 冒烟外推**。
+
+#### 51.4.3 第 3 道：ep6 正式训练 + 冻结反事实诊断
+
+run：`lowdim_z_recon_ht_3x2x2_24e_seed0`
+work_dir：`/data/lurui/work_dirs/lowdim_z_recon_ht_3x2x2_24e_seed0`
+config：`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z.py`
+（`recon_loss_weight=0.1`，代码 `dd2fb75`）
+
+2026-09-26 16:27 UTC 启动，GPU 5/6/7，3×2 × 24e。按方案在 ep6 做完新 z 反事实诊断
+（`shuffle_z` head 是否从 0.000097 提到 ≥0.10、`prior_only` 是否明显高于 0.00065、
+recon 是否持续下降、raw KL 是否有限、`mu_diff²` 是否不再单调压向 0）后再决定继续到
+ep12-16 还是止损。**本节随该 run 的结果补完；在 ep6 诊断落地前，该配置不下任何性能结论。**
+
+#### 51.4.4 后续 AP 止损口径（预先登记）
+
+- ep8-12 五轮均值低于 no2d_igdr 同窗口基线超过 **2 点** → 停止；
+- 恢复到基线 **−1.0 以内** → 继续跑到 ep16；
+- 最终仍按 ep12-16 五轮均值 + 全轮峰值（含 epoch）记录，best saved 单列。
+
+### 51.5 尚未做的 KL 口径改动
+
+按方案，KL balancing / free-bits 退火排在第 3 道门控之后，本节**未改动**任何 KL 逻辑。
+待结构有效性确认后再评估：
+
+- 用 stop-gradient 拆分而非直接照搬系数：
+  `L_dyn = KL(sg(q) || p)`（训练 prior）、`L_rep = KL(q || sg(p))`（轻量约束 posterior）；
+  适配建议为 `beta_dyn=1.0`、`beta_rep=0.1`。
+- free-bits 不再逐元素 `0.1`：先沿 channel 求和得到每个 16×16 cell 的 KL，再施加
+  ~1.0 nat/cell 阈值；先固定不退火，结构有效但后期不稳时再考虑退火。
+
+理由：KL balancing 只决定 prior/posterior 互相追的方式，不能创造缺失的观测信息。
+先确认 z 确实携带样本信息，再调这一层。
