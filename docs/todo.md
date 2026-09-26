@@ -11,14 +11,21 @@
 ## 训练效率
 
 1. 加快每个 epoch 的 validation（当前约 61 min/epoch，其中 val 前向 ~10 min / IoU+eval ~1 min / ckpt ~1.6 min）。
-   - 零风险项：把 `evaluation.interval` 从 1 改成 2（与 `checkpoint_config.interval=2` 对齐）。奇数 epoch 的 val 本来就没有落盘权重、进不了 BEST，改动后每个保留点的数值完全不变，只是 ep12-16 窗口从 5 点变 3 点。**未执行**，seed1 仍在按 interval=1 跑。
-   - val batch size（GPU4 实测 2026-09-23）：bs=1 只占 1.64 GiB、利用率 41-75%，显存有大量余量；但 **bs>1 当前跑不通**，不是 OOM，是两个代码路径问题：
-     - `Base3DDetector.forward_test` 把 batch 维与 test-time-augmentation 维混淆，bs>1 被误路由到 `aug_test()`，报 `aug_test() got an unexpected keyword argument 'gt_bboxes_3d'`。
-     - 绕过 dispatch 强制走 `simple_test` 也在 `R4Det.py:1105` 越界：collate 出的是 `img=[B,N,3,H,W]`（batch 在前），而该行按 `[frame][batch]` 取 `meta[t]`。
-     - `R4Det.simple_test` 注释里的「Test runs with batch≥1」与 train.py 的「Support batch_size > 1 in validation」目前只是声明，实际未实现。
-   - 理论判断（待实测确认）：eval 路径 batch 化不应改准确率——`model.eval()`（`mmdet/apis/test.py:22/100`）、BN 走 running stats 且 backbone `norm_eval=True`/`frozen_stages=1`、RSSM 的 `h_state/z_state` 是按 `[B,...]` 逐样本维护、eval 走 `deterministic=True`（`z_t=mu_q`，不采样无随机数）、无 TTA、NMS 逐样本、该 config 无 2D 分支。
-   - 两个必须先解决的风险：(a) 要真改 `R4Det.forward_test`（aug_test 误路由 + 帧/批次维转置），写错会静默改结果；(b) 多 batch 下点云 voxelization 的 padding 需实测确认无 batch 间串扰。
-   - 验收方式：同一 checkpoint 上跑 bs=1 vs bs=2，逐样本 diff 预测框并比 AP，数值一致才可启用。
+   - **val batch size 已做（2026-09-26 完成）**：`R4Det.forward_test`/`simple_test`/`simple_test_pts`/
+     `preprocessing_information` 的 batch 支持在 `a18f966` 落地，`data.val.samples_per_gpu` 提到 4（`b250e0d`）。
+     完整 2040 样本 A/B：峰值 2.36/3.11/5.92 GiB、Overall 3D mod 38.4516/38.4947/38.5420；
+     速度用交错测量 bs=1/2/4 → 271.8/238.6/230.9 ms/sample（1.14x/1.18x）。
+     退回产生 ep16 的修订（`c0c53ba`）后同 harness 得到逐位相同的
+     3D/BEV 数字，且无 batch 间串扰、DDP per-rank 顺序不变。详见 `docs/training_runs_full.md` 第 51 节。
+     **结论：等效但收益有限**（纯前向 1.06x、端到端 workers=2 时 1.18x）。bs=6 OOM，故 4 为上限。
+   - **真正的瓶颈是 dataloader，不是 batch size**：loader 单独耗时 workers=2/4/8 =
+     111.2/59.9/34.1 ms/sample，占端到端约一半。下一步优先调 `workers_per_gpu` 2→4（约省 51 ms/sample），
+     并注意 worker 增加会与训练侧抢 CPU（实测 workers=8 端到端反而回落到 1.14x）。
+   - 零风险项（仍未执行）：把 `evaluation.interval` 从 1 改成 2（与 `checkpoint_config.interval=2` 对齐）。
+     奇数 epoch 的 val 本来就没有落盘权重、进不了 best saved，改动后每个保留点的数值完全不变，
+     只是 ep12-16 窗口从 5 点变 3 点。当前 run 仍在按 interval=1 跑。
+   - 附注：离线 eval harness 比训练内 EvalHook 低约 2.2 个 3D 点（2D 完全一致），原因未追，见第 51.5 节。
+     横向对照请统一只用一种来源。
    - 口径约束：若启用，seed1 与 seed2 会跑在不同代码/config 版本上；最稳做法是 seed1 跑完后、seed2 起跑前改，并在 `training_runs_full.md` 记录该差异。
 
 ## 方法探索

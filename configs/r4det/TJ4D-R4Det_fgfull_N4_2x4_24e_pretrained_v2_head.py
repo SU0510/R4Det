@@ -273,13 +273,16 @@ data = dict(
     # tensor.  R4Det.forward_test/simple_test/preprocessing_information and
     # _build_bev_instance_map (IGDR) handle that layout for any B.
     #
-    # Verified on the full 2040-sample val split, same checkpoint, same code:
-    #   bs=1: 294.6 ms/sample, peak 2.36 GiB, 3D mod 38.4516, BEV mod 45.8789
-    #   bs=2: 333.9 ms/sample, peak 3.11 GiB, 3D mod 38.4947, BEV mod 45.9299
-    #   bs=4: 285.0 ms/sample, peak 5.92 GiB, 3D mod 38.5420, BEV mod 45.8670
+    # Verified on the full 2040-sample val split, same checkpoint, same code
+    # (AP and peak GPU are stable across the three separate runs):
+    #   bs=1: peak 2.36 GiB, 3D mod 38.4516, BEV mod 45.8789
+    #   bs=2: peak 3.11 GiB, 3D mod 38.4947, BEV mod 45.9299
+    #   bs=4: peak 5.92 GiB, 3D mod 38.5420, BEV mod 45.8670
     # AP moves are within run-to-run noise; no batch cross-talk (a sample's
     # output is bit-identical when its batch partners change).  bs=1 numbers
     # stay bitwise reproducible, so already-recorded val points remain valid.
+    # Speed (interleaved, workers=2): bs=1/2/4 = 271.8/238.6/230.9 ms/sample
+    # => 1.14x/1.18x.  Val stays dataloader-bound, so this is a modest win.
     # NOTE: bs>4 is not used - bs=6 OOMs and nothing above 4 was faster.
     val=dict(samples_per_gpu=4),
 )

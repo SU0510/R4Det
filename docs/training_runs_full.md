@@ -6384,3 +6384,93 @@ ep4 无 val 记录（训练被终止）。该 run 目录已重命名加 `_INVALI
 均值，不能据此判断该设计有效或无效。修复后的 24e 正式训练已重新启动，待其跑完后在本节补：
 ep12-16 区间均值、全轮峰值（值+epoch）、best saved、完整逐 epoch 曲线、逐类别拆解，
 以及与 no2d_igdr 三 seed 基线（ep12-16 `40.4400 ± 1.3475`）的对照。
+
+---
+
+## 51. Validation batch size 4 的实现与等效性验证（2026-09-26）
+
+### 51.0 摘要
+
+本节是**工具链/验证记录，不是训练 run**：没有新模型，也不产生 AP 主表行，因此按口径说明
+没有「区间均值 / 全轮峰值 / best saved」三项。唯一产出是把 val 的 `samples_per_gpu` 从 1
+提到 4（commit `b250e0d`），并用同一 checkpoint 证明该改动不改变准确率。
+
+### 51.1 改的是什么
+
+`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head.py` 的 `data.val` 增加
+`samples_per_gpu=4`。该 config 被三个子 config 继承（`_no2d_igdr`、`_no2d_igdr_lowdim_z`、
+`_temporal_baseline`），因此四个 run 共同受益。`mmdet3d/apis/train.py:295-303` 会 pop 这个
+键，并在 >1 时把 val pipeline 的 `ImageToTensor` 换成 `DefaultFormatBundle`，使整批序列
+collate 成单个 `[B, N, C, H, W]` 张量；val batch 数因此从 2040 降到 510。
+
+detector 侧原先不支持这一点：`Base3DDetector.forward_test` 用 `len(points)` 推断 TTA 轴，
+bs>1 被误路由到 `aug_test()`；`simple_test`/`simple_test_pts` 又按帧优先索引 `img_metas`。
+这些在 commit `a18f966` 已修好（新增 `R4Det.forward_test`，`simple_test` 改为
+instance-major 归一化 + 帧优先切片，`preprocessing_information` 的 eval 分支改为对 B 向量化）。
+
+### 51.2 等效性证据
+
+全部在同一 checkpoint 上比较，`fgfull_N4_2x4_24e_seed0/epoch_16.pth`，完整 2040 样本 val。
+AP 与峰值显存在三次独立运行间稳定；**ms/sample 受同卡其他任务干扰波动很大**，三次测得
+bs=1 ≈ 295-322、bs=2 ≈ 334、bs=4 ≈ 285，因此速度结论一律以 51.4 的交错测量为准，
+不要用本表单次 ms/sample 做判断：
+
+| val bs | peak | Overall 3D mod | Overall BEV mod |
+|---:|---:|---:|---:|
+| 1 | 2.36 GiB | 38.4516 | 45.8789 |
+| 2 | 3.11 GiB | 38.4947 | 45.9299 |
+| 4 | 5.92 GiB | 38.5420 | 45.8670 |
+
+AP 变动（3D +0.09、BEV -0.01）在 run 间噪声量级内；逐样本 top-N 中心距 bs=1 vs bs=4：
+median 0.0024 m、p95 0.0383 m、95.5% 在 5 cm 内。
+
+**「bs=1 数值是否被这次重写改动」有独立证据**：把 detector 退回产生 ep16 的修订
+（`c0c53ba`，该修订与 ep16 运行时的 `R4Det.py`/`rssm_fusion.py` 完全一致）在同样 400 样本
+子集上跑，得 Overall 3D mod `17.0758` / BEV mod `20.7207`；当前代码在同一子集上得到
+**逐位相同**的 `17.0758` / `20.7207`，且训练日志里 ep16 的 2D AP（`42.3523`）也能精确复现。
+因此 batch 重写本身对 bs=1 是中性的，已记录的 val 点仍然有效。
+
+### 51.3 无 batch 间串扰
+
+- 把同一样本的一对副本放进一个 bs=2 batch，输出逐位相同；换掉配额伙伴（A+B / A+C /
+  A+B+C）后 A 的输出仍逐位不变。
+- `voxelize`：样本 0 在 bs=2 中拿到的 voxel 与 `num_points` 与 bs=1 逐位相同。
+- 分布式结果顺序：`collect_results_cpu` 是按 rank 逐个 zip 重建全局顺序，因此要求每个 rank
+  的 per-sample 顺序不随 batch 变。对真实配置（2040 样本 / 3 rank）验证，bs=1/2/4/8 下
+  每个 rank 的展平样本序列完全一致（rank 切片为 stride=3）。
+
+### 51.4 速度：收益有限，val 的瓶颈是 dataloader
+
+必须在 bs>1 的收益上保持诚实——它**不是**那个大杠杆：
+
+- 纯前向（预 collate、交错测量、`cudnn.deterministic=True`）：bs=1/2/4 = 267.1 / 256.2 /
+  251.5 ms/sample，即 1.04x / 1.06x。
+- 端到端（dataloader + 前向，交错，workers=2，即真实训练的 worker 数）：bs=1/2/4 =
+  271.8 / 238.6 / 230.9 ms/sample，即 1.14x / 1.18x。
+- dataloader 单独（不含前向）：workers=2 / 4 / 8 = 111.2 / 59.9 / 34.1 ms/sample。
+  即 loader 本身就是 111 ms/sample，占端到端约一半，batch size 只压 GPU 那一半。
+- 结论：想再快应优先调 `workers_per_gpu`（2→4 约省 51 ms/sample）或把
+  `evaluation.interval` 1→2（零风险，见 `docs/todo.md`「训练效率」）；bs>1 只省 GPU 侧。
+
+**真实训练内实测**（3 rank，val+IoU/eval 的整段墙钟，取每个 run 的前几个 epoch 中位数）：
+
+| run | val bs | batches/rank | val+eval 墙钟 |
+|---|---:|---:|---:|
+| `fgfull_N4_2x4_24e_seed0` | 1 | 680 | 12.2 min（仅 ep1-2 可测） |
+| `no2d_igdr_2x4_24e_seed0` | 1 | 680 | 10.9 min（23 个 epoch 中位） |
+| `no2d_igdr_2x4_24e_seed1` | 1 | 680 | 11.2 min（21 个 epoch 中位） |
+| `lowdim_z_future_consistent_3x2x2_24e_seed0` | 2 | 340 | 10.2 min（ep1-2） |
+
+即真实 harness 下 bs=1 → bs=2 每个 epoch 省约 0.7-1.0 min（约 8%）。
+
+### 51.5 上限与风险
+
+- bs=6 OOM（RSSM loss 附近约 1.5 GiB/sample）；bs=4 峰值 5.85-5.92 GiB，在 24 GiB 卡上安全。
+  bs=4 以上未测到更快，故取 4 为上限。
+- 口径约束（已在 47/48 节记为 seed1/seed2 差异）：`fgfull` 与 `no2d_igdr` 的 seed0/seed1
+  val 点由 bs=1 代码产出；从本节起新启动/续跑的 run 走 bs=4。由于 51.2 已证明等效，
+  已有数字不必重算，但记录里应注明该 config 版本差异。
+- 本次实测的 bs=1 AP（38.4516）与训练日志 ep16 的 40.6924 有约 2.2 的固定差，且 2D AP
+  完全一致（42.3523）。该差异在退回 `c0c53ba` 后同样存在，**不是** batch 改动引入的；
+  疑为离线 eval harness（`ds.evaluate` 直接调用、无 `evaluation.pipeline`）与训练内
+  EvalHook 的差异，本次未继续追。因 51.2 已用同 harness 做了 A/B，等效性结论不受影响。
