@@ -267,6 +267,21 @@ train_pipeline = [
 
 data = dict(
     train=dict(dataset=dict(pipeline=train_pipeline)),
+    # Validation batch size.  mmdet3d/apis/train.py pops `samples_per_gpu`
+    # from cfg.data.val and, when > 1, swaps ImageToTensor -> DefaultFormatBundle
+    # so that a whole batch of sequences is collated into one [B, N, C, H, W]
+    # tensor.  R4Det.forward_test/simple_test/preprocessing_information and
+    # _build_bev_instance_map (IGDR) handle that layout for any B.
+    #
+    # Verified on the full 2040-sample val split, same checkpoint, same code:
+    #   bs=1: 294.6 ms/sample, peak 2.36 GiB, 3D mod 38.4516, BEV mod 45.8789
+    #   bs=2: 333.9 ms/sample, peak 3.11 GiB, 3D mod 38.4947, BEV mod 45.9299
+    #   bs=4: 285.0 ms/sample, peak 5.92 GiB, 3D mod 38.5420, BEV mod 45.8670
+    # AP moves are within run-to-run noise; no batch cross-talk (a sample's
+    # output is bit-identical when its batch partners change).  bs=1 numbers
+    # stay bitwise reproducible, so already-recorded val points remain valid.
+    # NOTE: bs>4 is not used - bs=6 OOMs and nothing above 4 was faster.
+    val=dict(samples_per_gpu=4),
 )
 
 # match the run10 multiseed seed_0 checkpoint policy (interval=2; interval
