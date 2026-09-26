@@ -6306,3 +6306,81 @@ clean 主线对应样本的 `stat_kl_raw_mean` 约 0.586-0.595，`stat_mu_diff_s
 4. **categorical/unimix 后置。** 只在低维 z 仍表现出多峰或离散切换表达不足时引入。
 
 本节只做冻结诊断，没有训练新模型，因此没有区间均值或全轮峰值；不更新任何 AP 主表。
+
+---
+
+## 50. 低维 future-consistent latent 的实现与接线修复（2026-09-25/26）
+
+### 50.0 摘要
+
+按 49.5 的下一步设计实现了 `LowDimFutureConsistentLatentFusion`（16x16x32 粗空间 latent +
+ConvGRU + FiLM/gate + 下一帧 BEV 一致性任务），但在首次正式训练跑到 ep4 时发现 detector
+侧解包接线错误：**KL 与 future 任务从未获得梯度，该 run 的 ep1-4 结果全部作废**。本节的
+ep1-4 数字只作为 bug 证据保留，不参与任何性能对照。
+
+修复后已重新启动 24e 正式训练（同一 work_dir 名
+`lowdim_z_future_consistent_3x2x2_24e_seed0`，代码版本 `f5d900f`）。本节暂不给出区间均值 /
+全轮峰值，待该 run 跑完后补齐。
+
+### 50.1 作废 run（`lowdim_z_future_consistent_3x2x2_24e_seed0_INVALID_loss_wiring_bug`）
+
+配置：`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z.py`，
+3 GPU（5/6/7），seed 0，deterministic，24e 计划，实际跑到 ep4 中途人工终止。
+
+逐 epoch val（Overall 3D moderate / BEV moderate / Car strict；仅作 bug 证据，不可用于对照）：
+
+| epoch | Overall 3D mod | Overall BEV mod | Car 3D strict |
+|---|---|---|---|
+| 1 | 18.8723 | 25.4342 | 25.5371 |
+| 2 | 27.4673 | 34.2955 | 35.4946 |
+| 3 | 28.5887 | 36.1454 | 37.4819 |
+
+ep4 无 val 记录（训练被终止）。该 run 目录已重命名加 `_INVALID_loss_wiring_bug` 后缀，
+避免后续误用其 `epoch_2.pth`。
+
+### 50.2 根因：六元组解包把 `z_t` 当成了 loss
+
+`LowDimFutureConsistentLatentFusion.forward` 的返回契约是
+`(output, recon=None, latent_loss, h_t, z_t, stats)`，其中 index 2 是已合并的
+`kl * kl_scale + future_loss_weight * future_loss`。detector 沿用了旧 RSSM 的布局
+`(output, recon, kl, h_t, z_t, stats)`，于是：
+
+- index 2 被丢弃 → KL 与 future 一致性都没有梯度；
+- index 4（`z_t`）被当作 `loss_rssm_latent` 回传 → 网络直接最小化 latent 均值。
+
+日志特征与该诊断完全一致：`loss_rssm_latent` 从 -0.17 单调降到 -51（这是 `z_t` 的均值而非
+任何散度），`stat_future_loss` 四个 epoch 死钉在 2.05 附近（无梯度），`stat_kl_raw_mean`
+从 1.4 无约束涨到 36k、`stat_mu_diff_sq` 从 0.11 涨到 2.7k（posterior 相对 prior 自由漂移）。
+
+### 50.3 同批发现并一并修复的四个问题
+
+1. **未来任务方向反了。** 原实现在 frame t 用 `z_t` 去拟合 `bev_{t-1}`，即预测刚编码过的
+   过去帧；posterior 可从当前 `e_t` 直接抄出答案，任务不具排他性。改为 frame t 产出预测、
+   frame t+1 才用该帧 BEV 评分（`pending_future_pred` 跨调用携带），符合 49.5 第 2 条。
+2. **KL 被二次归一化。** `kl_effective.mean()` 已是逐元素均值，又除了一次
+   `latent_dim * 16 * 16 = 8192`，正则强度被削弱三个数量级。已去掉多余除法。
+3. **有效性掩码未广播。** 未来损失的 mask 形状是 `(B,1,1,1)`，直接 `sum()` 只数样本数、
+   不数空间格点，使 MSE 被放大约 128 倍（实测 ep1 显示 213 而非 ~1.7）。已
+   `expand_as(target)` 后再求均值。
+4. **`stat_future_loss` 名字含 `loss` 子串。** mmdet `_parse_losses` 会把所有名字含
+   `'loss'` 的项求和进报告的总 loss，诊断量因此污染训练曲线。已改名 `stat_future_mse`。
+
+另外让 latent 目标覆盖折叠窗口内的每一帧（此前只有当前帧参与），并新增
+`latent_loss_is_primary` 能力标志，使 detector 不再靠返回位置猜测语义——旧 RSSM 变体
+（index 2 是裸 KL）行为保持不变。
+
+### 50.4 修复验证
+
+- 单测：`python -m unittest mmdet3d.models.fusion_layers.test_rssm_fusion` 29 passed，
+  含新增的返回契约、延迟一帧评分、空间均值归一化三组回归测试。
+- 450 iter 冒烟（`/tmp/lowdim_smoke_fix2`）：latent loss 0.096 → 0.062，KL raw 0.75 → 0.39，
+  future MSE 0.88 → 0.57，总 loss 4.11 → 2.33。三项同时下降且 KL 不再膨胀，说明 KL 与
+  future 任务确实进入了梯度。
+- 代码提交：`f5d900f fix: route lowdim latent loss to the correct tuple slot`。
+
+### 50.5 结论与下一步
+
+低维 bottleneck + 排他未来任务这条路线此前**尚未被真正训练过**——作废 run 优化的是 latent
+均值，不能据此判断该设计有效或无效。修复后的 24e 正式训练已重新启动，待其跑完后在本节补：
+ep12-16 区间均值、全轮峰值（值+epoch）、best saved、完整逐 epoch 曲线、逐类别拆解，
+以及与 no2d_igdr 三 seed 基线（ep12-16 `40.4400 ± 1.3475`）的对照。
