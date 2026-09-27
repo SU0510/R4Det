@@ -1062,6 +1062,9 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         recon_input_mode='state_latent',
         direct_correction_readout=False,
         readout_mode='film',
+        posterior_obs_mode='l2',
+        posterior_obs_scale=0.1,
+        z_proj_init='small',
         modulation_scale=0.1,
         gate_init_bias=-1.0,
         norm_cfg=dict(type='BN', requires_grad=True),
@@ -1120,6 +1123,19 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             raise ValueError(
                 "readout_mode='spatial' requires latent_pool='adaptive'")
         self.readout_mode = readout_mode
+        if posterior_obs_mode not in ('l2', 'scaled_raw'):
+            raise ValueError(
+                "posterior_obs_mode must be 'l2' or 'scaled_raw'")
+        if posterior_obs_scale <= 0:
+            raise ValueError('posterior_obs_scale must be > 0')
+        self.posterior_obs_mode = posterior_obs_mode
+        self.posterior_obs_scale = posterior_obs_scale
+        if z_proj_init not in ('small', 'xavier'):
+            raise ValueError("z_proj_init must be 'small' or 'xavier'")
+        if z_proj_init == 'xavier' and readout_mode != 'spatial':
+            raise ValueError(
+                "z_proj_init='xavier' requires readout_mode='spatial'")
+        self.z_proj_init = z_proj_init
         if self.recon_loss_weight > 0 and (
                 self.latent_pool == 'global' or min(self.latent_size) < 2):
             # The recon target is standardized across each sample, so a 1x1
@@ -1267,12 +1283,19 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         nn.init.constant_(self.prior_logstd.bias, bias_value)
         nn.init.constant_(self.posterior_logstd.bias, bias_value)
         if self.readout_mode == 'spatial':
-            # Keep the detection residual near identity at init while leaving
-            # a non-zero gradient path for both streams. h_proj starts at the
-            # same small scale, so neither branch is structurally privileged.
-            for module in (self.h_proj, self.z_proj):
-                nn.init.normal_(module.weight, std=0.01)
-                nn.init.zeros_(module.bias)
+            # h_proj stays small so the detection residual starts near
+            # identity. z_proj follows `z_proj_init`: 'small' keeps the
+            # historical std=0.01, 'xavier' restores the same scale the other
+            # 1x1/3x3 projections in this class receive (for a 32->256 1x1
+            # this is ~8-10x larger than std=0.01).
+            nn.init.normal_(self.h_proj.weight, std=0.01)
+            nn.init.zeros_(self.h_proj.bias)
+            if self.z_proj_init == 'xavier':
+                xavier_init(self.z_proj, distribution='uniform')
+                nn.init.zeros_(self.z_proj.bias)
+            else:
+                nn.init.normal_(self.z_proj.weight, std=0.01)
+                nn.init.zeros_(self.z_proj.bias)
         else:
             nn.init.zeros_(self.film_proj.bias)
             nn.init.zeros_(self.gate_proj.bias)
@@ -1323,6 +1346,23 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         target_std = target.std(
             dim=(1, 2, 3), keepdim=True).clamp_min(1e-4)
         return (target - target_mean) / target_std
+
+    def _posterior_observation(self, e_pooled_raw):
+        """Prepare the observation encoding fed to the posterior.
+
+        ``l2`` is the historical behaviour: per-sample channel-wise L2
+        normalization. Its denominator is dominated by the batch-common
+        component (measured: 1.90 RMS common vs 0.53 sample-specific), so it
+        divides away most of the sample identity along with the scale.
+
+        ``scaled_raw`` applies one global scalar instead. A single shared
+        factor rescales the magnitude without touching the relative
+        differences between samples, which is what the probes showed is being
+        lost.
+        """
+        if self.posterior_obs_mode == 'scaled_raw':
+            return e_pooled_raw * self.posterior_obs_scale
+        return F.normalize(e_pooled_raw, dim=1)
 
     def _constrained_logstd(self, logstd):
         logstd = self.min_logstd + F.softplus(logstd - self.min_logstd)
@@ -1394,7 +1434,7 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         h_t = self.latent_gru(x, h_t)
 
         e_t = self.encoder(feat)
-        e_pooled = F.normalize(self._pool_latent(e_t), dim=1)
+        e_pooled = self._posterior_observation(self._pool_latent(e_t))
         # Standard RSSM: the prior predicts from the deterministic state and
         # the posterior corrects it with the observation encoding.
         mu_p = self.prior_mu(h_t)

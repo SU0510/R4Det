@@ -761,6 +761,99 @@ class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
             places=4)
 
 
+    def test_posterior_obs_mode_switches_the_normalization(self):
+        """scaled_raw must keep sample-to-sample amplitude differences."""
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        common = dict(
+            in_channels=256,
+            latent_dim=32,
+            hidden_dim=128,
+            latent_size=(4, 4),
+            future_loss_weight=0.0,
+            readout_mode='spatial',
+        )
+        l2 = LowDimFutureConsistentLatentFusion(
+            posterior_obs_mode='l2', **common)
+        scaled = LowDimFutureConsistentLatentFusion(
+            posterior_obs_mode='scaled_raw', posterior_obs_scale=0.1, **common)
+
+        # A batch-common component plus a per-sample offset: L2 normalization
+        # divides by a norm dominated by the common part, while the shared
+        # scalar preserves the relative offsets.
+        base = torch.full((2, 4, 1, 1), 10.0)
+        base[1] += 1.0
+        l2_out = l2._posterior_observation(base)
+        raw_out = scaled._posterior_observation(base)
+
+        self.assertGreater(
+            (raw_out[0] - raw_out[1]).abs().mean().item(), 0.0)
+        # L2 collapses the pair toward the same unit vector.
+        self.assertLess(
+            (l2_out[0] - l2_out[1]).abs().mean().item(),
+            (raw_out[0] - raw_out[1]).abs().mean().item())
+        self.assertAlmostEqual(
+            raw_out[1, 0, 0, 0].item(), 1.1, places=5)
+
+    def test_scaled_raw_scale_must_be_positive(self):
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        with self.assertRaises(ValueError):
+            LowDimFutureConsistentLatentFusion(
+                in_channels=256,
+                latent_dim=32,
+                hidden_dim=128,
+                latent_size=(4, 4),
+                future_loss_weight=0.0,
+                posterior_obs_mode='scaled_raw',
+                posterior_obs_scale=0.0,
+            )
+
+    def test_z_proj_xavier_is_larger_than_small(self):
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        def rms(init):
+            fusion = LowDimFutureConsistentLatentFusion(
+                in_channels=256,
+                latent_dim=32,
+                hidden_dim=128,
+                latent_size=(4, 4),
+                future_loss_weight=0.0,
+                readout_mode='spatial',
+                z_proj_init=init,
+            )
+            return fusion.z_proj.weight.detach().pow(2).mean().sqrt().item()
+
+        small = rms('small')
+        xavier = rms('xavier')
+        self.assertAlmostEqual(small, 0.01, places=3)
+        # xavier_init for 32->256 1x1 gives ~8-10x the small-init scale.
+        self.assertGreater(xavier / small, 5.0)
+        self.assertLess(xavier / small, 20.0)
+
+    def test_z_proj_xavier_requires_spatial_readout(self):
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        with self.assertRaises(ValueError):
+            LowDimFutureConsistentLatentFusion(
+                in_channels=256,
+                latent_dim=32,
+                hidden_dim=128,
+                latent_size=(4, 4),
+                future_loss_weight=0.0,
+                readout_mode='film',
+                z_proj_init='xavier',
+            )
+
+
 class TestSpatialReadoutLatentFusion(unittest.TestCase):
     """Smoke tests for the unpooled spatial detection readout."""
 
