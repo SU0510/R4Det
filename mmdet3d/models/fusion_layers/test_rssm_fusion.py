@@ -761,5 +761,148 @@ class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
             places=4)
 
 
+class TestSpatialReadoutLatentFusion(unittest.TestCase):
+    """Smoke tests for the unpooled spatial detection readout."""
+
+    def setUp(self):
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        self.fusion = LowDimFutureConsistentLatentFusion(
+            in_channels=256,
+            latent_dim=32,
+            hidden_dim=128,
+            latent_pool='adaptive',
+            latent_size=(4, 4),
+            future_loss_weight=0.0,
+            recon_target_mode='temporal_delta',
+            recon_input_mode='posterior_correction',
+            readout_mode='spatial',
+        )
+        self.fusion.eval()
+
+    def test_spatial_mode_drops_pooled_film_modules(self):
+        self.assertIsNone(self.fusion.film_proj)
+        self.assertIsNone(self.fusion.gate_proj)
+        self.assertIsNone(self.fusion.output_proj)
+        self.assertIsNone(self.fusion.correction_output_proj)
+        self.assertIsNotNone(self.fusion.h_proj)
+        self.assertIsNotNone(self.fusion.z_proj)
+
+    def test_spatial_mode_requires_adaptive_pooling(self):
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        with self.assertRaises(ValueError):
+            LowDimFutureConsistentLatentFusion(
+                in_channels=256,
+                latent_dim=32,
+                hidden_dim=128,
+                latent_pool='global',
+                latent_size=(1, 1),
+                future_loss_weight=0.0,
+                readout_mode='spatial',
+            )
+
+    def test_film_mode_keeps_pooled_readout(self):
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        film = LowDimFutureConsistentLatentFusion(
+            in_channels=256,
+            latent_dim=32,
+            hidden_dim=128,
+            latent_pool='adaptive',
+            latent_size=(4, 4),
+            future_loss_weight=0.0,
+            readout_mode='film',
+        )
+        self.assertIsNone(film.h_proj)
+        self.assertIsNone(film.z_proj)
+        self.assertIsNotNone(film.film_proj)
+        self.assertIsNotNone(film.output_proj)
+
+    def test_spatial_output_shape_and_interface(self):
+        feat = torch.randn(2, 256, 8, 8)
+        with torch.no_grad():
+            self.fusion.reset_state()
+            output, recon, latent_loss, h_t, z_t, stats = self.fusion(
+                feat, use_posterior=True, deterministic=True)
+
+        self.assertEqual(output.shape, (2, 256, 8, 8))
+        self.assertEqual(h_t.shape, (2, 32, 4, 4))
+        self.assertEqual(z_t.shape, (2, 32, 4, 4))
+        self.assertIsNone(recon)
+        self.assertTrue(torch.is_tensor(latent_loss))
+        self.assertIn('stat_correction_sq', stats)
+
+    def test_both_spatial_branches_reach_the_detector(self):
+        """Zeroing either projection must change the detection residual."""
+        feat = torch.randn(1, 256, 8, 8)
+        self.fusion.eval()
+        self.fusion.reset_state()
+        # Advance the recurrent state once, then replay the same state for each
+        # readout variant so only the readout weights differ between runs.
+        with torch.no_grad():
+            self.fusion(feat, detach_state=False)
+        state_h = self.fusion.h_state.clone()
+        state_z = self.fusion.z_state.clone()
+
+        def run_with_state():
+            self.fusion.h_state = state_h.clone()
+            self.fusion.z_state = state_z.clone()
+            with torch.no_grad():
+                output, *_ = self.fusion(feat, detach_state=False)
+            return output
+
+        baseline = run_with_state()
+
+        h_weight = self.fusion.h_proj.weight.clone()
+        h_bias = self.fusion.h_proj.bias.clone()
+        z_weight = self.fusion.z_proj.weight.clone()
+        z_bias = self.fusion.z_proj.bias.clone()
+
+        with torch.no_grad():
+            self.fusion.h_proj.weight.zero_()
+            self.fusion.h_proj.bias.zero_()
+            no_h = run_with_state()
+            self.fusion.h_proj.weight.copy_(h_weight)
+            self.fusion.h_proj.bias.copy_(h_bias)
+        self.assertFalse(torch.allclose(baseline, no_h, atol=1e-6))
+
+        with torch.no_grad():
+            self.fusion.z_proj.weight.zero_()
+            self.fusion.z_proj.bias.zero_()
+            no_z = run_with_state()
+            self.fusion.z_proj.weight.copy_(z_weight)
+            self.fusion.z_proj.bias.copy_(z_bias)
+        self.assertFalse(torch.allclose(baseline, no_z, atol=1e-6))
+
+    def test_prior_only_zeroes_the_correction_branch(self):
+        """Without posterior sampling, z_proj must only see its bias."""
+        feat = torch.randn(1, 256, 8, 8)
+        with torch.no_grad():
+            self.fusion.reset_state()
+            self.fusion(feat, use_posterior=True, deterministic=True)
+        state_h = self.fusion.h_state.clone()
+        state_z = self.fusion.z_state.clone()
+        with torch.no_grad():
+            self.fusion.h_state = state_h.clone()
+            self.fusion.z_state = state_z.clone()
+            posterior_out, *_ = self.fusion(
+                feat, use_posterior=True, deterministic=True)
+            self.fusion.h_state = state_h.clone()
+            self.fusion.z_state = state_z.clone()
+            prior_out, *_ = self.fusion(
+                feat, use_posterior=False, deterministic=True)
+
+        # mu_q and mu_p differ, so the correction must be non-zero under the
+        # posterior while the prior-only path disables it entirely.
+        self.assertFalse(torch.allclose(posterior_out, prior_out, atol=1e-6))
+
+
 if __name__ == '__main__':
     unittest.main()

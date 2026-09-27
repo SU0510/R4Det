@@ -1061,6 +1061,7 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         recon_target_mode='current',
         recon_input_mode='state_latent',
         direct_correction_readout=False,
+        readout_mode='film',
         modulation_scale=0.1,
         gate_init_bias=-1.0,
         norm_cfg=dict(type='BN', requires_grad=True),
@@ -1111,6 +1112,14 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         self.recon_target_mode = recon_target_mode
         self.recon_input_mode = recon_input_mode
         self.direct_correction_readout = direct_correction_readout
+        if readout_mode not in ('film', 'spatial'):
+            raise ValueError("readout_mode must be 'film' or 'spatial'")
+        if readout_mode == 'spatial' and latent_pool == 'global':
+            # The spatial readout exists to stop the correction being crushed
+            # into a global vector; a global pool defeats that.
+            raise ValueError(
+                "readout_mode='spatial' requires latent_pool='adaptive'")
+        self.readout_mode = readout_mode
         if self.recon_loss_weight > 0 and (
                 self.latent_pool == 'global' or min(self.latent_size) < 2):
             # The recon target is standardized across each sample, so a 1x1
@@ -1175,13 +1184,27 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             nn.Conv2d(hidden_dim, in_channels, 3, padding=1),
         )
 
-        self.film_proj = nn.Linear(latent_dim, 2 * latent_dim)
-        self.gate_proj = nn.Linear(2 * latent_dim, latent_dim)
-        self.output_proj = nn.Conv2d(latent_dim, in_channels, 1)
-        self.correction_output_proj = (
-            nn.Conv2d(latent_dim, in_channels, 1)
-            if self.direct_correction_readout else None
-        )
+        if self.readout_mode == 'spatial':
+            # Both streams are projected at the latent grid and only then
+            # upsampled, so the correction keeps its 16x16 spatial structure
+            # all the way to the detector instead of being average-pooled into
+            # a global vector and re-broadcast through a scalar gate.
+            self.h_proj = nn.Conv2d(latent_dim, in_channels, 1)
+            self.z_proj = nn.Conv2d(latent_dim, in_channels, 1)
+            self.film_proj = None
+            self.gate_proj = None
+            self.output_proj = None
+            self.correction_output_proj = None
+        else:
+            self.h_proj = None
+            self.z_proj = None
+            self.film_proj = nn.Linear(latent_dim, 2 * latent_dim)
+            self.gate_proj = nn.Linear(2 * latent_dim, latent_dim)
+            self.output_proj = nn.Conv2d(latent_dim, in_channels, 1)
+            self.correction_output_proj = (
+                nn.Conv2d(latent_dim, in_channels, 1)
+                if self.direct_correction_readout else None
+            )
 
         if self.use_future_consistency:
             self.prior_future = nn.Conv2d(
@@ -1213,17 +1236,20 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
 
     def init_weights(self):
         super().init_weights()
-        for module in (
+        xavier_modules = [
             self.prior_mu,
             self.prior_logstd,
             self.posterior_mu,
             self.posterior_logstd,
             self.decoder[0].conv,
             self.decoder[1],
-            self.film_proj,
-            self.gate_proj,
-            self.output_proj,
-        ):
+        ]
+        if self.readout_mode == 'spatial':
+            xavier_modules += [self.h_proj, self.z_proj]
+        else:
+            xavier_modules += [
+                self.film_proj, self.gate_proj, self.output_proj]
+        for module in xavier_modules:
             xavier_init(module, distribution='uniform')
         if self.correction_output_proj is not None:
             xavier_init(
@@ -1240,16 +1266,25 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             self.init_std / self.min_std - 1.0)
         nn.init.constant_(self.prior_logstd.bias, bias_value)
         nn.init.constant_(self.posterior_logstd.bias, bias_value)
-        nn.init.zeros_(self.film_proj.bias)
-        nn.init.zeros_(self.gate_proj.bias)
-        self.gate_proj.bias.data.fill_(self.gate_init_bias)
-        # Keep the detection residual near identity at init, while retaining a
-        # non-zero gradient path from the low-dimensional latent.
-        nn.init.normal_(self.output_proj.weight, std=0.01)
-        nn.init.zeros_(self.output_proj.bias)
-        if self.correction_output_proj is not None:
-            nn.init.normal_(self.correction_output_proj.weight, std=0.01)
-            nn.init.zeros_(self.correction_output_proj.bias)
+        if self.readout_mode == 'spatial':
+            # Keep the detection residual near identity at init while leaving
+            # a non-zero gradient path for both streams. h_proj starts at the
+            # same small scale, so neither branch is structurally privileged.
+            for module in (self.h_proj, self.z_proj):
+                nn.init.normal_(module.weight, std=0.01)
+                nn.init.zeros_(module.bias)
+        else:
+            nn.init.zeros_(self.film_proj.bias)
+            nn.init.zeros_(self.gate_proj.bias)
+            self.gate_proj.bias.data.fill_(self.gate_init_bias)
+            # Keep the detection residual near identity at init, while
+            # retaining a non-zero gradient path from the low-dimensional
+            # latent.
+            nn.init.normal_(self.output_proj.weight, std=0.01)
+            nn.init.zeros_(self.output_proj.bias)
+            if self.correction_output_proj is not None:
+                nn.init.normal_(self.correction_output_proj.weight, std=0.01)
+                nn.init.zeros_(self.correction_output_proj.bias)
         if self.use_future_consistency:
             xavier_init(self.prior_future, distribution='uniform')
             xavier_init(self.posterior_future, distribution='uniform')
@@ -1515,21 +1550,30 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             self.pending_future_pred = None
             self.pending_future_valid = None
 
-        z_global = self.global_pool(z_t).flatten(1)
-        h_global = self.global_pool(h_t).flatten(1)
-        film = self.film_proj(z_global)
-        gamma = 1.0 + self.modulation_scale * torch.tanh(
-            film[:, :self.latent_dim])
-        beta = film[:, self.latent_dim:]
-        gate = torch.sigmoid(self.gate_proj(
-            torch.cat([z_global, h_global], dim=1)))
-        h_modulated = gamma[:, :, None, None] * h_t + beta[:, :, None, None]
-        h_gated = (1.0 - gate[:, :, None, None]) * h_t + \
-            gate[:, :, None, None] * h_modulated
-        latent_residual = self.output_proj(h_gated)
-        if self.correction_output_proj is not None:
-            latent_residual = latent_residual + self.correction_output_proj(
-                posterior_correction)
+        if self.readout_mode == 'spatial':
+            # Both streams stay on the latent grid, so a sample-specific
+            # correction reaches the detector as a spatial residual instead of
+            # being pooled into a global vector and squashed through a gate.
+            latent_residual = (
+                self.h_proj(h_t) + self.z_proj(posterior_correction))
+        else:
+            z_global = self.global_pool(z_t).flatten(1)
+            h_global = self.global_pool(h_t).flatten(1)
+            film = self.film_proj(z_global)
+            gamma = 1.0 + self.modulation_scale * torch.tanh(
+                film[:, :self.latent_dim])
+            beta = film[:, self.latent_dim:]
+            gate = torch.sigmoid(self.gate_proj(
+                torch.cat([z_global, h_global], dim=1)))
+            h_modulated = (
+                gamma[:, :, None, None] * h_t + beta[:, :, None, None])
+            h_gated = (1.0 - gate[:, :, None, None]) * h_t + \
+                gate[:, :, None, None] * h_modulated
+            latent_residual = self.output_proj(h_gated)
+            if self.correction_output_proj is not None:
+                latent_residual = \
+                    latent_residual + self.correction_output_proj(
+                        posterior_correction)
         if latent_residual.shape[-2:] != feat.shape[-2:]:
             latent_residual = F.interpolate(
                 latent_residual,
