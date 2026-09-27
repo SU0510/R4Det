@@ -123,7 +123,8 @@ def main():
         fusion.latent_gru.register_forward_hook(make_hook('h_t')),
         fusion.encoder.register_forward_hook(
             make_hook('e_t', pool=(16, 16))),
-        fusion.posterior_mu.register_forward_hook(make_hook('mu_q')),
+        fusion.posterior_mu.register_forward_hook(
+            make_hook('posterior_head')),
         fusion.prior_mu.register_forward_hook(make_hook('mu_p')),
     ]
     batch_all = build_batch(dataset, idx, 0)
@@ -136,17 +137,45 @@ def main():
     # not L2-normalize, so hard-coding F.normalize here would report the
     # pre-change input for a changed model.
     e_pooled = fusion._posterior_observation(captured['e_t'])
-    mu_q = captured['mu_q']
     mu_p = captured['mu_p']
-    correction = mu_q - mu_p
-
-    with torch.no_grad():
-        mu_q_h_only = fusion.posterior_mu(
-            torch.cat([h_t, torch.zeros_like(e_pooled)], dim=1))
-        mu_q_e_only = fusion.posterior_mu(
-            torch.cat([torch.zeros_like(h_t), e_pooled], dim=1))
+    # Innovation-conditioned posteriors (route B) emit delta_mu from
+    # posterior_mu, so mu_q = mu_p + delta and the correction *is* the delta.
+    # Reading the head output as mu_q would silently report the wrong tensor
+    # for the whole route-B section.
+    is_innovation = getattr(
+        fusion, 'posterior_struct', 'standard') == 'innovation'
+    delta_mu = captured['posterior_head']
+    if is_innovation:
+        mu_q = mu_p + delta_mu
+        correction = delta_mu
+    else:
+        mu_q = delta_mu
+        correction = mu_q - mu_p
 
     w = fusion.posterior_mu.weight.detach().float()
+    innovation_stats = {}
+    if is_innovation:
+        # The whole point of route B: what the posterior actually conditions
+        # on is `e_pooled - stopgrad(obs_prior(h_t))`, not the raw observation.
+        with torch.no_grad():
+            e_hat = fusion.obs_prior(h_t)
+            innovation_map = e_pooled - e_hat
+            obs_pred = F.smooth_l1_loss(e_hat, e_pooled)
+            mu_q_h_only = mu_p + fusion.posterior_mu(
+                torch.cat([h_t, torch.zeros_like(innovation_map)], dim=1))
+            mu_q_e_only = mu_p + fusion.posterior_mu(
+                torch.cat([torch.zeros_like(h_t), innovation_map], dim=1))
+        innovation_stats = {
+            'obs_prior_e_hat': split(e_hat),
+            'innovation': split(innovation_map),
+            'stat_obs_pred': float(obs_pred.item()),
+        }
+    else:
+        with torch.no_grad():
+            mu_q_h_only = fusion.posterior_mu(
+                torch.cat([h_t, torch.zeros_like(e_pooled)], dim=1))
+            mu_q_e_only = fusion.posterior_mu(
+                torch.cat([torch.zeros_like(h_t), e_pooled], dim=1))
     stats = {
         'indices': idx,
         'readout_mode': getattr(fusion, 'readout_mode', 'film'),
@@ -158,6 +187,7 @@ def main():
         'mu_p': split(mu_p),
         'mu_q': split(mu_q),
         'correction': split(correction),
+        'posterior_head_output': split(delta_mu),
         'mu_q_h_only': split(mu_q_h_only),
         'mu_q_e_only': split(mu_q_e_only),
         'posterior_weight_rms_h_half': rms(w[:, :latent_dim]),
@@ -167,6 +197,7 @@ def main():
         'mu_q_removal_of_h_rel_l2': float(
             (mu_q - mu_q_e_only).norm() / mu_q.norm()),
     }
+    stats.update(innovation_stats)
     stats['posterior_obs_mode'] = getattr(
         fusion, 'posterior_obs_mode', 'l2')
     stats['z_proj_init'] = getattr(fusion, 'z_proj_init', None)

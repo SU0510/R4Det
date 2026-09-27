@@ -180,6 +180,85 @@ class TestZIntervention(unittest.TestCase):
             self.assertEqual(intervention.last_z.abs().max().item(), 0.0)
             self.assertEqual(len(fusion._forward_hooks), 0)
 
+    def test_zero_and_shuffle_reach_out4_in_innovation_mode(self):
+        """Route B emits delta_mu from posterior_mu, not mu_q.
+
+        The probe must invert `z = mu_p + delta_mu` when writing the
+        intervention, otherwise `zero_z` leaves `mu_p` behind and the
+        assertion on out[4] fails (or, worse, silently understates the
+        effect). This pins both the inversion and the shuffle round-trip.
+        """
+        try:
+            from mmdet3d.models.fusion_layers.rssm_fusion import (
+                LowDimFutureConsistentLatentFusion,
+            )
+        except AssertionError as exc:
+            self.skipTest(f'mmdet3d ops need CUDA: {exc}')
+
+        fusion = LowDimFutureConsistentLatentFusion(
+            in_channels=8, latent_dim=4, hidden_dim=8,
+            latent_size=(2, 2), recon_loss_weight=0.1,
+            posterior_struct='innovation', posterior_obs_mode='scaled_raw')
+        fusion.eval()
+        feat = torch.randn(2, 8, 6, 6)
+
+        fusion.reset_state()
+        with torch.no_grad():
+            fusion(feat, deterministic=True)
+            normal = fusion(feat, deterministic=True)
+        self.assertFalse(torch.allclose(normal[4], torch.zeros_like(normal[4])))
+
+        for mode in ('zero_z', 'replace_z'):
+            replacement = None
+            if mode == 'replace_z':
+                # A tensor that differs from the batch's own mu_q.
+                replacement = torch.randn_like(normal[4])
+            fusion.reset_state()
+            with ZIntervention(
+                    fusion, mode, 2, replacement_z=replacement) as intervention:
+                with torch.no_grad():
+                    fusion(feat, deterministic=True)
+                    out = fusion(feat, deterministic=True)
+            if mode == 'zero_z':
+                self.assertEqual(out[4].abs().max().item(), 0.0)
+            else:
+                # `mu_p + (desired - mu_p)` is exact only up to float
+                # round-off, unlike the standard structure's direct replace.
+                self.assertTrue(torch.allclose(
+                    out[4].detach(), replacement.detach(),
+                    atol=1e-6, rtol=1e-5))
+            self.assertIsNotNone(intervention.last_z)
+            self.assertEqual(len(fusion._forward_hooks), 0)
+
+    def test_prior_only_leaves_prior_untouched_in_innovation_mode(self):
+        """prior_only must reproduce exactly the plain prior forward."""
+        try:
+            from mmdet3d.models.fusion_layers.rssm_fusion import (
+                LowDimFutureConsistentLatentFusion,
+            )
+        except AssertionError as exc:
+            self.skipTest(f'mmdet3d ops need CUDA: {exc}')
+
+        fusion = LowDimFutureConsistentLatentFusion(
+            in_channels=8, latent_dim=4, hidden_dim=8,
+            latent_size=(2, 2), recon_loss_weight=0.1,
+            posterior_struct='innovation', posterior_obs_mode='scaled_raw')
+        fusion.eval()
+        feat = torch.randn(2, 8, 6, 6)
+
+        fusion.reset_state()
+        with torch.no_grad():
+            fusion(feat, deterministic=True)
+            explicit = fusion(
+                feat, use_posterior=False, deterministic=True)
+        fusion.reset_state()
+        with ZIntervention(fusion, 'prior_only', 2):
+            with torch.no_grad():
+                fusion(feat, deterministic=True)
+                intervened = fusion(feat, deterministic=True)
+        self.assertTrue(torch.equal(
+            explicit[4].detach(), intervened[4].detach()))
+
 
 class TestShuffleSources(unittest.TestCase):
 

@@ -247,6 +247,13 @@ class ZIntervention:
     or the gate is reported as causally inert; that is exactly the failure the
     diagnostic exists to measure, so the probe must sit upstream of all of
     them.
+
+    Innovation-conditioned posteriors (route B) change what ``posterior_mu``
+    emits: there it is the *delta* added on top of ``mu_p``, so ``z_t =
+    mu_p + posterior_mu(...)``. The hook therefore also records ``mu_p``'s
+    output and writes ``desired_z - mu_p`` instead of ``desired_z``, which
+    keeps ``zero_z``/``replace_z`` meaning exactly "set the current-frame
+    latent to this value" for both structures.
     """
 
     def __init__(self, fusion, mode, seq_len, replacement_z=None):
@@ -258,14 +265,38 @@ class ZIntervention:
         self.active = False
         self.original_forward = fusion.forward
         self.hooks = []
+        # In innovation mode posterior_mu outputs delta_mu, so we need mu_p to
+        # invert it. Captured by a read-only hook registered in __enter__.
+        self.last_mu_p = None
         self.last_z = None
         self.last_z_norm = None
+
+    @property
+    def _innovation_structured(self):
+        return getattr(self.fusion, 'posterior_struct', 'standard') == \
+            'innovation'
 
     def _make_hook(self):
         def hook(module, inputs, output):
             if not self.active:
                 return None
-            return self._replace_z(output)
+            desired = self._replace_z(output)
+            if self._innovation_structured:
+                if self.last_mu_p is None:
+                    raise RuntimeError(
+                        'innovation-mode intervention needs mu_p, but the '
+                        'prior_mu hook has not fired')
+                # mu_q = mu_p + delta_mu; emit the delta that produces the
+                # requested z.
+                return desired - self.last_mu_p
+            return desired
+        return hook
+
+    def _make_prior_hook(self):
+        def hook(module, inputs, output):
+            if self.active:
+                self.last_mu_p = output.detach()
+            return None
         return hook
 
     def _replace_z(self, z):
@@ -286,6 +317,7 @@ class ZIntervention:
                          deterministic=True, detach_state=True):
         self.call_idx += 1
         is_current = self.call_idx == self.seq_len - 1
+        self.last_mu_p = None
         self.active = is_current and self.mode in ('zero_z', 'replace_z')
         if is_current and self.mode == 'prior_only':
             use_posterior = False
@@ -309,7 +341,19 @@ class ZIntervention:
                 if self.mode == 'replace_z':
                     expected = self.replacement_z.to(
                         device=out[4].device, dtype=out[4].dtype)
-                    if not torch.equal(out[4].detach(), expected.detach()):
+                    # Innovation mode writes the delta `desired - mu_p`, so
+                    # the returned z is `mu_p + (desired - mu_p)` and carries
+                    # float round-off. Standard mode replaces the value
+                    # outright and stays bit-exact. A failed hook shows up as
+                    # an O(0.1) difference either way, so the loose comparison
+                    # still catches the failure this assertion exists for.
+                    if self._innovation_structured:
+                        ok = torch.allclose(
+                            out[4].detach(), expected.detach(),
+                            atol=1e-6, rtol=1e-5)
+                    else:
+                        ok = torch.equal(out[4].detach(), expected.detach())
+                    if not ok:
                         raise AssertionError(
                             'shuffled z did not propagate to out[4] (z_t)')
             self.last_z = z_t
@@ -332,6 +376,10 @@ class ZIntervention:
             forward_override, self.fusion)
         self.fusion.forward = self._installed_forward
         if self.mode in ('zero_z', 'replace_z'):
+            if self._innovation_structured:
+                self.hooks.append(
+                    self.fusion.prior_mu.register_forward_hook(
+                        self._make_prior_hook()))
             self.hooks.append(
                 self.fusion.posterior_mu.register_forward_hook(
                     self._make_hook()))

@@ -7649,3 +7649,152 @@ raw KL                有界
 **下一步（按用户预登记顺序）**：进入路线 B（Innovation-Conditioned RSSM），
 其成立前提「去 normalize 后 `mu_q` 改善」已由组 4 满足（correction 特异占比 12.11%）；
 `h_t`/`mu_p` 仍接近常量（`mu_p` 特异占比 0.49%），符合路线 B 的触发条件。
+
+---
+
+## 55. 路线 B：Innovation-Conditioned RSSM（2026-09-27）
+
+### 55.0 状态
+
+450 iter 机制冒烟。**无 val 记录**（`evaluation.interval=4500`），因此不填写区间均值、
+全轮峰值或 best saved。本节只回答机制问题：把 `correction` 从「两个公共大向量相减」
+换成模型自己预测的 delta，能否提高 z 的样本判别性。
+
+### 55.1 结构
+
+基线：路线 A 组 4（`..._lowdim_z_delta_spatial_raw_xavier`，2×2 矩阵最优组，
+`e_pooled` 特异 14.19% / correction 12.11%）。
+
+```
+e_hat_t      = obs_prior(h_t)                      # 只由 L_obs_pred 训练
+innovation_t = e_pooled - stopgrad(e_hat_t)
+delta_mu     = posterior_delta(cat([h_t, innovation_t]))
+mu_q         = mu_p + delta_mu
+correction_t = delta_mu                            # 不再是差值
+```
+
+```
+L_obs_pred = smooth_l1(e_hat_t, stopgrad(e_pooled))
+L_total   += 0.05 * L_obs_pred + 0.1 * L_recon
+```
+
+- `obs_prior` 只由观测预测项训练；`stopgrad(e_hat_t)` 保证它不出现在 posterior /
+  重建 / 检测的任何梯度路径上，posterior 因此只看到「h_t 预测不了的那部分观测」。
+- `posterior_mu` 在 innovation 结构下改为输出 `delta_mu`（而非 `mu_q`），
+  `correction` 直接等于该 delta，不再是两个 batch-common 均值之差。
+- **`z_prev` 的 L2 normalize 刻意保留**：按路线规划，这一步单独消融，避免两个变量同时变化。
+- 保留 spatial readout；KL、free-nats、latent 大小、LR 调度不变；`discr_loss_weight=0`。
+
+实现 commit `d354232`。新增参数 `posterior_struct ∈ {standard, innovation}`
+（默认 `standard`，旧行为不变）与 `obs_pred_loss_weight`（默认 0.05，须 ≥0）。
+新增诊断键 `stat_obs_pred`、`stat_innovation_sq`（均不含 `loss` 子串）。
+RSSM 单测 **55 条通过**（新增 10 条：obs_prior 构建、standard 模式无 obs_prior、
+非法 `posterior_struct`/负权重报错、**correction 必须等于 delta 而非 `mu_q−mu_p`**、
+obs_prior 只收观测预测梯度、诊断键上报、两帧反传、六元 tuple 契约、reset 清理）。
+
+**工具适配（同一 commit 后）**：`tools/diagnose_z_utilization.py` 与
+`tools/probe_posterior_source.py` 原本硬编码 `posterior_mu` 输出为 `mu_q`，在 innovation
+结构下会读错张量（或直接触发 `zero_z did not propagate to out[4]` 断言）。
+现两者都检测 `posterior_struct`：反事实干预写入 `desired − mu_p`，来源探针按
+`mu_q = mu_p + delta` 还原并额外报告 `innovation` / `obs_prior_e_hat` 的分解。
+工具单测 **12 条通过**（新增 2 条：innovation 模式下 zero/shuffle 必须落到 `out[4]`、
+`prior_only` 必须与显式 prior 前向逐位一致）。
+
+### 55.2 运行事实
+
+| 项 | 值 |
+|---|---|
+| 配置 | `configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation.py` |
+| 冒烟 | `me_rssm/sanity/lowdim_z_innovation_smoke_450iter.py` |
+| work_dir / 日志 | `/tmp/lowdim_routeB` / `/tmp/lowdim_routeB/run.log` |
+| 硬件 | GPU 5/6/7，3 卡 DDP，seed 0，deterministic |
+| 显存 / 速度 | `7436 MiB` / `1.095 s/iter` |
+| 产物 | `iter_450.pth` |
+
+### 55.3 训练曲线（每 50 iter）
+
+| iter | recon MSE | correction² | innovation² | obs_pred | raw KL | clamped |
+|---:|---:|---:|---:|---:|---:|---:|
+| 50 | 1.2213 | 0.0097 | 0.0100 | 0.0050 | 0.1240 | 0.6488 |
+| 100 | 1.1677 | 0.0070 | 0.0069 | 0.0034 | 0.0884 | 0.7234 |
+| 150 | 1.1348 | 0.0059 | 0.0059 | 0.0030 | 0.0733 | 0.7671 |
+| 200 | 1.1124 | 0.0053 | 0.0054 | 0.0027 | 0.0637 | 0.8002 |
+| 250 | 1.0984 | 0.0047 | 0.0048 | 0.0024 | 0.0561 | 0.8293 |
+| 300 | 1.0907 | 0.0044 | 0.0045 | 0.0022 | 0.0510 | 0.8509 |
+| 350 | 1.0853 | 0.0042 | 0.0043 | 0.0021 | 0.0483 | 0.8632 |
+| 400 | 1.0820 | 0.0041 | 0.0042 | 0.0021 | 0.0469 | 0.8696 |
+| 450 | 1.0812 | 0.0041 | 0.0042 | 0.0021 | 0.0466 | 0.8711 |
+
+`stat_obs_pred` 从 0.0050 单调降到 0.0021（−58%），说明 `obs_prior` 确实在学
+「从 h_t 预测观测编码」；`stat_innovation_sq` 与之同步（残差变小）。
+recon 降幅 −11.5%（1.2213→1.0812，门槛 15%，**未过**）；raw KL 有界（0.0466，通过）。
+
+### 55.4 Source 探针（`stride=700`，indices `[3, 703, 1403]`）
+
+| 张量 | 路线 A 组 4 | 路线 B | 变化 |
+|---|---:|---:|---|
+| `e_pooled` specific | 14.19% | 7.75% | — |
+| `obs_prior_e_hat` specific | — | 1.80% | — |
+| **`innovation` specific** | — | **14.27%** | 高于 `e_pooled` ✅ |
+| `mu_p` specific | 0.49% | 1.71% | +3.5 倍 |
+| `mu_q` specific | 1.79% | **3.93%** | +2.2 倍 |
+| **correction (= delta_mu) specific** | 12.11% | **13.51%** | +1.12 倍 |
+| correction RMS | 0.06579 | 0.05739 | — |
+
+**关键结果**：innovation 的样本特异能量占比（14.27%）确实高于它自己的输入
+`e_pooled`（7.75%），即 `obs_prior` 减掉的那部分主要是**公共**成分，posterior 拿到的
+是经过了筛选的残差。`mu_q` 的特异占比同时翻倍（1.79% → 3.93%），
+说明 delta 结构让 posterior 的输出更倾向于样本身份，而不是被 `mu_p` 的公共底色主导。
+
+### 55.5 反事实诊断（三窗口，各 4 条）
+
+head L2 比值 vs normal：
+
+| 运行 / 窗口 | zero_z | **shuffle_z** | prior_only | **shuffle/zero** |
+|---|---:|---:|---:|---:|
+| 路线 A 组 4 `[3..6]` | 7.044e-3 | 3.136e-4 | 2.036e-3 | 0.045 |
+| 路线 A 组 4 `[100..103]` | 6.881e-3 | 2.681e-4 | 2.100e-3 | 0.039 |
+| 路线 A 组 4 `[1800..1803]` | 6.863e-3 | 2.173e-4 | 2.168e-3 | 0.032 |
+| **路线 B `[3..6]`** | 4.551e-3 | **4.188e-4** | 1.838e-3 | **0.092** |
+| **路线 B `[100..103]`** | 4.496e-3 | **3.941e-4** | 1.848e-3 | **0.088** |
+| **路线 B `[1800..1803]`** | 4.587e-3 | **2.936e-4** | 1.817e-3 | **0.064** |
+
+**这是全程第一次让 `shuffle/zero` 比值出现系统性变化**：路线 A 的四组都恒定在
+0.032–0.046，路线 B 提升到 **0.064–0.092（约 2 倍）**。三窗口一致，不是单窗口噪声。
+
+同时 `zero_z` 的绝对值下降（7.0e-3 → 4.5e-3），`prior_only` 也略降
+（2.1e-3 → 1.8e-3）——即路线 B 降低了 latent 的整体公共偏置强度，
+这正是设计意图。
+
+### 55.6 门槛判定
+
+| 门槛 | 要求 | 实测 | 结论 |
+|---|---|---|---|
+| `innovation` specific > `e_pooled` specific | 是 | 14.27% > 7.75% | **通过** |
+| `delta_mu` specific | ≥ 5% | 13.51% | **通过** |
+| `prior_only` head 明显低于 posterior | 是 | 1.8e-3 vs 4.5e-3（0.40×） | **通过** |
+| `shuffle_z` head | ≥ 2% | 4.19e-4（最好窗口） | **未过**（差约 48 倍） |
+| recon 降幅 | ≥ 15% | −11.5% | **未过** |
+| raw KL | 有界 | 0.0466 | 通过 |
+
+**路线 B 三条机制门槛全部通过，核心性能门槛仍未过。** 与路线 A 相比，它是第一个
+在「样本判别性比例」上产生系统性改善的结构（`shuffle/zero` ×2 且三窗口一致），
+但绝对量级仍差约 48 倍。
+
+### 55.7 结论与下一步
+
+1. **结构方向被验证**：把 correction 从「两个公共大向量之差」换成显式预测的 delta
+   之后，`mu_q` 特异占比翻倍、`shuffle/zero` 比值翻倍。这支持「Kalman 式
+   predict-correct 更适合 BEV 时序融合」这一动机，可以作为论文方法的机制证据。
+2. **但幅度仍不足**：`shuffle_z` head 4.19e-4 对比 2% 门槛差 48 倍。路线 B 解决的是
+   「correction 由什么构成」，没有解决「这个 correction 如何被检测头放大」。
+   注意路线 A 已证明单纯放大 `z_proj` 会等比放大公共偏置与样本身份
+   （`shuffle/zero` 不变），所以下一步不能再只调增益。
+3. **`obs_prior` 学到的是公共成分**：`e_hat_t` 的样本特异占比只有 1.80%，
+   接近 `mu_p` 的量级，说明 h_t 只能预测观测里的公共部分——这与 `h_t` 本身
+   0.86% 的特异占比一致，属于预期行为而非缺陷。
+4. **下一候选（用户预设顺序）**：路线 C（Object-Centric Latent Supervision）。
+   路线 B 已有机制收益但 AP 未被测量；按规划「B 有机制收益但 AP 不够，再加路线 C」。
+   **注意：路线 B 尚未测 AP**，因此严格说应先跑 ep6 取得 AP 与机制读数，
+   再决定是否叠加路线 C。
+5. **仍未做**：`z_prev` 的 L2 normalize 消融、路线 D 的去塌缩损失、路线 E 的 KL balancing。

@@ -55,7 +55,14 @@
      - **关键判读**：`shuffle/zero` 比值在四组间恒定在 **0.036–0.046**——Xavier 把公共偏置和样本身份一起放大了，没有偏向后者；correction 特异占比涨 2.5 倍而 head 只涨 12%。**结论：缺的不是信号幅度而是结构**，即 `correction = mu_q − mu_p` 由两个公共大向量相减得到，绝对幅度小且方向未被约束。这直接对应路线 B 的设计动机。
      - **勘误**：53.6.2 原尺度表把 `z_proj` 的 weight 与 bias 一起放大，读数被高估。分离后：仅 weight ×10 时 head ratio `2.30e-3`，weight×10+bias×10 才 `1.263e-2`；即原「×10 越过 1%」主要来自 bias 注入的样本无关偏置。探针已改为分别报告 `10.0` 与 `10.0_both`，文档已加勘误。
      - **运行事实**：四组均 GPU 5/6/7、3 卡 DDP、seed 0、deterministic、IterBasedRunner 450 iter；显存均 `7436 MiB`，`1.09–1.11 s/iter`。**四组均无 val 记录**，因此无区间均值/全轮峰值/best saved，也不能给出任何 AP 结论。
-   - **下一步（预设顺序）**：进入 **路线 B（Innovation-Conditioned RSSM）**。其触发前提「去 normalize 后 `mu_q` 改善」已由组 4 满足（correction 特异占比 12.11%），且 `h_t`/`mu_p` 仍接近常量（特异占比 0.86%/0.49%），符合路线 B 的触发条件。
+   - **路线 B：Innovation-Conditioned RSSM（2026-09-27，已完成，机制门槛 3/3 通过、性能门槛未过）**：`e_hat_t = obs_prior(h_t)`（只由 `L_obs_pred` 训练）→ `innovation_t = e_pooled − stopgrad(e_hat_t)` → `delta_mu = posterior_delta(cat[h_t, innovation_t])` → `mu_q = mu_p + delta_mu`，且 **`correction_t = delta_mu`（不再是两个公共大向量之差）**；`L_total += 0.05*L_obs_pred + 0.1*L_recon`。commit `d354232`，RSSM 单测 **55 条通过**，工具单测 12 条通过，详见 `docs/training_runs_full.md` 第 55 节。
+     - **机制门槛 3/3 通过**：① `innovation` 特异占比 **14.27% > e_pooled 7.75%**（obs_prior 减掉的主要是公共成分）；② `delta_mu` 特异占比 **13.51%**（≥5%）；③ `prior_only` head 1.8e-3 明显低于 posterior 4.5e-3（0.40×）。
+     - **首个系统性改善**：`shuffle/zero` head 比值从路线 A 四组恒定的 **0.032–0.046** 提升到 **0.064–0.092（约 2 倍）**，三窗口一致；`mu_q` 特异占比 1.79%→**3.93%**（+2.2 倍）。`zero_z` 绝对值同时下降（7.0e-3→4.5e-3），即整体公共偏置被削弱。
+     - **性能门槛仍未过**：`shuffle_z` head 最好 4.19e-4（门槛 2%，差约 48 倍）；recon −11.5%（门槛 15%）；raw KL 有界 0.0466 通过；`stat_obs_pred` 0.0050→0.0021（−58%）。
+     - **工具适配**：两个诊断工具原先硬编码 `posterior_mu` 输出为 `mu_q`，在 innovation 结构下会读错张量；现均检测 `posterior_struct` 并做 `desired − mu_p` 反演 / `mu_q = mu_p + delta` 还原，新增 2 条工具回归测试。
+     - **结论**：结构方向被验证（支持 Kalman 式 predict-correct 动机，可作论文机制证据），但路线 B 解决的是「correction 由什么构成」，没有解决「correction 如何被检测头放大」；路线 A 已证明单纯放大 `z_proj` 会等比放大公共偏置与样本身份，所以不能再只调增益。
+     - **运行事实**：GPU 5/6/7、3 卡 DDP、seed 0、deterministic、450 iter；显存 `7436 MiB`，`1.095 s/iter`。**无 val 记录**，无区间均值/全轮峰值/best saved，**AP 尚未测量**。
+   - **下一步**：严格说应先给路线 B 跑 ep6 取得 AP 与机制读数，再决定是否叠加路线 C（Object-Centric Latent Supervision）。路线 C/D/E（去塌缩损失、`z_prev` normalize 消融、KL balancing）均未开始。
    - **本次主线结论**：三项结构修复（差分重建、排名损失、空间读出）全部未过门控，路线 A 的两轴修复均已证实有效但叠加后仍差 32 倍，完整曲线与归因见 `docs/training_runs_full.md` 第 53、54 节。
    - ④ KL 口径改动**仍后置**：待结构有效性过 ep6 门控后再做 stop-gradient 拆分（`L_dyn=KL(sg(q)||p)`、`L_rep=KL(q||sg(p))`，建议 `beta_dyn=1.0`、`beta_rep=0.1`）与按 cell 聚合的 free-bits（沿 channel 求和后 ~1.0 nat/cell，先固定不退火）。**不要在缺重建项时单独调 free-bits。**
    - 低维 bottleneck 与排他未来任务这两个设计方向**尚未被证伪**；本轮证伪的是「在无重建锚定 + prior 脱离 `h_t` 的前提下使用它们」。标准 RSSM 的四条关键要素（prior 依赖 `h_t`、观测似然/重建项、KL balancing、输出吃 `(h_t,z_t)`）与逐条对照见第 50.6.7 节。
