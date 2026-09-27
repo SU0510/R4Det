@@ -854,6 +854,140 @@ class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
             )
 
 
+class TestInnovationPosteriorLatentFusion(unittest.TestCase):
+    """Route B: Kalman-style predict/correct posterior."""
+
+    def _build(self, **overrides):
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        kwargs = dict(
+            in_channels=256,
+            latent_dim=32,
+            hidden_dim=128,
+            latent_pool='adaptive',
+            latent_size=(4, 4),
+            future_loss_weight=0.0,
+            recon_target_mode='temporal_delta',
+            recon_input_mode='posterior_correction',
+            readout_mode='spatial',
+            posterior_obs_mode='scaled_raw',
+            posterior_obs_scale=0.1,
+            posterior_struct='innovation',
+        )
+        kwargs.update(overrides)
+        return LowDimFutureConsistentLatentFusion(**kwargs)
+
+    def test_innovation_mode_builds_obs_prior(self):
+        fusion = self._build()
+        self.assertIsNotNone(fusion.obs_prior)
+        self.assertEqual(fusion.obs_prior.in_channels, fusion.latent_dim)
+        self.assertEqual(fusion.obs_prior.out_channels, fusion.latent_dim)
+
+    def test_standard_mode_has_no_obs_prior(self):
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        fusion = LowDimFutureConsistentLatentFusion(
+            in_channels=256,
+            latent_dim=32,
+            hidden_dim=128,
+            latent_size=(4, 4),
+            future_loss_weight=0.0,
+        )
+        self.assertIsNone(fusion.obs_prior)
+
+    def test_invalid_posterior_struct_rejected(self):
+        with self.assertRaises(ValueError):
+            self._build(posterior_struct='bogus')
+
+    def test_negative_obs_pred_weight_rejected(self):
+        with self.assertRaises(ValueError):
+            self._build(obs_pred_loss_weight=-0.1)
+
+    def test_correction_equals_delta_not_mu_difference(self):
+        """In innovation mode the correction must be delta_mu itself.
+
+        The readout consumes `posterior_correction`; if it were still
+        `mu_q - mu_p` the whole point of the route (correction = the model's
+        own predicted delta) would be lost even though mu_q is unchanged.
+        """
+        fusion = self._build()
+        fusion.train()
+        feat = torch.randn(2, 256, 8, 8)
+        captured = {}
+
+        def hook(module, inputs, output):
+            captured['delta'] = output.detach().clone()
+
+        handle = fusion.posterior_mu.register_forward_hook(hook)
+        _, _, _, _, _, stats = fusion(feat)
+        handle.remove()
+
+        self.assertIn('delta', captured)
+        self.assertAlmostEqual(
+            stats['stat_correction_sq'].item(),
+            captured['delta'].square().mean().item(),
+            places=8)
+
+    def test_obs_prior_only_receives_observation_prediction_gradient(self):
+        """obs_prior must not be reachable from the reconstruction path."""
+        fusion = self._build(recon_loss_weight=0.0, kl_scale=0.0)
+        fusion.train()
+        feat = torch.randn(2, 256, 8, 8)
+        _, _, loss, _, _, _ = fusion(feat)
+        loss.backward()
+
+        self.assertIsNotNone(fusion.obs_prior.weight.grad)
+        self.assertGreater(
+            fusion.obs_prior.weight.grad.abs().sum().item(), 0.0)
+
+    def test_obs_prediction_term_is_reported(self):
+        fusion = self._build()
+        fusion.train()
+        _, _, loss, _, _, stats = fusion(torch.randn(2, 256, 8, 8))
+
+        self.assertIn('stat_obs_pred', stats)
+        self.assertIn('stat_innovation_sq', stats)
+        self.assertGreaterEqual(stats['stat_obs_pred'].item(), 0.0)
+        self.assertGreater(stats['stat_innovation_sq'].item(), 0.0)
+        self.assertTrue(torch.isfinite(loss))
+
+    def test_innovation_mode_runs_two_frames_and_backprops(self):
+        fusion = self._build()
+        fusion.train()
+        fusion(torch.randn(2, 256, 8, 8))
+        _, _, loss, _, _, stats = fusion(
+            torch.randn(2, 256, 8, 8), detach_state=False)
+
+        self.assertGreater(stats['stat_recon_valid_frac'].item(), 0.0)
+        loss.backward()
+        self.assertIsNotNone(fusion.posterior_mu.weight.grad)
+        self.assertGreater(
+            fusion.posterior_mu.weight.grad.abs().sum().item(), 0.0)
+
+    def test_innovation_mode_keeps_six_tuple_contract(self):
+        fusion = self._build()
+        with torch.no_grad():
+            out = fusion(torch.randn(2, 256, 8, 8))
+        self.assertEqual(len(out), 6)
+        self.assertEqual(out[0].shape, (2, 256, 8, 8))
+        self.assertIsNone(out[1])
+        self.assertEqual(out[3].shape, (2, 32, 4, 4))
+        self.assertEqual(out[4].shape, (2, 32, 4, 4))
+        self.assertIsInstance(out[5], dict)
+
+    def test_reset_state_clears_obs_prior_free_state(self):
+        fusion = self._build()
+        fusion.train()
+        fusion(torch.randn(2, 256, 8, 8))
+        fusion.reset_state()
+        self.assertIsNone(fusion.h_state)
+        self.assertIsNone(fusion.z_state)
+
+
 class TestSpatialReadoutLatentFusion(unittest.TestCase):
     """Smoke tests for the unpooled spatial detection readout."""
 

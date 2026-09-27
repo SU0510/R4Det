@@ -1065,6 +1065,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         posterior_obs_mode='l2',
         posterior_obs_scale=0.1,
         z_proj_init='small',
+        posterior_struct='standard',
+        obs_pred_loss_weight=0.05,
         modulation_scale=0.1,
         gate_init_bias=-1.0,
         norm_cfg=dict(type='BN', requires_grad=True),
@@ -1136,6 +1138,13 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             raise ValueError(
                 "z_proj_init='xavier' requires readout_mode='spatial'")
         self.z_proj_init = z_proj_init
+        if posterior_struct not in ('standard', 'innovation'):
+            raise ValueError(
+                "posterior_struct must be 'standard' or 'innovation'")
+        if obs_pred_loss_weight < 0:
+            raise ValueError('obs_pred_loss_weight must be >= 0')
+        self.posterior_struct = posterior_struct
+        self.obs_pred_loss_weight = obs_pred_loss_weight
         if self.recon_loss_weight > 0 and (
                 self.latent_pool == 'global' or min(self.latent_size) < 2):
             # The recon target is standardized across each sample, so a 1x1
@@ -1182,6 +1191,15 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             2 * latent_dim, latent_dim, 3, padding=1)
         self.posterior_logstd = nn.Conv2d(
             2 * latent_dim, latent_dim, 3, padding=1)
+        if self.posterior_struct == 'innovation':
+            # Kalman-style predict/correct split: `obs_prior` predicts the
+            # observation encoding from the deterministic state alone, and the
+            # posterior head is re-interpreted as a *delta* on top of mu_p
+            # (see forward). Only trained by the observation-prediction loss.
+            self.obs_prior = nn.Conv2d(
+                latent_dim, latent_dim, 3, padding=1)
+        else:
+            self.obs_prior = None
 
         decoder_in_channels = (
             2 * latent_dim
@@ -1265,6 +1283,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         else:
             xavier_modules += [
                 self.film_proj, self.gate_proj, self.output_proj]
+        if self.obs_prior is not None:
+            xavier_modules.append(self.obs_prior)
         for module in xavier_modules:
             xavier_init(module, distribution='uniform')
         if self.correction_output_proj is not None:
@@ -1439,17 +1459,40 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         # the posterior corrects it with the observation encoding.
         mu_p = self.prior_mu(h_t)
         logstd_p = self.prior_logstd(h_t)
-        mu_q = self.posterior_mu(torch.cat([h_t, e_pooled], dim=1))
-        logstd_q = self.posterior_logstd(torch.cat([h_t, e_pooled], dim=1))
+        delta_mu = None
+        obs_pred = torch.zeros((), device=feat.device, dtype=feat.dtype)
+        innovation_sq = torch.zeros((), device=feat.device, dtype=feat.dtype)
+        if self.posterior_struct == 'innovation':
+            # Kalman-style predict/correct. `obs_prior` predicts the current
+            # observation encoding from h_t alone and is trained *only* by the
+            # observation-prediction term below. stopgrad on e_hat_t keeps it
+            # out of every other gradient path, so the posterior sees purely
+            # the part of the observation that h_t could not predict.
+            e_hat_t = self.obs_prior(h_t)
+            obs_pred = F.smooth_l1_loss(e_hat_t, e_pooled.detach())
+            innovation = e_pooled - e_hat_t.detach()
+            innovation_sq = innovation.square().mean().detach()
+            posterior_input = torch.cat([h_t, innovation], dim=1)
+            # The posterior head is re-interpreted as a delta on top of the
+            # prior mean, so the correction is the model's own prediction
+            # rather than the difference of two batch-common vectors.
+            delta_mu = self.posterior_mu(posterior_input)
+            mu_q = mu_p + delta_mu
+        else:
+            posterior_input = torch.cat([h_t, e_pooled], dim=1)
+            mu_q = self.posterior_mu(posterior_input)
+        logstd_q = self.posterior_logstd(posterior_input)
 
         if use_posterior:
             z_t = mu_q if deterministic else self.sample(mu_q, logstd_q)
         else:
             z_t = mu_p if deterministic else self.sample(mu_p, logstd_p)
-        posterior_correction = (
-            mu_q - mu_p.detach()
-            if use_posterior else torch.zeros_like(mu_p)
-        )
+        if use_posterior:
+            posterior_correction = (
+                delta_mu if delta_mu is not None
+                else mu_q - mu_p.detach())
+        else:
+            posterior_correction = torch.zeros_like(mu_p)
 
         kl, stats = self.kl_loss(mu_q, logstd_q, mu_p, logstd_p)
 
@@ -1535,6 +1578,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         stats['stat_recon_mse'] = recon_loss.detach()
         stats['stat_recon_valid_frac'] = recon_valid_frac
         stats['stat_recon_delta_rms'] = delta_rms
+        stats['stat_obs_pred'] = obs_pred.detach()
+        stats['stat_innovation_sq'] = innovation_sq
         stats['stat_correction_sq'] = posterior_correction.square().mean(
         ).detach()
         stats['stat_discr_positive'] = discr_positive.detach()
@@ -1630,6 +1675,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             self.z_state = z_t
 
         latent_loss = kl * self.kl_scale
+        if self.obs_pred_loss_weight > 0 and self.posterior_struct == 'innovation':
+            latent_loss = latent_loss + self.obs_pred_loss_weight * obs_pred
         if self.recon_loss_weight > 0 and has_recon_target:
             latent_loss = latent_loss + self.recon_loss_weight * recon_loss
         if (self.discr_loss_weight > 0 and has_recon_target
