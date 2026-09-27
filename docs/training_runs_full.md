@@ -7305,7 +7305,7 @@ loss_discr = relu(margin + mse(decoder(correction_i), target_i)
 **结论：方案二失败。** 问题已不在监督信号缺失——排名项确实在优化，是「低维 correction
 无法有效到达/驱动下游」这一结构瓶颈。
 
-### 53.6 方案三：放弃 FiLM 旁路（实施中）
+### 53.6 方案三：放弃 FiLM 旁路（结果：未通过）
 
 按预登记顺序进入方案三：删除 global pool + `film_proj`/`gate_proj`，改为
 
@@ -7315,3 +7315,174 @@ output = feat + h_proj(h_t) + z_proj(correction_t)
 
 `h_proj`/`z_proj` 均为 `Conv2d(32, 256, 1)`，先在 16×16 投影再双线性上采样；保留差分重建；
 先不改 KL。理由是 53.5 已证明空间 correction 经全局池化后既无法驱动重建、也无法驱动检测。
+
+实现见 commit `9f6c84f`：`LowDimFutureConsistentLatentFusion` 新增 `readout_mode`
+（`'film'` 默认保持旧行为、`'spatial'` 走新路径），`spatial` 下不构建
+`film_proj`/`gate_proj`/`output_proj`/`correction_output_proj`，`h_proj`/`z_proj` 按
+`std=0.01` 初始化；`spatial` 与 `latent_pool='global'` 组合直接报错。方案二的排名损失在本
+配置中关闭（`discr_loss_weight=0`），使读出成为唯一变量。RSSM 单测 **41 条通过**（新增 6 条：
+`spatial` 模式删除池化 FiLM 模块、`spatial`+`global` 报错、`film` 模式回归、输出形状、
+两条分支各自影响输出、`prior_only` 下 correction 分支恒为零）。
+
+配置：`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_delta_spatial.py`；
+冒烟：`me_rssm/sanity/lowdim_z_delta_spatial_smoke_450iter.py`；work_dir
+`/tmp/lowdim_z_delta_spatial_smoke_450iter`；日志 `/tmp/lowdim_spatial450.log`。
+
+运行事实：GPU 5/6/7，3 卡 DDP，seed 0，deterministic，IterBasedRunner 450 iter；
+显存 `7436 MiB`，约 `1.05 s/iter`，总耗时约 9 分钟（04:17:31 启动，04:25:51 完成）。
+该运行是机制冒烟，`evaluation.interval=450` 未产出任何 val 记录，因此
+**区间均值、全轮峰值、best saved 三项均不适用**（无 val epoch）。
+
+| iter | recon MSE | correction² | clamped ratio | raw KL |
+|---:|---:|---:|---:|---:|
+| 50 | 1.2235 | 0.01590 | 0.5330 | 0.1987 |
+| 100 | 1.1702 | 0.00912 | 0.6650 | 0.1095 |
+| 150 | 1.1377 | 0.00689 | 0.7431 | 0.0794 |
+| 200 | 1.1162 | 0.00559 | 0.8038 | 0.0616 |
+| 250 | 1.1020 | 0.00473 | 0.8513 | 0.0499 |
+| 300 | 1.0933 | 0.00424 | 0.8816 | 0.0432 |
+| 350 | 1.0882 | 0.00400 | 0.8981 | 0.0398 |
+| 400 | 1.0857 | 0.00390 | 0.9048 | 0.0384 |
+| 450 | 1.0856 | 0.00383 | 0.9092 | 0.0376 |
+
+| 门槛 | 要求 | 实测 | 结论 |
+|---|---|---|---|
+| recon 降幅 | ≥ 15% | **−11.3%** | **未过** |
+| correction² 绝对水平 | ≥ 0.005 | **0.00383** | **未过** |
+| 后 150 iter 不再持续下降 | 平台 | 0.00424 → 0.00400 → 0.00390 → **0.00383，仍在下滑** | **未过** |
+| clamped ratio | < 0.95 | 0.9092 | 通过 |
+
+**同预算 A/B：方案三与方案一的曲线几乎逐位重合。** 450 iter 时方案一（film）
+recon `1.0851`、correction² `0.00390`、clamped `0.8960`；方案三（spatial）
+recon `1.0856`、correction² `0.00383`、clamped `0.9092`。重建通路两版完全相同（这是预期），
+但**检测读出换成不池化的空间残差后，correction 的塌缩轨迹没有任何变化**，说明读出结构不是
+限制因素。
+
+#### 53.6.1 三窗口反事实诊断（同一 450 iter checkpoint）
+
+`tools/diagnose_z_utilization.py`，samples 各 4 条：`[3,4,5,6]`（offset 2）、
+`[100,101,102,103]`（offset 2）、`[1800,1801,1802,1803]`（offset −1）。
+
+| 窗口 | zero_z head | shuffle_z head | prior_only head | shuffle_z feature |
+|---|---:|---:|---:|---:|
+| `[3..6]` | 0.000598 | **0.000028** | 0.000257 | 0.000552 |
+| `[100..103]` | 0.000602 | **0.000027** | 0.000256 | 0.000658 |
+| `[1800..1803]` | 0.000593 | **0.000023** | 0.000255 | 0.000369 |
+
+同预算的 film 版本（`/tmp/lowdim_z_delta_smoke_450iter/iter_450.pth`）为
+shuffle_z head `0.000027`（`[3..6]`）与 `0.000021`（`[1800..1803]`）。两版在同一量级，
+均远低于「ep6 shuffle_z head ≥ 1%」的预登记门槛。**`shuffle_z` 极低而 `zero_z` 高出约
+20 倍**，属于「公共偏置」模式：z 主要提供的是一个所有样本共用的常量，而不是样本身份。
+
+#### 53.6.2 尺度探针：读出通路是通的，但被压了约一个数量级
+
+新增只读探针 `tools/probe_correction_scale.py`。在 `[3..6]` 上固定
+`replace_z`（整批置换 posterior 均值），只把 `z_proj` 的 weight/bias 同时放大后重放：
+
+| `z_proj` 增益 | shuffle_z feature ratio | shuffle_z head ratio |
+|---:|---:|---:|
+| ×1（训练值） | 0.000571 | **0.0000287** |
+| ×10 | 0.074341 | **0.012625** |
+| ×100 | 0.817707 | 0.138801 |
+| ×1000 | 8.247325 | 1.407180 |
+
+`[100..103]` 与 `[1800..1803]` 给出同样形状的结果（×10 时 head ratio `0.012668`、
+`0.012548`）。**这说明两件事**：① 读出通路本身是通的，把增益提高 10 倍即可让
+`shuffle_z` head 越过 1% 门槛；② 训练后 `z_proj` 的权重仍停在初始化尺度
+（weight RMS `0.0101`，即 `std=0.01`），**检测损失没有把它推上去**，所以真实增益只有
+门槛所需的约 1/10。
+
+#### 53.6.3 根因探针：样本信息在 `e_pooled` 处被 L2 normalize 抹掉
+
+新增只读探针 `tools/probe_posterior_source.py`。在跨场景抽样
+（`stride=700`，indices `[3, 703, 1403]`）上把每一层的能量拆成
+「batch 公共分量」与「样本特异分量」：
+
+| 张量 | RMS | batch 公共 RMS | 样本特异 RMS | **样本特异能量占比** |
+|---|---:|---:|---:|---:|
+| `feat` pool16（原始 BEV） | 0.3781 | 0.3312 | 0.1824 | **23.27%** |
+| `encoder` 输出 `e_t`（未 normalize） | 1.9679 | 1.8959 | 0.5273 | **7.18%** |
+| `e_pooled`（L2 normalize 后） | 0.1768 | 0.1756 | 0.0200 | **1.28%** |
+| `h_t`（GRU 状态） | 0.1691 | 0.1689 | 0.0089 | **0.27%** |
+| `mu_p` | 0.1880 | 0.1879 | 0.0080 | 0.18% |
+| `mu_q` | 0.1500 | 0.1494 | 0.0135 | 0.81% |
+| `mu_q`（只给 `h_t`、observation 置零） | 0.1120 | 0.1119 | 0.0066 | 0.34% |
+| `mu_q`（只给 `e_pooled`、`h_t` 置零） | 0.0921 | 0.0913 | 0.0121 | 1.72% |
+
+同一探针在单窗口 `[3..6]` 上给出方向一致的更弱版本（`feat` 23.3% → `e_pooled` 0.15%
+→ `mu_q` 0.13%），说明这不是跨场景抽样造成的假象。
+
+`tools/probe_correction_scale.py` 同时给出 innovation（`mu_q − mu_p`）自身的分解：
+
+| 窗口 | innovation RMS | 其中 batch 公共 | 其中样本特异 | 样本特异能量占比 |
+|---|---:|---:|---:|---:|
+| `[3..6]` | 0.06618 | 0.06593 | 0.00583 | **0.78%** |
+| `[100..103]` | — | 0.06576 | 0.00555 | ~0.71% |
+| `[1800..1803]` | — | 0.06542 | 0.00531 | ~0.66% |
+
+**因果链因此是**：`feat` 里有 23.3% 的样本特异能量 → `encoder` 降到 7.2% →
+`F.normalize(e_pooled, dim=1)` 再降到 **1.28%**（分母被 1.90 RMS 的公共分量主导，
+除以范数等于把样本间差异一起压掉）→ `h_t` 几乎不含样本信息（0.27%）→ `mu_q` 只剩 0.81%，
+而 `mu_q − mu_p` 这个被重建和检测共同使用的 correction 只剩 **0.78% 的样本特异能量**。
+
+注意 `e_pooled` 的 L2 归一化是低维变体自加的约束（标准 `MotionAlignedRSSMFusion` 不做），
+它在 `z_prev`、`e_pooled` 和 future 头上各出现一次；其中 `e_pooled` 这一次直接决定了
+posterior 能拿到多少观测信息。
+
+与标准 RSSM 的逐条对照（`mmdet3d/models/fusion_layers/rssm_fusion.py`）：
+
+| 环节 | 标准 `MotionAlignedRSSMFusion`（line 646/943） | 低维变体（line 1367） |
+|---|---|---|
+| 状态尺寸 | `h_t`/`z_t` 与 BEV 同分辨率 256ch | 16×16×32 |
+| 转移输入 | `z_{t-1}`（+运动对齐） | `normalize(pool(z_{t-1}))` |
+| 观测编码 | `e_t = encoder(feat)` 直接用 | **`normalize(pool(e_t))`** |
+| posterior | `q(cat[h_t, e_t])` | `q(cat[h_t, e_pooled])` |
+| 输出读出 | `output_proj(z_t) + feat`（逐像素、不池化、不过 gate） | spatial 版已对齐为 `h_proj(h_t)+z_proj(correction)` |
+| 重建 | `decoder(cat[h_t, z_t])` 重建全分辨率 `feat` | `decoder(correction_t)` 重建标准化帧间残差 |
+
+**结论：低维变体在「输出读出」这一项上已被方案三对齐到标准形态，剩下的关键偏离是
+`e_pooled` 的 L2 normalize。** 标准 RSSM 的 posterior 直接吃未归一化的 256ch 全分辨率
+`e_t`，其样本特异能量占比为 7.2%（本探针 pooled 后的实测值），低维变体归一化后只剩 1.28%。
+
+复现命令（均为只读诊断，物理 GPU 5/6）：
+
+```bash
+CUDA_VISIBLE_DEVICES=5 python tools/diagnose_z_utilization.py \
+  --config me_rssm/sanity/lowdim_z_delta_spatial_smoke_450iter.py \
+  --checkpoint /tmp/lowdim_z_delta_spatial_smoke_450iter/iter_450.pth \
+  --start-index 3 --limit 4 --batch-size 4 --shuffle-offset 2 \
+  --output /tmp/z_util_spatial_w3.json
+
+CUDA_VISIBLE_DEVICES=5 python tools/probe_correction_scale.py \
+  --config me_rssm/sanity/lowdim_z_delta_spatial_smoke_450iter.py \
+  --checkpoint /tmp/lowdim_z_delta_spatial_smoke_450iter/iter_450.pth \
+  --start-index 3 --limit 4 --shuffle-offset 2 \
+  --output /tmp/corr_scale_w3.json
+
+CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py \
+  --config me_rssm/sanity/lowdim_z_delta_spatial_smoke_450iter.py \
+  --checkpoint /tmp/lowdim_z_delta_spatial_smoke_450iter/iter_450.pth \
+  --start-index 3 --limit 4 --stride 700 \
+  --output /tmp/post_source_stride700.json
+```
+
+#### 53.6.4 结论与下一步
+
+**方案三失败，且失败原因不是读出结构。** 删除 global pool/FiLM 后，correction 的塌缩轨迹、
+三窗口 `shuffle_z` 影响、以及 recon 曲线都与方案一/方案二在噪声水平内相同。真正的限制是：
+
+1. **上游**：correction 的样本特异能量只有 0.78%（即 **99.2% 是公共偏置**），所以「换一个样本的 z」
+   本来就几乎没有东西可换；`e_pooled` 的 L2 normalize 是最大的一次信息损失（7.2% → 1.28%）。
+2. **下游**：`z_proj` 停留在 `std=0.01` 的初始化尺度，检测损失没有把它推大，所以即使把
+   现有信号送出去也只产生 `2.9e-5` 的 head 变化；放大 10 倍即可越过 1% 门槛。
+
+这两条与 53.5 的读数一致（`pos` 与 `neg` 只差 1%，recon 高于常数预测 1.00），并解释了它。
+
+**下一步候选（按代价从低到高，尚未执行）**：
+
+1. **去掉 `e_pooled` 的 L2 normalize，改回标准 RSSM 的做法**（或改用 LayerNorm/仅对 `z_prev`
+   保留归一化）。这是唯一被定量证明会直接抬高样本特异占比的一步，改动一行，风险最低。
+2. 若 ① 后 `mu_q` 的样本特异占比仍上不去，再考虑放开 `h_t` 的公共偏置（`h_t` 本身只有
+   0.27% 特异能量，GRU 实际上收敛成了一个常量状态）。
+3. 待机制门槛（`shuffle_z` head ≥ 1%）通过后，才做方案四的 KL balancing 与按 cell 聚合的
+   free-bits。**当前 raw KL 一直有界（450 iter 时 0.0376），再次确认它不是瓶颈**，不做。
