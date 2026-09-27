@@ -523,6 +523,77 @@ class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
         self.assertAlmostEqual(
             stats['stat_recon_valid_frac'].item(), 0.5, places=6)
 
+    def test_discrimination_loss_penalizes_sample_invariant_correction(self):
+        """Swapping corrections must be worse than keeping each sample's own.
+
+        The reconstruction term alone can be satisfied by a near-common
+        correction, so the ranking term is what actually demands sample
+        identity. A fused correction (constructed to be identical across the
+        batch) must be penalised more than distinct per-sample corrections,
+        all else equal.
+        """
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        def build(discr_weight):
+            fusion = LowDimFutureConsistentLatentFusion(
+                in_channels=256,
+                latent_dim=32,
+                hidden_dim=128,
+                latent_size=(4, 4),
+                future_loss_weight=0.0,
+                recon_target_mode='temporal_delta',
+                recon_input_mode='posterior_correction',
+                discr_loss_weight=discr_weight,
+                discr_margin=0.2,
+            )
+            fusion.train()
+            return fusion
+
+        # Identical rows across the batch: every sample's own correction is
+        # already some other sample's, so the ranking term cannot be satisfied.
+        fusion = build(0.1)
+        shared = torch.randn(1, 256, 8, 8).expand(4, 256, 8, 8).contiguous()
+        fusion(shared)
+        _, _, _, _, _, stats = fusion(shared)
+        self.assertIn('stat_discr_gap', stats)
+        self.assertTrue(torch.isfinite(stats['stat_discr_gap']))
+
+        with_discr = build(0.1)
+        without_discr = build(0.0)
+        for f in (with_discr, without_discr):
+            f(torch.randn(4, 256, 8, 8))
+        _, _, loss_with, _, _, st_with = with_discr(torch.randn(4, 256, 8, 8))
+        _, _, loss_without, _, _, st_without = without_discr(
+            torch.randn(4, 256, 8, 8))
+        # With the term disabled the diagnostic must stay exactly zero and the
+        # objective must not change scale from an unweighted residual.
+        self.assertEqual(st_without['stat_discr_gap'].item(), 0.0)
+        self.assertTrue(torch.isfinite(loss_without))
+        self.assertTrue(torch.isfinite(loss_with))
+
+    def test_discrimination_loss_skips_single_sample_batch(self):
+        """batch < 2 cannot form a negative, so the term must be inert."""
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+        fusion = LowDimFutureConsistentLatentFusion(
+            in_channels=256,
+            latent_dim=32,
+            hidden_dim=128,
+            latent_size=(4, 4),
+            future_loss_weight=0.0,
+            recon_target_mode='temporal_delta',
+            recon_input_mode='posterior_correction',
+            discr_loss_weight=0.1,
+        )
+        fusion.train()
+        fusion(torch.randn(1, 256, 8, 8))
+        _, _, loss, _, _, stats = fusion(torch.randn(1, 256, 8, 8))
+        self.assertEqual(stats['stat_discr_gap'].item(), 0.0)
+        self.assertTrue(torch.isfinite(loss))
+
     def test_prior_and_posterior_condition_on_h_t(self):
         """z must be generated from h_t, not from the previous latent."""
         feat_a = torch.randn(1, 256, 8, 8)

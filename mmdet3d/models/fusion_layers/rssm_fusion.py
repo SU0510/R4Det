@@ -1056,6 +1056,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         predict_future_channels=None,
         future_loss_weight=0.1,
         recon_loss_weight=0.1,
+        discr_loss_weight=0.0,
+        discr_margin=0.2,
         recon_target_mode='current',
         recon_input_mode='state_latent',
         direct_correction_readout=False,
@@ -1093,6 +1095,12 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         )
         self.future_loss_weight = future_loss_weight
         self.recon_loss_weight = recon_loss_weight
+        if discr_loss_weight < 0:
+            raise ValueError('discr_loss_weight must be >= 0')
+        if discr_margin < 0:
+            raise ValueError('discr_margin must be >= 0')
+        self.discr_loss_weight = discr_loss_weight
+        self.discr_margin = discr_margin
         if recon_target_mode not in ('current', 'temporal_delta'):
             raise ValueError(
                 "recon_target_mode must be 'current' or 'temporal_delta'")
@@ -1384,6 +1392,12 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             (), device=feat.device, dtype=feat.dtype)
         delta_rms = torch.zeros(
             (), device=feat.device, dtype=feat.dtype)
+        discr_loss = torch.zeros(
+            (), device=feat.device, dtype=feat.dtype)
+        discr_positive = torch.zeros(
+            (), device=feat.device, dtype=feat.dtype)
+        discr_negative = torch.zeros(
+            (), device=feat.device, dtype=feat.dtype)
         if self.recon_target_mode == 'current':
             recon_loss = F.mse_loss(reconstruction, target)
             has_recon_target = True
@@ -1410,6 +1424,35 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
                 ).sum() / denom
                 has_recon_target = True
                 recon_valid_frac = valid.float().mean().detach()
+
+                # Discrimination: this target must be reconstructed better by
+                # its own correction than by another sample's. Without it, a
+                # near-common correction can satisfy the reconstruction term
+                # (measured: swapping samples moved recon by -0.09%..+9.07%),
+                # so the objective never asks z_t to identify its own sample.
+                if (self.discr_loss_weight > 0 and B >= 2
+                        and valid.sum() >= 2):
+                    rolled_valid = torch.roll(valid, 1, dims=0)
+                    pair_valid = valid & rolled_valid
+                    if pair_valid.any():
+                        correction_roll = torch.roll(
+                            posterior_correction, 1, dims=0)
+                        recon_roll = self.decoder(correction_roll)
+                        pair_map = pair_valid[:, None, None, None].to(
+                            target.dtype).expand_as(target)
+                        pair_denom = pair_map.sum().clamp_min(1.0)
+                        discr_positive = (
+                            (reconstruction - delta_target).square()
+                            * pair_map
+                        ).sum() / pair_denom
+                        discr_negative = (
+                            (recon_roll - delta_target).square()
+                            * pair_map
+                        ).sum() / pair_denom
+                        discr_loss = F.relu(
+                            self.discr_margin
+                            + discr_positive
+                            - discr_negative).mean()
         if self.recon_target_mode == 'temporal_delta':
             self.prev_recon_target = target
             self.prev_recon_valid = torch.ones(
@@ -1419,6 +1462,10 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         stats['stat_recon_delta_rms'] = delta_rms
         stats['stat_correction_sq'] = posterior_correction.square().mean(
         ).detach()
+        stats['stat_discr_positive'] = discr_positive.detach()
+        stats['stat_discr_negative'] = discr_negative.detach()
+        stats['stat_discr_gap'] = (
+            discr_negative - discr_positive).detach()
 
         future_loss = torch.zeros((), device=feat.device, dtype=feat.dtype)
         has_future_target = False
@@ -1501,6 +1548,9 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         latent_loss = kl * self.kl_scale
         if self.recon_loss_weight > 0 and has_recon_target:
             latent_loss = latent_loss + self.recon_loss_weight * recon_loss
+        if (self.discr_loss_weight > 0 and has_recon_target
+                and self.recon_target_mode == 'temporal_delta'):
+            latent_loss = latent_loss + self.discr_loss_weight * discr_loss
         if has_future_target:
             latent_loss = latent_loss + self.future_loss_weight * future_loss
         # NOTE: the key must not contain the substring 'loss'. mmdet's
