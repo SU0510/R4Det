@@ -19,5 +19,8 @@ lr_config = dict(
     warmup_ratio=0.1,
     min_lr_ratio=1e-5,
     by_epoch=False)
-evaluation = dict(interval=450)
+# No val during the mechanism smoke: the route-A gate is
+# training-log + checkpoint-probe only, so evaluating here would add ~7.5 min
+# per cell of KITTI AP/IoU that cannot pass or fail the gate.
+evaluation = dict(interval=4500)
 checkpoint_config = dict(interval=450)

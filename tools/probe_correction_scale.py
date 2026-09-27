@@ -130,14 +130,24 @@ def main():
         z_proj = fusion.z_proj
         base_weight = z_proj.weight.detach().clone()
         base_bias = z_proj.bias.detach().clone()
-        for gain in (1.0, 10.0, 100.0, 1000.0):
+        # Weight and bias scaling are reported separately on purpose. Scaling
+        # both together inflates the measured head response because the bias
+        # injects a sample-invariant offset into every pixel; a larger *weight*
+        # is what an init change such as Xavier actually provides.
+        for label, w_gain, b_gain in (
+                ('1.0', 1.0, 1.0),
+                ('10.0', 10.0, 1.0),
+                ('100.0', 100.0, 1.0),
+                ('1000.0', 1000.0, 1.0),
+                ('10.0_both', 10.0, 10.0),
+                ('100.0_both', 100.0, 100.0)):
             with torch.no_grad():
-                z_proj.weight.copy_(base_weight * gain)
-                z_proj.bias.copy_(base_bias * gain)
+                z_proj.weight.copy_(base_weight * w_gain)
+                z_proj.bias.copy_(base_bias * b_gain)
             out = run_sequence(
                 model, batch_all, z_mode='replace_z',
                 replacement_z=replacement)
-            gains[str(gain)] = {
+            gains[label] = {
                 'feature_ratio': vector_l2_ratio(
                     out['features'], base['features']),
                 'head_ratio': vector_l2_ratio(out['head_vector'], base_head),

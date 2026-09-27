@@ -132,9 +132,13 @@ def main():
         handle.remove()
 
     h_t = captured['h_t']
-    e_pooled = F.normalize(captured['e_t'], dim=1)
+    # Honor the fusion's own observation mode: route-A's scaled_raw cells do
+    # not L2-normalize, so hard-coding F.normalize here would report the
+    # pre-change input for a changed model.
+    e_pooled = fusion._posterior_observation(captured['e_t'])
     mu_q = captured['mu_q']
     mu_p = captured['mu_p']
+    correction = mu_q - mu_p
 
     with torch.no_grad():
         mu_q_h_only = fusion.posterior_mu(
@@ -153,6 +157,7 @@ def main():
         'e_pooled': split(e_pooled),
         'mu_p': split(mu_p),
         'mu_q': split(mu_q),
+        'correction': split(correction),
         'mu_q_h_only': split(mu_q_h_only),
         'mu_q_e_only': split(mu_q_e_only),
         'posterior_weight_rms_h_half': rms(w[:, :latent_dim]),
@@ -162,6 +167,12 @@ def main():
         'mu_q_removal_of_h_rel_l2': float(
             (mu_q - mu_q_e_only).norm() / mu_q.norm()),
     }
+    stats['posterior_obs_mode'] = getattr(
+        fusion, 'posterior_obs_mode', 'l2')
+    stats['z_proj_init'] = getattr(fusion, 'z_proj_init', None)
+    if getattr(fusion, 'z_proj', None) is not None:
+        weight = fusion.z_proj.weight.detach().float()
+        stats['z_proj_weight_rms'] = rms(weight)
 
     json.dump(stats, open(a.output, 'w'), indent=2)
     print(json.dumps(stats, indent=2))

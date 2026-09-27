@@ -7474,7 +7474,14 @@ CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py \
 1. **上游**：correction 的样本特异能量只有 0.78%（即 **99.2% 是公共偏置**），所以「换一个样本的 z」
    本来就几乎没有东西可换；`e_pooled` 的 L2 normalize 是最大的一次信息损失（7.2% → 1.28%）。
 2. **下游**：`z_proj` 停留在 `std=0.01` 的初始化尺度，检测损失没有把它推大，所以即使把
-   现有信号送出去也只产生 `2.9e-5` 的 head 变化；放大 10 倍即可越过 1% 门槛。
+   现有信号送出去也只产生 `2.9e-5` 的 head 变化。
+
+**勘误（2026-09-27，同一探针加做 weight/bias 分离）**：53.6.2 的尺度表当时把 `z_proj` 的
+weight 与 bias 一起放大，读数因此被高估。分离后实测为：只放大 weight ×10 时 head ratio
+`2.30e-3`，weight×10 且 bias×10 时才到 `1.263e-2`——即当时「×10 越过 1% 门槛」的结果主要
+来自 bias 注入的样本无关偏置，而不是 weight 增益。`tools/probe_correction_scale.py` 已改为
+分别报告 `10.0`（仅 weight）与 `10.0_both`（weight+bias）。**这条修正使路线 A 的必要性更强：
+仅仅提高读出增益并不足以让样本身份出现在 head 上。**
 
 这两条与 53.5 的读数一致（`pos` 与 `neg` 只差 1%，recon 高于常数预测 1.00），并解释了它。
 
@@ -7486,3 +7493,159 @@ CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py \
    0.27% 特异能量，GRU 实际上收敛成了一个常量状态）。
 3. 待机制门槛（`shuffle_z` head ≥ 1%）通过后，才做方案四的 KL balancing 与按 cell 聚合的
    free-bits。**当前 raw KL 一直有界（450 iter 时 0.0376），再次确认它不是瓶颈**，不做。
+
+---
+
+## 54. 路线 A：2×2 机制矩阵（posterior 输入 × 读出初始化，2026-09-27）
+
+### 54.0 状态
+
+本节是机制矩阵记录，四组均为 450 iter 冒烟，**没有 val 记录**，因此不填写区间均值、
+全轮峰值或 best saved。四组按 `posterior_obs_mode ∈ {l2, scaled_raw}` ×
+`z_proj_init ∈ {small, xavier}` 组合，其余变量（差分重建目标、`recon_input_mode=
+'posterior_correction'`、`readout_mode='spatial'`、`discr_loss_weight=0`、KL、free-nats、
+latent 大小、LR 调度）完全固定。
+
+### 54.1 动机与预登记
+
+第 53 节把根因定位到两处：① 上游 `F.normalize(e_pooled)` 把样本特异能量从 `e_t` 的 7.2%
+压到 1.28%；② 下游 `z_proj` 停在 `std=0.01`。2×2 的目的是把这两条**分离**验证：若只修上游
+能起效，说明下游不是限制；若必须两者同修才起效，则可主张「双瓶颈」。
+
+预登记门槛（`shuffle_z head ≥ 1%` 为核心）：
+
+```
+e_pooled specific    >= 5%
+correction specific  >= 3%
+correction²          >= 0.005 并形成平台
+shuffle_z head       >= 1%
+recon 降幅            >= 15%
+raw KL                有界
+```
+
+### 54.2 配置与运行事实
+
+| 组 | 配置 | 冒烟配置 | work_dir | 日志 |
+|---|---|---|---|---|
+| 1（基线） | `..._lowdim_z_delta_spatial.py` | `..._spatial_smoke_450iter.py` | `/tmp/lowdim_z_delta_spatial_smoke_450iter` | `/tmp/lowdim_spatial450.log` |
+| 2 | `..._spatial_raw.py` | `..._spatial_raw_smoke_450iter.py` | `/tmp/lowdim_routeA/raw` | `/tmp/lowdim_routeA/raw.log` |
+| 3 | `..._spatial_xavier.py` | `..._spatial_xavier_smoke_450iter.py` | `/tmp/lowdim_routeA/xavier` | `/tmp/lowdim_routeA/xavier.log` |
+| 4 | `..._spatial_raw_xavier.py` | `..._spatial_raw_xavier_smoke_450iter.py` | `/tmp/lowdim_routeA/raw_xavier` | `/tmp/lowdim_routeA/raw_xavier.log` |
+
+实现（commit `48417c1`）：新增 `posterior_obs_mode`（`'l2'` 默认 / `'scaled_raw'`）、
+`posterior_obs_scale`（默认 0.1，须 > 0）、`z_proj_init`（`'small'` 默认 / `'xavier'`，
+后者要求 `readout_mode='spatial'`）。`scaled_raw` 走 `pool(e_t) * 0.1`，把原始 RMS 1.97
+缩到约 0.197，接近 `h_t` 的 0.169；用同一个全局标量，不抹除样本间幅度差异。
+`z_proj_init='xavier'` 复用类内其它投影相同的 `xavier_init`，实测 RMS `0.08353`，
+是 `small`（`0.00991`）的 **8.43 倍**。
+
+四组均为 GPU 5/6/7、3 卡 DDP、seed 0、deterministic、IterBasedRunner 450 iter；
+显存均 `7436 MiB`，`1.09–1.11 s/iter`。RSSM 单测 **45 条通过**（新增 4 条：
+`scaled_raw` 保留样本间幅度差异而 L2 不保留、`posterior_obs_scale<=0` 报错、
+`xavier/small` 尺度比落在 5–20 倍、`xavier` 要求 spatial 读出）。
+
+### 54.3 训练曲线（每 50 iter）
+
+| iter | 1 l2+small | 2 raw+small | 3 l2+xavier | 4 raw+xavier |
+|---:|---|---|---|---|
+| | recon / corr² | recon / corr² | recon / corr² | recon / corr² |
+| 50 | 1.2235 / 0.0159 | 1.2264 / 0.0114 | 1.2229 / 0.0162 | 1.2261 / 0.0116 |
+| 100 | 1.1702 / 0.0091 | 1.1701 / 0.0077 | 1.1696 / 0.0097 | 1.1698 / 0.0083 |
+| 150 | 1.1377 / 0.0069 | 1.1375 / 0.0061 | 1.1366 / 0.0076 | 1.1363 / 0.0070 |
+| 200 | 1.1162 / 0.0056 | 1.1162 / 0.0050 | 1.1148 / 0.0063 | 1.1150 / 0.0059 |
+| 250 | 1.1020 / 0.0047 | 1.1019 / 0.0043 | 1.0999 / 0.0055 | 1.1000 / 0.0052 |
+| 300 | 1.0933 / 0.0042 | 1.0942 / 0.0038 | 1.0908 / 0.0050 | 1.0916 / 0.0047 |
+| 350 | 1.0882 / 0.0040 | 1.0892 / 0.0036 | 1.0858 / 0.0047 | 1.0858 / 0.0045 |
+| 400 | 1.0857 / 0.0039 | 1.0872 / 0.0035 | 1.0825 / 0.0046 | 1.0823 / 0.0044 |
+| 450 | 1.0856 / 0.0038 | 1.0858 / 0.0035 | 1.0821 / **0.0045** | 1.0818 / **0.0044** |
+
+末尾 raw KL / clamped ratio：
+
+| 组 | raw KL @450 | clamped @450 | `z_proj` weight RMS @450 |
+|---|---:|---:|---:|
+| 1 l2+small | 0.0376 | 0.9092 | 0.01014（≈初始 0.00991） |
+| 2 raw+small | 0.0340 | 0.9244 | 0.01007（≈初始） |
+| 3 l2+xavier | 0.0448 | 0.8768 | **0.08268**（≈初始 0.08353） |
+| 4 raw+xavier | 0.0424 | 0.8889 | **0.08271**（≈初始） |
+
+**关键观察：Xavier 组把权重稳在初始尺度（0.083），small 组也稳在 0.010——两边的检测损失
+都没有把 `z_proj` 推出各自的初始化量级。** 这说明问题不是「训练把权重压小」，而是
+「从初始尺度出发就没有足够梯度把它推大」。
+
+### 54.4 Source 探针（跨场景 `stride=700`，indices `[3, 703, 1403]`）
+
+`tools/probe_posterior_source.py`，样本特异能量占比：
+
+| 组 | `e_pooled` | `mu_q` | **correction** | 门槛（e_pooled ≥5% / correction ≥3%） |
+|---|---:|---:|---:|---|
+| 1 l2+small | 1.28% | 0.81% | 4.79% | e_pooled 未过 |
+| 2 raw+small | **10.31%** | 0.71% | 6.01% | 通过 |
+| 3 l2+xavier | 1.96% | 1.58% | 8.27% | e_pooled 未过 |
+| 4 raw+xavier | **14.19%** | 1.79% | **12.11%** | 通过 |
+
+矩阵分离得很干净：**上游修复（`scaled_raw`）单独就把 `e_pooled` 从 1.28% 提到 10.31%
+（8.1 倍），并把 correction 从 4.79% 提到 6.01%；下游修复（Xavier）不改变 `e_pooled`
+的输入构成，但让 correction 的特异占比再翻一倍以上（4.79% → 8.27%，6.01% → 12.11%）。**
+两者叠加得到最好的 12.11%。
+
+同时可以看到 `mu_q` 的样本特异占比改善有限（0.81% → 1.79%），因为 `mu_q` 仍由公共分量
+主导；但 **correction（即 `mu_q − mu_p`）的特异占比显著提升**，这正是重建和检测共用的量。
+
+### 54.5 反事实诊断（三窗口，各 4 条）
+
+`tools/diagnose_z_utilization.py`，窗口 `[3..6]`（offset 2）、`[100..103]`（offset 2）、
+`[1800..1803]`（offset −1）。下表为 `[3..6]` 的 head 比值；括号内为后两窗口。
+
+| 组 | zero_z head | **shuffle_z head** | prior_only head | 门槛 ≥1% |
+|---|---:|---:|---:|---|
+| 1 l2+small | 5.98e-4 | **2.77e-5** | 2.57e-4 | 未过（差 36 倍） |
+| 2 raw+small | 6.95e-4 | **2.50e-5** | 1.87e-4 | 未过（差 40 倍） |
+| 3 l2+xavier | 6.21e-3 | **2.79e-4** | 2.44e-3 | 未过（差 36 倍） |
+| 4 raw+xavier | 7.04e-3 | **3.14e-4** | 2.04e-3 | 未过（差 32 倍） |
+
+组 4 的另外两个窗口：`[100..103]` shuffle `2.68e-4`、`[1800..1803]` shuffle `2.17e-4`，
+三窗口一致。
+
+**判读**：
+- **Xavier 单独把下游通路打开了约 10 倍**（shuffle 2.77e-5 → 2.79e-4，zero 5.98e-4 →
+  6.21e-3，prior 2.57e-4 → 2.44e-3）。这证明「下游增益不足」确实是一个真实瓶颈，
+  与 53.6.2 的勘误一致。
+- **但它没有改变 z 的样本判别性比例**：`shuffle/zero` 之比在四组里几乎不动
+  （组1 `0.046`、组2 `0.036`、组3 `0.045`、组4 `0.045`）。即 Xavier 把「公共偏置」和
+  「样本身份」一起放大了，没有偏向后者。
+- **上游修复提升了 correction 的特异占比（4.79% → 12.11%），但 head 上的 shuffle 只从
+  2.79e-4 涨到 3.14e-4（1.12 倍）**。特异占比涨了 2.5 倍，head 响应只涨 12%，
+  说明从 correction 到 head 的传递过程中，增加的样本身份并没有等比例地到达检测输出。
+
+### 54.6 门槛判定
+
+| 门槛 | 要求 | 组 4（最好） | 结论 |
+|---|---|---|---|
+| `e_pooled` specific | ≥ 5% | 14.19% | **通过** |
+| correction specific | ≥ 3% | 12.11% | **通过** |
+| correction² | ≥ 0.005 且平台 | 0.0044，末 150 iter 0.0047→0.0044 | **未过**（水平不足，但已明显平台化） |
+| `shuffle_z` head | ≥ 1% | 3.14e-4 | **未过**（差 32 倍） |
+| recon 降幅 | ≥ 15% | −11.8% | **未过** |
+| raw KL | 有界 | 0.0424 | 通过 |
+
+**路线 A 整体未通过机制门槛，不进入 ep6/ep12。** 但两项上游/下游修复各自都产生了
+方向正确、量级明确的效果，属于 53 节以来第一次让 head 响应进入 `1e-4~1e-3`
+（此前恒为 `2e-5`）。
+
+### 54.7 结论与对后续路线的影响
+
+1. **双瓶颈已被分别证实**：上游 `F.normalize(e_pooled)` 与下游 `z_proj` 初始尺度是两个
+   独立的限制项，各自被单独修复都会带来可测收益（上游：correction 特异占比 ×2.5；
+   下游：head 响应 ×10）。
+2. **但两者相加仍不足以过门槛**，且 `shuffle/zero` 比值在四组间恒定在 0.04–0.05。
+   这说明**还缺的不是「信号幅度」而是「结构」**：现有 `correction = mu_q − mu_p` 由两个
+   公共大向量相减得到，即使特异能量占到 12%，其绝对幅度仍然很小且方向未被约束。
+   这与路线 B 的设计动机直接对应。
+3. **AP 未被测量**，四组均无 val。因此本节不能给出任何性能结论，也不能用「AP 未变差」
+   为这些改动背书。
+4. 复现命令与探针用法见 54.4/54.5 对应小节；`tools/probe_correction_scale.py` 的
+   weight/bias 分离输出已修正（见 53.6.2 勘误）。
+
+**下一步（按用户预登记顺序）**：进入路线 B（Innovation-Conditioned RSSM），
+其成立前提「去 normalize 后 `mu_q` 改善」已由组 4 满足（correction 特异占比 12.11%）；
+`h_t`/`mu_p` 仍接近常量（`mu_p` 特异占比 0.49%），符合路线 B 的触发条件。
