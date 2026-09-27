@@ -1,8 +1,5 @@
 # R4Det 项目核心目标（全局提醒）
 
-> 本文件只保留最高层的目标约束。完整实验协议与纪律见 `AGENTS.md.disabled`
-> （长版，按需查阅，不默认全量加载）。
-
 ## 项目定位
 
 把 **RSSM**（Dreamer 风格的确定性 + 随机隐状态时序模型）融入车载
@@ -29,6 +26,3 @@ radar-camera 3D 感知模型 **R4Det**，在 baseline 之上做真实的机制�
 
 - 完整训练记录与统一记录口径：`docs/training_runs_full.md`
 - 待办与方法探索主线：`docs/todo.md`
-- 研究协议全文：`AGENTS.md.disabled`
-- 当前主线：RSSM `z_t` 的样本级判别信息问题（见 `docs/training_runs_full.md`
-  第 49、50、52、53 节）
