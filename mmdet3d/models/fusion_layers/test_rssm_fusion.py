@@ -459,6 +459,70 @@ class TestLowDimFutureConsistentLatentFusion(unittest.TestCase):
             self.fusion.posterior_mu.weight.grad.abs().sum().item(), 0.0)
         self.assertIsNotNone(self.fusion.decoder[1].weight.grad)
 
+    def test_temporal_delta_reconstructs_posterior_correction(self):
+        """Innovation target must exclude h_t and require valid history."""
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        fusion = LowDimFutureConsistentLatentFusion(
+            in_channels=256,
+            latent_dim=32,
+            hidden_dim=128,
+            latent_size=(4, 4),
+            future_loss_weight=0.0,
+            recon_target_mode='temporal_delta',
+            recon_input_mode='posterior_correction',
+            direct_correction_readout=True,
+        )
+        fusion.train()
+        feat1 = torch.randn(2, 256, 8, 8)
+        feat2 = torch.randn(2, 256, 8, 8)
+
+        _, _, first_loss, _, _, first_stats = fusion(feat1)
+        _, _, second_loss, _, _, second_stats = fusion(
+            feat2, detach_state=False)
+
+        self.assertEqual(first_stats['stat_recon_valid_frac'].item(), 0.0)
+        self.assertEqual(first_stats['stat_recon_mse'].item(), 0.0)
+        self.assertEqual(
+            fusion.decoder[0].conv.in_channels, fusion.latent_dim)
+        self.assertEqual(second_stats['stat_recon_valid_frac'].item(), 1.0)
+        self.assertGreater(second_stats['stat_recon_mse'].item(), 0.0)
+        self.assertGreater(second_stats['stat_recon_delta_rms'].item(), 0.0)
+        self.assertGreater(second_stats['stat_correction_sq'].item(), 0.0)
+        self.assertTrue(torch.isfinite(first_loss))
+        self.assertTrue(torch.isfinite(second_loss))
+
+        second_loss.backward()
+        self.assertIsNotNone(fusion.posterior_mu.weight.grad)
+        self.assertGreater(
+            fusion.posterior_mu.weight.grad.abs().sum().item(), 0.0)
+        self.assertIsNotNone(fusion.correction_output_proj)
+
+    def test_temporal_delta_reset_drops_invalid_sample(self):
+        """A reset sample must not compare against stale previous features."""
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        fusion = LowDimFutureConsistentLatentFusion(
+            in_channels=256,
+            latent_dim=32,
+            hidden_dim=128,
+            latent_size=(4, 4),
+            future_loss_weight=0.0,
+            recon_target_mode='temporal_delta',
+            recon_input_mode='posterior_correction',
+        )
+        fusion.train()
+        fusion(torch.randn(2, 256, 8, 8))
+        fusion.reset_for_samples(torch.tensor([True, False]))
+        _, _, _, _, _, stats = fusion(torch.randn(2, 256, 8, 8))
+
+        self.assertAlmostEqual(
+            stats['stat_recon_valid_frac'].item(), 0.5, places=6)
+
     def test_prior_and_posterior_condition_on_h_t(self):
         """z must be generated from h_t, not from the previous latent."""
         feat_a = torch.randn(1, 256, 8, 8)

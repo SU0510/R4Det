@@ -7172,3 +7172,61 @@ prior 没吃 h_t」这一假设。
 
 理由：KL balancing 只决定 prior/posterior 互相追的方式，不能创造缺失的观测信息。
 先确认 z 确实携带样本信息，再调这一层。
+
+---
+
+## 53. 后验校正量 + 帧间残差重建（2026-09-27，待训练）
+
+### 53.0 状态
+
+本节是下一轮结构实现记录，尚无正式训练结果，因此不填写区间均值、全轮峰值或 best saved。
+上一轮已证明：当前帧 pooled BEV 重建目标 92.1% 是共享模板，且 decoder 可从 `h_t` 获取
+历史信息；检测读出又把 `z_t` 全局池化为弱 FiLM。三处共同允许样本无关的 z 通过训练。
+
+### 53.1 唯一结构包
+
+新配置：
+`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_delta.py`
+
+```
+correction_t = mu_q - stopgrad(mu_p)
+target_t = standardize(norm_pool(feat_t) - norm_pool(feat_{t-1}))
+recon_t = decoder(correction_t)
+output_t = feat_t + film_residual(h_t, z_t) + correction_proj(correction_t)
+```
+
+- decoder 输入从 `cat(h_t,z_t)` 改为仅 `correction_t`，堵住历史状态直接完成重建的旁路。
+- 重建目标改为帧间残差并再次逐样本标准化，去掉上一帧和共享 BEV 模板已经解释的部分，
+  同时保持损失为 O(1)。
+- `correction_t` 增加 16x16 空间直接读出；原实现只对 z 做 global pool 后 FiLM，空间信息
+  即使学到也无法到达检测头。
+- 已证无效的一通道 future-energy 项在本配置中设为 0；KL、free-nats、latent 大小和训练
+  schedule 保持不变，避免把 KL 调参混入本次机制检验。
+- 无有效上一帧时不计差分重建；`reset_for_samples()` 同步清除对应样本的残差目标有效位。
+- RSSM 单测 33 条通过；新增覆盖差分首帧跳过、posterior 梯度、decoder 输入隔离和
+  per-sample reset 有效位。
+
+### 53.2 预登记门控
+
+1. 单测与 100 iter：接口、显存、梯度正常；第二帧起 `stat_recon_valid_frac>0`，
+   `stat_recon_mse` 和 `stat_correction_sq` 有限。
+2. 450 iter：残差 recon 明显下降，`stat_correction_sq` 不单调塌到 0。
+3. ep6 冻结诊断：三个窗口的 `shuffle_z` head 至少达到 1%；未达到则不跑 ep12。
+4. ep12 目标：`shuffle_z` head 至少 10%，且 ep8-12 Overall 与 no2d_igdr 基线差距小于 2 点。
+5. 只有机制和 AP 同时过门槛，才进入 KL balancing / per-cell free-bits；否则结束低维
+   bottleneck + FiLM 主线，回到标准空间 RSSM。
+
+### 53.3 100 iter DDP 冒烟
+
+config：`me_rssm/sanity/lowdim_z_delta_smoke_100iter.py`；work_dir：
+`/tmp/lowdim_z_delta_smoke_100iter`；GPU 5/6/7，3 卡 DDP。
+
+| iter | latent loss | recon MSE | correction² | raw KL | clamped ratio | delta RMS | memory |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 50 | 0.3488 | 1.2212 | 0.0156 | 0.1999 | 0.5278 | 0.2043 | 7.437 GiB |
+| 100 | 0.2845 | 1.1880 | 0.0103 | 0.1281 | 0.6250 | 0.2097 | 7.441 GiB |
+
+接口、梯度、DDP、显存均通过；`stat_recon_valid_frac=0.99`，符合 N=4 中首帧无差分目标的
+预期。recon 仅下降 2.7%，且 correction² 同期下降 34%，100 iter 还不能证明 z 已被救活。
+下一步必须跑 450 iter：若 recon 明显下降且 correction² 稳住，再进入 ep6；若 correction²
+继续单调逼近 0，则该设计在正式训练前直接止损。

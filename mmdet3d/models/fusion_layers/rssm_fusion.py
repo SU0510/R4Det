@@ -1056,6 +1056,9 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         predict_future_channels=None,
         future_loss_weight=0.1,
         recon_loss_weight=0.1,
+        recon_target_mode='current',
+        recon_input_mode='state_latent',
+        direct_correction_readout=False,
         modulation_scale=0.1,
         gate_init_bias=-1.0,
         norm_cfg=dict(type='BN', requires_grad=True),
@@ -1090,6 +1093,16 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         )
         self.future_loss_weight = future_loss_weight
         self.recon_loss_weight = recon_loss_weight
+        if recon_target_mode not in ('current', 'temporal_delta'):
+            raise ValueError(
+                "recon_target_mode must be 'current' or 'temporal_delta'")
+        if recon_input_mode not in ('state_latent', 'posterior_correction'):
+            raise ValueError(
+                "recon_input_mode must be 'state_latent' or "
+                "'posterior_correction'")
+        self.recon_target_mode = recon_target_mode
+        self.recon_input_mode = recon_input_mode
+        self.direct_correction_readout = direct_correction_readout
         if self.recon_loss_weight > 0 and (
                 self.latent_pool == 'global' or min(self.latent_size) < 2):
             # The recon target is standardized across each sample, so a 1x1
@@ -1099,7 +1112,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
                 "latent_pool='adaptive' with latent_size >= 2 in both dims")
         self.modulation_scale = modulation_scale
         self.gate_init_bias = gate_init_bias
-        self.use_future_consistency = self.predict_future_channels > 0
+        self.use_future_consistency = (
+            self.predict_future_channels > 0 and self.future_loss_weight > 0)
         # Tells the detector that index 2 of the forward tuple is the complete
         # per-frame objective (KL + future consistency) rather than a bare KL
         # term that still needs the reconstruction loss paired with it.
@@ -1136,12 +1150,14 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         self.posterior_logstd = nn.Conv2d(
             2 * latent_dim, latent_dim, 3, padding=1)
 
-        # Reconstructs a pooled, normalized view of the current BEV feature
-        # from cat(h_t, z_t). This is the observation-likelihood term that
-        # anchors z_t to what the current frame actually contains.
+        decoder_in_channels = (
+            2 * latent_dim
+            if self.recon_input_mode == 'state_latent'
+            else latent_dim
+        )
         self.decoder = nn.Sequential(
             ConvModule(
-                2 * latent_dim,
+                decoder_in_channels,
                 hidden_dim,
                 3,
                 padding=1,
@@ -1154,6 +1170,10 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         self.film_proj = nn.Linear(latent_dim, 2 * latent_dim)
         self.gate_proj = nn.Linear(2 * latent_dim, latent_dim)
         self.output_proj = nn.Conv2d(latent_dim, in_channels, 1)
+        self.correction_output_proj = (
+            nn.Conv2d(latent_dim, in_channels, 1)
+            if self.direct_correction_readout else None
+        )
 
         if self.use_future_consistency:
             self.prior_future = nn.Conv2d(
@@ -1179,6 +1199,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         # exclusive task forward-looking instead of a copy of the input.
         self.pending_future_pred = None
         self.pending_future_valid = None
+        self.prev_recon_target = None
+        self.prev_recon_valid = None
         self.init_weights()
 
     def init_weights(self):
@@ -1195,6 +1217,9 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             self.output_proj,
         ):
             xavier_init(module, distribution='uniform')
+        if self.correction_output_proj is not None:
+            xavier_init(
+                self.correction_output_proj, distribution='uniform')
         for module in (
             self.latent_gru.reset_conv,
             self.latent_gru.update_conv,
@@ -1214,6 +1239,9 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         # non-zero gradient path from the low-dimensional latent.
         nn.init.normal_(self.output_proj.weight, std=0.01)
         nn.init.zeros_(self.output_proj.bias)
+        if self.correction_output_proj is not None:
+            nn.init.normal_(self.correction_output_proj.weight, std=0.01)
+            nn.init.zeros_(self.correction_output_proj.bias)
         if self.use_future_consistency:
             xavier_init(self.prior_future, distribution='uniform')
             xavier_init(self.posterior_future, distribution='uniform')
@@ -1223,6 +1251,8 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         self.z_state = None
         self.pending_future_pred = None
         self.pending_future_valid = None
+        self.prev_recon_target = None
+        self.prev_recon_valid = None
 
     def reset_for_samples(self, mask):
         if mask.any() and self.h_state is not None:
@@ -1238,9 +1268,18 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
                 # future-consistency mean instead of being scored against a
                 # stale target.
                 self.pending_future_valid = self.pending_future_valid & keep
+            if self.prev_recon_valid is not None:
+                self.prev_recon_valid = self.prev_recon_valid & keep
 
     def _pool_latent(self, value):
         return self.latent_pool_layer(value)
+
+    def _normalized_recon_target(self, feat):
+        target = self._pool_latent(feat).detach()
+        target_mean = target.mean(dim=(1, 2, 3), keepdim=True)
+        target_std = target.std(
+            dim=(1, 2, 3), keepdim=True).clamp_min(1e-4)
+        return (target - target_mean) / target_std
 
     def _constrained_logstd(self, logstd):
         logstd = self.min_logstd + F.softplus(logstd - self.min_logstd)
@@ -1324,20 +1363,62 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             z_t = mu_q if deterministic else self.sample(mu_q, logstd_q)
         else:
             z_t = mu_p if deterministic else self.sample(mu_p, logstd_p)
+        posterior_correction = (
+            mu_q - mu_p.detach()
+            if use_posterior else torch.zeros_like(mu_p)
+        )
 
         kl, stats = self.kl_loss(mu_q, logstd_q, mu_p, logstd_p)
 
-        # Observation likelihood: reconstruct the pooled, per-whole-map
-        # normalized current BEV from cat(h_t, z_t). Normalizing both sides
-        # keeps this an O(1) target instead of letting the raw BEV scale
-        # dominate the KL and future terms.
-        target = self._pool_latent(feat).detach()
-        target_mean = target.mean(dim=(1, 2, 3), keepdim=True)
-        target_std = target.std(dim=(1, 2, 3), keepdim=True).clamp_min(1e-4)
-        target = (target - target_mean) / target_std
-        reconstruction = self.decoder(torch.cat([h_t, z_t], dim=1))
-        recon_loss = F.mse_loss(reconstruction, target)
+        target = self._normalized_recon_target(feat)
+        decoder_input = (
+            torch.cat([h_t, z_t], dim=1)
+            if self.recon_input_mode == 'state_latent'
+            else posterior_correction
+        )
+        reconstruction = self.decoder(decoder_input)
+        recon_loss = torch.zeros(
+            (), device=feat.device, dtype=feat.dtype)
+        has_recon_target = False
+        recon_valid_frac = torch.zeros(
+            (), device=feat.device, dtype=feat.dtype)
+        delta_rms = torch.zeros(
+            (), device=feat.device, dtype=feat.dtype)
+        if self.recon_target_mode == 'current':
+            recon_loss = F.mse_loss(reconstruction, target)
+            has_recon_target = True
+            recon_valid_frac = torch.ones_like(recon_valid_frac)
+        elif self.prev_recon_target is not None:
+            valid = self.prev_recon_valid
+            if valid is None:
+                valid = torch.ones(
+                    B, dtype=torch.bool, device=feat.device)
+            if valid.any():
+                delta_target = target - self.prev_recon_target
+                delta_rms = delta_target.square().mean().sqrt().detach()
+                delta_mean = delta_target.mean(
+                    dim=(1, 2, 3), keepdim=True)
+                delta_std = delta_target.std(
+                    dim=(1, 2, 3), keepdim=True).clamp_min(1e-4)
+                delta_target = (delta_target - delta_mean) / delta_std
+                valid_map = valid[:, None, None, None].to(
+                    target.dtype).expand_as(target)
+                denom = valid_map.sum().clamp_min(1.0)
+                recon_loss = (
+                    (reconstruction - delta_target).square() *
+                    valid_map
+                ).sum() / denom
+                has_recon_target = True
+                recon_valid_frac = valid.float().mean().detach()
+        if self.recon_target_mode == 'temporal_delta':
+            self.prev_recon_target = target
+            self.prev_recon_valid = torch.ones(
+                B, dtype=torch.bool, device=feat.device)
         stats['stat_recon_mse'] = recon_loss.detach()
+        stats['stat_recon_valid_frac'] = recon_valid_frac
+        stats['stat_recon_delta_rms'] = delta_rms
+        stats['stat_correction_sq'] = posterior_correction.square().mean(
+        ).detach()
 
         future_loss = torch.zeros((), device=feat.device, dtype=feat.dtype)
         has_future_target = False
@@ -1399,6 +1480,9 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         h_gated = (1.0 - gate[:, :, None, None]) * h_t + \
             gate[:, :, None, None] * h_modulated
         latent_residual = self.output_proj(h_gated)
+        if self.correction_output_proj is not None:
+            latent_residual = latent_residual + self.correction_output_proj(
+                posterior_correction)
         if latent_residual.shape[-2:] != feat.shape[-2:]:
             latent_residual = F.interpolate(
                 latent_residual,
@@ -1415,7 +1499,7 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             self.z_state = z_t
 
         latent_loss = kl * self.kl_scale
-        if self.recon_loss_weight > 0:
+        if self.recon_loss_weight > 0 and has_recon_target:
             latent_loss = latent_loss + self.recon_loss_weight * recon_loss
         if has_future_target:
             latent_loss = latent_loss + self.future_loss_weight * future_loss
