@@ -1288,6 +1288,36 @@ class TestObjectCentricLatentSupervision(unittest.TestCase):
         handle.remove()
         self.assertEqual(called, [])
 
+    def test_detection_output_is_independent_of_the_object_head(self):
+        """Adding the auxiliary target must not perturb the fused features.
+
+        The head is a training-only side branch: `forward` never reads its
+        output, so the detector-facing tensor and the returned h_t/z_t must be
+        bit-identical whether or not a target is attached. This also pins the
+        "zero inference cost" claim: with the branch removed at inference the
+        numbers cannot change.
+        """
+        import copy
+
+        fusion = self._build(latent_object_loss_weight=0.1)
+        baseline = copy.deepcopy(fusion)
+        feat = torch.randn(2, 256, 8, 8)
+
+        fusion.train()
+        fusion.set_current_object_target(self._target())
+        out_with, _, loss_with, h_with, z_with, stats = fusion(
+            feat, deterministic=True)
+
+        baseline.train()
+        out_without, _, loss_without, h_without, z_without, _ = baseline(
+            feat, deterministic=True)
+
+        self.assertTrue(torch.equal(out_with, out_without))
+        self.assertTrue(torch.equal(h_with, h_without))
+        self.assertTrue(torch.equal(z_with, z_without))
+        self.assertGreater(stats['stat_object_hm'].item(), 0.0)
+        self.assertNotEqual(loss_with.item(), loss_without.item())
+
     def test_target_shape_is_validated(self):
         fusion = self._build(latent_object_loss_weight=0.05)
         with self.assertRaises(ValueError):
