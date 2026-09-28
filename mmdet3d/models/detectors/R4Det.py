@@ -20,7 +20,8 @@ from mmdet.models.backbones.resnet import BasicBlock
 from mmdet3d.models import builder
 from mmdet3d.models.builder import FUSION_LAYERS, NECKS
 from mmdet3d.models.detectors.mvx_faster_rcnn import MVXFasterRCNN
-from mmdet3d.core import bbox3d2result, show_multi_modality_result, LiDARInstance3DBoxes
+from mmdet3d.core import (bbox3d2result, show_multi_modality_result,
+                          bev_centers_to_heatmap, LiDARInstance3DBoxes)
 from ...datasets.structures.bbox import HorizontalBoxes, bbox2roi
 from ...utils.visualization import draw_bev_pts_bboxes, draw_paper_bboxes
 from ...utils.visualization import custom_draw_lidar_bbox3d_on_img
@@ -1435,6 +1436,25 @@ class R4Det(MVXFasterRCNN):
         # extract_feat feat_or_dict=1 path).
         last_hist_valid = frame_valid[N - 2] if N >= 2 else torch.ones(
             len(frame_img_metas[N - 1]), dtype=torch.bool, device=frame_img[N - 1].device)
+        # Route-C object-centric supervision: rasterize the current frame's
+        # box centers on the latent grid and hand them to the fusion layer
+        # right before its forward. Only the current frame is supervised;
+        # reset_state() clears the target after this step.
+        latent_object_weight = (
+            getattr(self.temporal_fusion, 'latent_object_loss_weight', 0.0)
+            if self.temporal_fusion is not None else 0.0)
+        if (self.training and latent_object_weight > 0
+                and gt_bboxes_3d is not None and gt_labels_3d is not None):
+            self.temporal_fusion.set_current_object_target(
+                bev_centers_to_heatmap(
+                    gt_bboxes_3d,
+                    gt_labels_3d,
+                    num_classes=self.temporal_fusion.num_object_classes,
+                    out_size=self.temporal_fusion.latent_size,
+                    point_cloud_range=self.point_cloud_range,
+                    min_radius=self.temporal_fusion.object_min_radius,
+                    device=frame_img[N - 1].device,
+                ))
         feature_dict = self.extract_feat(frame_points[N - 1], img=frame_img[N - 1], img_metas=frame_img_metas[N - 1],
                                                is_valid_mask=last_hist_valid, feat_or_dict=1)
         # feature_dict = torch.load(load_path)

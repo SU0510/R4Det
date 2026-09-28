@@ -1068,6 +1068,10 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         posterior_struct='standard',
         obs_pred_loss_weight=0.05,
         z_prev_normalize=True,
+        latent_object_loss_weight=0.0,
+        num_object_classes=4,
+        object_head_hidden_dim=64,
+        object_min_radius=1,
         modulation_scale=0.1,
         gate_init_bias=-1.0,
         norm_cfg=dict(type='BN', requires_grad=True),
@@ -1154,6 +1158,23 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         # recurrence. Only the scale is at stake: both branches keep the
         # channel-wise direction.
         self.z_prev_normalize = z_prev_normalize
+        if latent_object_loss_weight < 0:
+            raise ValueError('latent_object_loss_weight must be >= 0')
+        if num_object_classes < 1:
+            raise ValueError('num_object_classes must be >= 1')
+        if object_head_hidden_dim < 1:
+            raise ValueError('object_head_hidden_dim must be >= 1')
+        if object_min_radius < 0:
+            raise ValueError('object_min_radius must be >= 0')
+        # Route-C object-centric supervision. The auxiliary head consumes
+        # only `posterior_correction`, so it cannot borrow the recurrent state
+        # or the pooled observation and call that object evidence. It is
+        # built unconditionally so a config can toggle the weight without
+        # changing the state-dict layout; inference drops the branch entirely.
+        self.latent_object_loss_weight = latent_object_loss_weight
+        self.num_object_classes = num_object_classes
+        self.object_head_hidden_dim = object_head_hidden_dim
+        self.object_min_radius = object_min_radius
         if self.recon_loss_weight > 0 and (
                 self.latent_pool == 'global' or min(self.latent_size) < 2):
             # The recon target is standardized across each sample, so a 1x1
@@ -1258,6 +1279,16 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             self.prior_future = None
             self.posterior_future = None
 
+        # Route-C auxiliary branch: correction -> class center heatmap. Kept
+        # off the detection path (the forward output never reads it) so
+        # removing it at inference is free.
+        self.object_head = nn.Sequential(
+            nn.Conv2d(
+                latent_dim, object_head_hidden_dim, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(object_head_hidden_dim, num_object_classes, 1),
+        )
+
         if self.latent_pool == 'adaptive':
             self.latent_pool_layer = nn.AdaptiveAvgPool2d(self.latent_size)
         else:
@@ -1275,6 +1306,10 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         self.pending_future_valid = None
         self.prev_recon_target = None
         self.prev_recon_valid = None
+        # Set by the detector for the current frame only; history frames must
+        # not contribute object supervision (their GT is not the prediction
+        # target of the current correction).
+        self.current_object_target = None
         self.init_weights()
 
     def init_weights(self):
@@ -1340,6 +1375,14 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         if self.use_future_consistency:
             xavier_init(self.prior_future, distribution='uniform')
             xavier_init(self.posterior_future, distribution='uniform')
+        # Initialised last so adding the route-C branch does not shift the
+        # RNG consumption (and therefore the weights) of any pre-existing
+        # module, keeping old checkpoints and ablations bit-comparable.
+        xavier_init(self.object_head[0], distribution='uniform')
+        xavier_init(self.object_head[2], distribution='uniform')
+        # CenterNet init: start at low objectness so the focal term does not
+        # open with a huge negative-gradient spike on background pixels.
+        nn.init.constant_(self.object_head[2].bias, -2.19)
 
     def reset_state(self):
         self.h_state = None
@@ -1348,6 +1391,29 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         self.pending_future_valid = None
         self.prev_recon_target = None
         self.prev_recon_valid = None
+        self.current_object_target = None
+
+    def set_current_object_target(self, target):
+        """Attach the current-frame objectness heatmap for route-C training.
+
+        ``target`` is ``(B, num_object_classes, H, W)`` on any device; it is
+        moved to the fusion device at loss time. The detector must call this
+        immediately before the current-frame forward and clear it afterwards
+        (``reset_state`` also clears it) so history frames never train the
+        auxiliary head against the wrong frame's GT.
+        """
+        if target is None:
+            self.current_object_target = None
+            return
+        if target.dim() != 4:
+            raise ValueError(
+                'object target must be (B, C, H, W), got shape '
+                f'{tuple(target.shape)}')
+        if target.shape[1] != self.num_object_classes:
+            raise ValueError(
+                'object target channel mismatch: expected '
+                f'{self.num_object_classes}, got {target.shape[1]}')
+        self.current_object_target = target
 
     def reset_for_samples(self, mask):
         if mask.any() and self.h_state is not None:
@@ -1396,6 +1462,78 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
     def _constrained_logstd(self, logstd):
         logstd = self.min_logstd + F.softplus(logstd - self.min_logstd)
         return torch.clamp(logstd, max=0.0)
+
+    def _object_heatmap_loss(self, posterior_correction):
+        """CenterNet focal loss on the correction-derived class heatmap.
+
+        The head is fed ``posterior_correction`` only: allowing it to see
+        ``h_t`` would let the recurrent state solve the target and remove the
+        pressure on the correction. Returns ``(loss, recall, num_pos)``; the
+        loss is a zero scalar when disabled or when no current-frame target
+        was attached so the objective stays exactly unchanged in that case.
+        Returns ``(loss, hit1, num_pos, thr50)``, where ``hit1`` is the
+        per-occupied-channel argmax hit rate and ``thr50`` is the fraction of
+        GT centres whose probability exceeds 0.5.
+        """
+        zero = torch.zeros(
+            (), device=posterior_correction.device,
+            dtype=posterior_correction.dtype)
+        if (not self.training or self.latent_object_loss_weight <= 0
+                or self.current_object_target is None):
+            return zero, zero, zero, zero
+        target = self.current_object_target.to(
+            device=posterior_correction.device, dtype=torch.float32)
+        if target.shape[0] != posterior_correction.shape[0]:
+            raise ValueError(
+                'object target batch mismatch: expected '
+                f'{posterior_correction.shape[0]}, got {target.shape[0]}')
+        if target.shape[-2:] != posterior_correction.shape[-2:]:
+            raise ValueError(
+                'object target spatial mismatch: expected '
+                f'{tuple(posterior_correction.shape[-2:])}, got '
+                f'{tuple(target.shape[-2:])}')
+        # The head emits logits and the loss is evaluated in logit space.
+        # `logsigmoid` is the numerically stable log(sigmoid(.)), so a
+        # saturated logit keeps a finite gradient instead of the flat plateau
+        # that probability-space clamping (clamp(p, 1e-4, 1-1e-4)) creates.
+        logits = self.object_head(
+            posterior_correction.to(torch.float32)).float()
+        prob = logits.sigmoid()
+        pos = target.eq(1.0).float()
+        neg = 1.0 - target
+        neg_weights = neg.pow(4)
+        pos_loss = -F.logsigmoid(logits) * (1.0 - prob).pow(2) * pos
+        neg_loss = (
+            -F.logsigmoid(-logits) * prob.pow(2) * neg_weights * neg)
+        num_pos = pos.sum()
+        # Match the reference CenterNet behaviour: an image with no object
+        # must contribute no gradient instead of being normalised by a
+        # clamped 1.0 denominator, which would blow the term up ~200x.
+        if num_pos.item() == 0:
+            return (zero, zero, num_pos.detach(), zero)
+        loss = (pos_loss.sum() + neg_loss.sum()) / num_pos
+        # A CenterNet head is trained with a Gaussian soft target and is not
+        # driven to exceed 0.5 at every centre early in training, so a fixed
+        # 0.5 threshold reads 0 for a long time without saying whether the
+        # map carries object evidence. Hit@1 is the meaningful diagnostic:
+        # in each *occupied* class channel, the argmax cell counts as a hit
+        # when it is one of that class's GT centres. Background-only classes
+        # are excluded, otherwise their arbitrary uniform argmax would be
+        # scored against every centre. The 0.5 threshold is reported too.
+        flat = prob.flatten(2)
+        peak_idx = flat.argmax(dim=2)
+        peak = torch.zeros_like(flat).scatter_(
+            2, peak_idx[:, :, None], 1.0).view_as(prob)
+        hits = (peak * pos).sum()
+        occupied = (pos.sum(dim=(2, 3)) > 0).sum().clamp_min(1.0)
+        recall = hits / occupied
+        thr_hits = ((prob > 0.5) & pos.bool()).sum().float() / num_pos
+        return (
+            loss.to(posterior_correction.dtype),
+            recall.detach().to(posterior_correction.dtype),
+            num_pos.detach().to(posterior_correction.dtype),
+            thr_hits.detach().to(posterior_correction.dtype),
+        )
 
     def sample(self, mu, logstd):
         logstd = self._constrained_logstd(logstd)
@@ -1689,6 +1827,13 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         latent_loss = kl * self.kl_scale
         if self.obs_pred_loss_weight > 0 and self.posterior_struct == 'innovation':
             latent_loss = latent_loss + self.obs_pred_loss_weight * obs_pred
+        (object_hm_loss, object_hm_recall, object_hm_num_pos,
+         object_hm_thr50) = (
+            self._object_heatmap_loss(posterior_correction))
+        if self.latent_object_loss_weight > 0:
+            latent_loss = (
+                latent_loss
+                + self.latent_object_loss_weight * object_hm_loss)
         if self.recon_loss_weight > 0 and has_recon_target:
             latent_loss = latent_loss + self.recon_loss_weight * recon_loss
         if (self.discr_loss_weight > 0 and has_recon_target
@@ -1702,6 +1847,13 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         # (or, for negative values, deflate) the training loss. Keep this as a
         # pure diagnostic.
         stats['stat_future_mse'] = future_loss.detach()
+        # Name deliberately avoids the substring 'loss': mmdet's
+        # _parse_losses() would otherwise fold this diagnostic into the
+        # reported total.
+        stats['stat_object_hm'] = object_hm_loss.detach()
+        stats['stat_object_hm_recall'] = object_hm_recall
+        stats['stat_object_hm_pos'] = object_hm_num_pos
+        stats['stat_object_hm_thr50'] = object_hm_thr50
         # Index 1 stays None: the reconstruction here is pooled/normalized and
         # its MSE is already folded into index 2 with recon_loss_weight, so
         # the detector's legacy full-resolution recon path must not double-count

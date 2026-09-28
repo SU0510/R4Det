@@ -1206,5 +1206,309 @@ class TestZPrevNormalizeAblation(unittest.TestCase):
         self.assertFalse(torch.allclose(out_norm, out_raw, atol=1e-6))
 
 
+class TestObjectCentricLatentSupervision(unittest.TestCase):
+    """Route C: auxiliary class-heatmap head on the posterior correction."""
+
+    def _build(self, **overrides):
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        kwargs = dict(
+            in_channels=256,
+            latent_dim=32,
+            hidden_dim=128,
+            latent_pool='adaptive',
+            latent_size=(4, 4),
+            future_loss_weight=0.0,
+            recon_target_mode='temporal_delta',
+            recon_input_mode='posterior_correction',
+            readout_mode='spatial',
+        )
+        kwargs.update(overrides)
+        return LowDimFutureConsistentLatentFusion(**kwargs)
+
+    @staticmethod
+    def _target():
+        target = torch.zeros(2, 4, 4, 4)
+        target[0, 0, 1, 2] = 1.0
+        target[1, 2, 3, 0] = 1.0
+        return target
+
+    def test_default_weight_zero_is_bitwise_inert(self):
+        """An un-configured run must not see the auxiliary branch at all."""
+        import copy
+
+        fusion = self._build()
+        baseline = copy.deepcopy(fusion)
+        feat = torch.randn(2, 256, 8, 8)
+
+        fusion.train()
+        fusion.set_current_object_target(self._target())
+        _, _, loss_with_target, _, _, stats = fusion(feat)
+
+        baseline.train()
+        baseline.reset_state()
+        _, _, loss_without, _, _, baseline_stats = baseline(feat)
+
+        self.assertEqual(stats['stat_object_hm'].item(), 0.0)
+        self.assertEqual(stats['stat_object_hm_recall'].item(), 0.0)
+        self.assertEqual(stats['stat_object_hm_pos'].item(), 0.0)
+        self.assertEqual(
+            loss_with_target.item(), loss_without.item())
+        self.assertEqual(
+            baseline_stats['stat_object_hm'].item(), 0.0)
+
+    def test_head_consumes_correction_not_h_t(self):
+        """The auxiliary head must see exactly the posterior correction."""
+        fusion = self._build(latent_object_loss_weight=0.05)
+        fusion.train()
+        captured = {}
+
+        def pre_hook(module, inputs):
+            captured['head_in'] = inputs[0].detach()
+
+        handle = fusion.object_head.register_forward_pre_hook(pre_hook)
+        fusion.set_current_object_target(self._target())
+        _, _, _, _, _, stats = fusion(torch.randn(2, 256, 8, 8))
+        handle.remove()
+
+        self.assertAlmostEqual(
+            captured['head_in'].square().mean().item(),
+            stats['stat_correction_sq'].item(), places=6)
+
+    def test_zero_weight_never_runs_head(self):
+        fusion = self._build()
+        fusion.train()
+        called = []
+        handle = fusion.object_head.register_forward_hook(
+            lambda *args: called.append(1))
+        fusion.set_current_object_target(self._target())
+        fusion(torch.randn(2, 256, 8, 8))
+        handle.remove()
+        self.assertEqual(called, [])
+
+    def test_target_shape_is_validated(self):
+        fusion = self._build(latent_object_loss_weight=0.05)
+        with self.assertRaises(ValueError):
+            fusion.set_current_object_target(torch.zeros(2, 3, 4, 4))
+        with self.assertRaises(ValueError):
+            fusion.set_current_object_target(torch.zeros(2, 4, 4, 4, 4))
+
+    def test_batch_mismatch_is_rejected_at_loss_time(self):
+        fusion = self._build(latent_object_loss_weight=0.05)
+        fusion.train()
+        fusion.set_current_object_target(torch.zeros(3, 4, 4, 4))
+        with self.assertRaises(ValueError):
+            fusion(torch.randn(2, 256, 8, 8))
+
+    def test_object_loss_is_sole_gradient_source_when_others_disabled(self):
+        """The term must actually reach posterior_correction/mu_q."""
+        fusion = self._build(
+            latent_object_loss_weight=0.05,
+            kl_scale=0.0,
+            recon_loss_weight=0.0,
+            obs_pred_loss_weight=0.0,
+        )
+        fusion.train()
+        fusion.set_current_object_target(self._target())
+        _, _, loss, _, _, stats = fusion(torch.randn(2, 256, 8, 8))
+        self.assertGreater(stats['stat_object_hm'].item(), 0.0)
+        loss.backward()
+
+        self.assertIsNotNone(fusion.object_head[0].weight.grad)
+        self.assertGreater(
+            fusion.object_head[0].weight.grad.abs().sum().item(), 0.0)
+        self.assertIsNotNone(fusion.posterior_mu.weight.grad)
+        self.assertGreater(
+            fusion.posterior_mu.weight.grad.abs().sum().item(), 0.0)
+        # h_proj leads to h_t only; it must stay untouched by this term.
+        self.assertTrue(
+            fusion.h_proj.weight.grad is None
+            or fusion.h_proj.weight.grad.abs().sum().item() == 0.0)
+
+    def test_empty_target_contributes_exactly_zero(self):
+        import copy
+
+        fusion = self._build(latent_object_loss_weight=0.05)
+        baseline = copy.deepcopy(fusion)
+        feat = torch.randn(2, 256, 8, 8)
+
+        fusion.train()
+        fusion.set_current_object_target(torch.zeros(2, 4, 4, 4))
+        _, _, loss, _, _, stats = fusion(feat)
+        baseline.train()
+        _, _, baseline_loss, _, _, _ = baseline(feat)
+
+        self.assertEqual(stats['stat_object_hm'].item(), 0.0)
+        self.assertEqual(stats['stat_object_hm_pos'].item(), 0.0)
+        self.assertEqual(loss.item(), baseline_loss.item())
+
+    def test_diagnostics_do_not_contain_loss_substring(self):
+        fusion = self._build(latent_object_loss_weight=0.05)
+        fusion.train()
+        fusion.set_current_object_target(self._target())
+        _, _, _, _, _, stats = fusion(torch.randn(2, 256, 8, 8))
+        for key in stats:
+            self.assertNotIn('loss', key)
+        self.assertIn('stat_object_hm', stats)
+        self.assertIn('stat_object_hm_recall', stats)
+        self.assertIn('stat_object_hm_pos', stats)
+
+    def _stats_with_fixed_logits(self, logits):
+        """Run one forward with the auxiliary head replaced by `logits`."""
+        import torch.nn as nn
+
+        fusion = self._build(latent_object_loss_weight=0.05)
+        fusion.train()
+
+        class _FixedHead(nn.Module):
+            def __init__(self, value):
+                super().__init__()
+                self.register_buffer('value', value)
+
+            def forward(self, _x):
+                return self.value
+
+        fusion.object_head = _FixedHead(logits)
+        fusion.set_current_object_target(self._target())
+        _, _, _, _, _, stats = fusion(torch.randn(2, 256, 8, 8))
+        return stats
+
+    def test_hit1_is_one_when_head_peaks_at_centers(self):
+        """Hit@1 counts a GT centre when its cell wins the class argmax."""
+        logits = torch.full((2, 4, 4, 4), -10.0)
+        logits[0, 0, 1, 2] = 10.0
+        logits[1, 2, 3, 0] = 10.0
+        stats = self._stats_with_fixed_logits(logits)
+
+        self.assertAlmostEqual(
+            stats['stat_object_hm_recall'].item(), 1.0, places=5)
+        self.assertAlmostEqual(
+            stats['stat_object_hm_thr50'].item(), 1.0, places=5)
+        self.assertEqual(stats['stat_object_hm_pos'].item(), 2.0)
+
+    def test_hit1_is_zero_when_head_peaks_elsewhere(self):
+        """A class peak on a background cell must not count as a hit."""
+        logits = torch.full((2, 4, 4, 4), -10.0)
+        logits[0, 0, 0, 0] = 10.0
+        logits[1, 2, 0, 0] = 10.0
+        stats = self._stats_with_fixed_logits(logits)
+
+        self.assertEqual(stats['stat_object_hm_recall'].item(), 0.0)
+        self.assertEqual(stats['stat_object_hm_thr50'].item(), 0.0)
+
+    def test_hit1_counts_once_per_occupied_channel(self):
+        """Extra GT centres in one channel must not inflate hit@1 above 1."""
+        logits = torch.full((2, 4, 4, 4), -10.0)
+        logits[0, 0, 1, 2] = 10.0
+        logits[1, 2, 3, 0] = 10.0
+        import torch.nn as nn
+
+        fusion = self._build(latent_object_loss_weight=0.05)
+        fusion.train()
+
+        class _FixedHead(nn.Module):
+            def __init__(self, value):
+                super().__init__()
+                self.register_buffer('value', value)
+
+            def forward(self, _x):
+                return self.value
+
+        fusion.object_head = _FixedHead(logits)
+        target = self._target()
+        target[0, 0, 3, 3] = 1.0
+        fusion.set_current_object_target(target)
+        _, _, _, _, _, stats = fusion(torch.randn(2, 256, 8, 8))
+
+        self.assertLessEqual(stats['stat_object_hm_recall'].item(), 1.0)
+        self.assertEqual(stats['stat_object_hm_pos'].item(), 3.0)
+
+
+class TestBevCentersToHeatmap(unittest.TestCase):
+    """Geometry of the route-C auxiliary targets."""
+
+    class _Boxes:
+        def __init__(self, centers, dims):
+            self.gravity_center = centers
+            self.tensor = torch.cat(
+                [centers, dims, torch.zeros(centers.shape[0], 1)], dim=1)
+
+    def setUp(self):
+        from mmdet3d.core.utils.gaussian import bev_centers_to_heatmap
+
+        self.build = bev_centers_to_heatmap
+        self.pc_range = [0.0, -39.68, -4.0, 69.12, 39.68, 2.0]
+
+    def test_center_lands_in_expected_cell(self):
+        # x = half the range -> row 8, y = 0 -> col 8 of a 16x16 grid.
+        boxes = [self._Boxes(
+            torch.tensor([[34.56, 0.0, 0.0]]),
+            torch.tensor([[4.32, 4.96, 1.5]]))]
+        labels = [torch.tensor([0])]
+        heatmap = self.build(
+            boxes, labels, num_classes=4, out_size=(16, 16),
+            point_cloud_range=self.pc_range, min_radius=1)
+
+        self.assertEqual(heatmap.shape, (1, 4, 16, 16))
+        self.assertAlmostEqual(
+            heatmap[0, 0, 8, 8].item(), 1.0, places=5)
+        self.assertEqual(heatmap[0, 1:].sum().item(), 0.0)
+        # Gaussian neighbourhood must spread to adjacent cells.
+        self.assertGreater(heatmap[0, 0, 8, 9].item(), 0.0)
+
+    def test_label_selects_channel(self):
+        boxes = [self._Boxes(
+            torch.tensor([[34.56, 0.0, 0.0]]),
+            torch.tensor([[4.32, 4.96, 1.5]]))]
+        labels = [torch.tensor([2])]
+        heatmap = self.build(
+            boxes, labels, num_classes=4, out_size=(16, 16),
+            point_cloud_range=self.pc_range)
+        self.assertAlmostEqual(
+            heatmap[0, 2, 8, 8].item(), 1.0, places=5)
+        self.assertEqual(heatmap[0, 0].sum().item(), 0.0)
+
+    def test_out_of_range_and_empty_boxes_are_dropped(self):
+        boxes = [
+            self._Boxes(
+                torch.tensor([[-10.0, 0.0, 0.0], [200.0, 0.0, 0.0]]),
+                torch.tensor([[4.32, 4.96, 1.5]]).repeat(2, 1)),
+            self._Boxes(torch.zeros(0, 3), torch.zeros(0, 3)),
+        ]
+        labels = [torch.tensor([0, 1]), torch.zeros(0, dtype=torch.long)]
+        heatmap = self.build(
+            boxes, labels, num_classes=4, out_size=(16, 16),
+            point_cloud_range=self.pc_range)
+        self.assertEqual(heatmap.sum().item(), 0.0)
+
+    def test_invalid_label_is_skipped(self):
+        boxes = [self._Boxes(
+            torch.tensor([[34.56, 0.0, 0.0]]),
+            torch.tensor([[4.32, 4.96, 1.5]]))]
+        labels = [torch.tensor([7])]
+        heatmap = self.build(
+            boxes, labels, num_classes=4, out_size=(16, 16),
+            point_cloud_range=self.pc_range)
+        self.assertEqual(heatmap.sum().item(), 0.0)
+
+    def test_vectorized_radius_matches_scalar_reference(self):
+        """The batched radius helper must agree with CenterHead's scalar one."""
+        from mmdet3d.core.utils.gaussian import (
+            gaussian_radius, gaussian_radius_batch)
+
+        torch.manual_seed(0)
+        height = torch.rand(64) * 20.0 + 0.1
+        width = torch.rand(64) * 20.0 + 0.1
+        batch_radii = gaussian_radius_batch(height, width)
+        scalar_radii = torch.stack([
+            gaussian_radius((height[i], width[i]))
+            for i in range(height.shape[0])
+        ])
+        self.assertTrue(torch.allclose(
+            batch_radii, scalar_radii, atol=1e-6))
+
+
 if __name__ == '__main__':
     unittest.main()
