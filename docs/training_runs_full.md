@@ -8091,3 +8091,210 @@ CUDA_VISIBLE_DEVICES=7 python tools/diagnose_z_utilization.py --config $CFG --ch
 CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py --config $CFG --checkpoint $CKPT \
   --start-index 3 --limit 4 --stride 700 --output /tmp/post_source_routeB_ep6_stride700.json
 ```
+
+---
+
+## 57. 路线 B 后续：`z_prev` L2 normalize 消融（450 iter 机制冒烟，2026-09-28）
+
+### 57.0 状态与判定摘要
+
+第 56 节的 ep6 门控判定 AP 差距 `−2.5348 > 2.0`，按预登记分支**不叠加路线 C**，
+先做 `z_prev` L2 normalize 的 450 iter 单变量消融。本节是这一步的机制冒烟结果。
+
+**一句话结论：消融方向正确，四个观察点全部正向 —— `correction²` 首次形成平台
+（最后 100 iter 稳定在 0.0054）、`mu_q` 对观测的依赖首次超过对 `h_t` 的依赖、
+`shuffle/zero` 比值翻倍至 0.084–0.129。但绝对量级（`shuffle_z` head 2–3e-4）
+仍未进入有意义的检测区间，所以下一步是 rawnorm 的 ep6 AP 对照，而不是直接续训。**
+
+| 观察点 | 第 56 节给出的预期 | rawnorm 450 iter 实测 | 结论 |
+|---|---|---|---|
+| `h_t` specific | 是否继续上升 | **1.73%**（路线 B 450 iter 为 0.86%，路线 B ep6 为 12.19%） | 相对 normalize 冒烟 +2.0 倍，但仍远低于 ep6 |
+| `mu_q_removal_of_h/e` 比例 | 是否改变 | h/e 由 1.53（ep6）转为 **0.87**（h 0.276 < e 0.315） | **方向反转，通过** |
+| `correction²` 平台 | 是否形成 | 最后 100 iter **0.0055→0.0054**，最后 200 iter 0.0057→0.0054 | **首次形成平台，通过** |
+| `shuffle/zero` 比值 | 是否上升 | **0.084–0.129**（normalize 冒烟为 0.064–0.092） | **上升，通过** |
+| `innovation` specific > `e_pooled` specific | 保持 | 36.95% > 7.62% | 通过 |
+| `delta_mu` specific ≥ 5% | 保持 | 30.97% | 通过 |
+| `shuffle_z` head 绝对值 | — | 1.96e-4–3.12e-4 | 仍低（normalize 冒烟 2.9e-4–4.2e-4，量级相同） |
+
+**判定：机制层面 4/4 正向，但绝对判别性没有进入可用区间。** 消融本身证明
+「`z_prev` 的 L2 normalize 确实是压制样本信息的因素之一」，不足以证明它足以让
+z 承担检测任务。因此按协议进入下一步：**rawnorm 配置跑 ep6，取 AP 读数与机制读数**，
+与第 56 节路线 B ep6 和 no2d_igdr seed0 ep6 **三方对照**。
+
+### 57.1 配置与唯一变量
+
+| 项 | 值 |
+|---|---|
+| 配置 | `configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation_rawnorm.py` |
+| 冒烟 | `me_rssm/sanity/lowdim_z_innovation_rawnorm_smoke_450iter.py` |
+| 对照 | 路线 B：`..._lowdim_z_innovation.py`（第 55/56 节） |
+| **唯一变量** | `z_prev_normalize: True → False`（`rssm_fusion.py:1448`） |
+| 其余不变 | `posterior_struct='innovation'`、`obs_pred_loss_weight=0.05`、`posterior_obs_mode='scaled_raw'`、`posterior_obs_scale=0.1`、`z_proj_init='xavier'`、`readout_mode='spatial'`、`recon_target_mode='temporal_delta'`、`recon_input_mode='posterior_correction'`、`direct_correction_readout=True`、`future_loss_weight=0`、`recon_loss_weight=0.1`、`kl_scale/free_nats/min_std/init_std/latent_size` 全部继承 |
+
+实现 commit `d895f10`。新增参数 `z_prev_normalize`（**默认 `True`，与此前所有 run 逐位一致**）、
+非 bool 校验，并在 forward 中按开关选择 `F.normalize(pooled_z, dim=1)` 或 `pooled_z`。
+新增 3 条单测（默认值、非 bool 拒绝、raw 分支确实把未归一化的幅值送进 GRU），
+RSSM 全量 **58 条单测通过**。
+
+设计取舍：只去掉**幅值归一化**，保留 `z_prev` 作为 GRU 输入的用法与通道方向。
+这与「换掉 recurrence 结构」是两件事，本消融刻意只动一行，避免和第 56 节暴露的
+`h_t` 依赖问题混在一起。
+
+### 57.2 运行事实
+
+| 项 | 值 |
+|---|---|
+| work_dir / 日志 | `/tmp/lowdim_z_rawnorm_smoke_450iter` / `/tmp/lowdim_rawnorm450.log` |
+| 硬件 | GPU 5/6/7，3 卡 DDP，seed 0，deterministic |
+| 迭代器 | `IterBasedRunner`，450 iter，余弦退火到 `min_lr_ratio=1e-5` |
+| 显存 / 速度 | `7436 MiB` / 约 `1.08 s/iter` |
+| 起止 | 2026-09-28 02:22:50 UTC 启动，02:33 前后完成，自动退出 |
+| 产物 | `iter_450.pth`、`latest.pth` |
+| val | 无（`evaluation.interval=4500`），故无区间均值/全轮峰值/best saved |
+
+### 57.3 训练曲线（每 50 iter）
+
+| iter | recon MSE | correction² | innovation² | obs_pred | raw KL | clamped |
+|---:|---:|---:|---:|---:|---:|---:|
+| 50 | 1.2228 | 0.0161 | 0.0152 | 0.0076 | 0.2068 | 0.5286 |
+| 100 | 1.1683 | 0.0107 | 0.0102 | 0.0051 | 0.1347 | 0.6221 |
+| 150 | 1.1361 | 0.0084 | 0.0085 | 0.0043 | 0.1046 | 0.6812 |
+| 200 | 1.1148 | 0.0071 | 0.0074 | 0.0037 | 0.0879 | 0.7242 |
+| 250 | 1.1011 | 0.0062 | 0.0066 | 0.0033 | 0.0770 | 0.7567 |
+| 300 | 1.0936 | 0.0057 | 0.0061 | 0.0030 | 0.0709 | 0.7781 |
+| 350 | 1.0888 | 0.0055 | 0.0058 | 0.0029 | 0.0674 | 0.7917 |
+| 400 | 1.0861 | **0.0054** | 0.0058 | 0.0029 | 0.0658 | 0.7980 |
+| 450 | 1.0852 | **0.0054** | 0.0058 | 0.0029 | 0.0657 | 0.7985 |
+
+与路线 B 450 iter 冒烟逐点对照：
+
+| iter | recon B | recon rawnorm | corr² B | corr² rawnorm | raw KL B | raw KL rawnorm |
+|---:|---:|---:|---:|---:|---:|---:|
+| 50 | 1.2213 | 1.2228 | 0.0097 | 0.0161 | 0.1240 | 0.2068 |
+| 150 | 1.1348 | 1.1361 | 0.0059 | 0.0084 | 0.0733 | 0.1046 |
+| 250 | 1.0984 | 1.1011 | 0.0047 | 0.0062 | 0.0561 | 0.0770 |
+| 350 | 1.0853 | 1.0888 | 0.0042 | 0.0055 | 0.0483 | 0.0674 |
+| 450 | 1.0812 | 1.0852 | **0.0041** | **0.0054** | 0.0466 | 0.0657 |
+
+读数：
+
+1. **`correction²` 首次不再单调塌缩到底。** 路线 B 在 iter 250→450 从 0.0047 滑到
+   0.0041（−13%），rawnorm 在 iter 300→450 从 0.0057 到 0.0054（**−5%，最后
+   100 iter 完全持平在 0.0054**）。这正是第 56 节要求「不得继续单调塌缩，至少形成
+   平台」的条件，在 450 iter 尺度上**首次成立**。
+2. **recon 轨迹几乎重合**（1.2228→1.0852 vs 1.2213→1.0812，末端差 0.4%），说明
+   rawnorm 没有通过「让重建变简单」来制造平台，改善来自 recurrent 通路本身。
+3. **raw KL 系统性偏高**（末端 0.0657 vs 0.0466，+41%）但仍全程有界，未出现爆炸；
+   `clamped_ratio` 末端 0.799（normalize 0.871），即更多 latent cell 处于「未被
+   free-bits 钳死」的状态 —— 与 correction 保持更大绝对值一致。
+4. **`obs_pred` 末端 0.0029 vs 0.0029（路线 B 从 0.0021 略升）**：`obs_prior` 的
+   拟合难度没有因为 rawnorm 而下降，符合预期（它只吃 `h_t`）。
+
+### 57.4 Source 探针（`stride=700`，indices `[3,703,1403]`）
+
+| 张量 | 路线 B 450 iter | **rawnorm 450 iter** | 变化 |
+|---|---:|---:|---|
+| `feat_pooled_raw` specific | — | 19.62% | 输入侧参照 |
+| `e_t_pooled_raw` specific | — | 7.62% | 与路线 B 的 7.75% 同量级 |
+| `e_pooled` specific | 7.75% | 7.62% | 无变化（同一 `scaled_raw` 路径） |
+| `h_t` specific | 0.86% | **1.73%** | **+2.0 倍** |
+| `mu_p` specific | 1.71% | 1.47% | 略降 |
+| `mu_q` specific | 3.93% | **5.16%** | **+31%** |
+| `obs_prior_e_hat` specific | 1.80% | 0.90% | 略降 |
+| `innovation` specific | 14.27% | **36.95%** | **+2.6 倍** |
+| `correction (= delta_mu)` specific | 13.51% | **30.97%** | **+2.3 倍** |
+| correction RMS | 0.05739 | 0.02895 | −50%（**绝对幅度变小**） |
+| `z_proj` weight RMS | 0.0868 | 0.0834 | 稳在同一尺度 |
+
+**最关键的一行是依赖反转**：
+
+| 依赖方向 | 路线 B ep6 | **rawnorm 450 iter** |
+|---|---:|---:|
+| `mu_q_removal_of_e_rel_l2`（去掉观测的影响） | 0.1653 | **0.3152** |
+| `mu_q_removal_of_h_rel_l2`（去掉 h_t 的影响） | 0.2589 | **0.2756** |
+| h/e 比值 | 1.57 | **0.874** |
+
+第 56 节把 ep6 的高 correction 特异占比归因于「`h_t` 递归状态成分混入，posterior 对
+h 的依赖强于对观测」。**去掉 `z_prev` 的 L2 normalize 后，这个比例反转到 0.874**，
+即 posterior 现在更多由**当前帧观测**驱动。这正是消融假设所预测的方向，是本轮最强的
+单条证据。
+
+同时要诚实标注：`correction` 的**样本特异占比翻了 2.3 倍，但 RMS 减半**。也就是说
+rawnorm 让 correction 更像「样本身份」，同时整体幅度更小。这解释了为什么
+`shuffle/zero` 比值上升、而 `shuffle_z` 的**绝对** head 响应没有同步变大。
+
+### 57.5 三窗口反事实诊断
+
+`tools/diagnose_z_utilization.py`，`iter_450.pth`，每窗口 4 条序列：
+
+| 窗口 | zero_z feature | zero_z head | shuffle_z feature | shuffle_z head | prior_only feature | prior_only head | shuffle/zero |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `[3..6]` | 0.0660 | 2.420e-3 | 0.0077 | **3.120e-4** | 0.0207 | 1.125e-3 | **0.1289** |
+| `[100..103]` | 0.0737 | 2.356e-3 | 0.0077 | **2.830e-4** | 0.0230 | 1.084e-3 | **0.1201** |
+| `[1800..1803]` | 0.0557 | 2.332e-3 | 0.0042 | **1.960e-4** | 0.0159 | 9.092e-4 | **0.0841** |
+
+与路线 B 450 iter 三窗口对照：
+
+| 运行 | zero_z head | shuffle_z head | prior_only head | shuffle/zero |
+|---|---:|---:|---:|---:|
+| 路线 B 450 iter（三窗口范围） | 4.496e-3–4.587e-3 | 2.936e-4–4.188e-4 | 1.817e-3–1.848e-3 | 0.064–0.092 |
+| **rawnorm 450 iter** | 2.332e-3–2.420e-3 | 1.960e-4–3.120e-4 | 9.090e-4–1.125e-3 | **0.084–0.129** |
+
+读数：
+
+1. **`shuffle/zero` 比值三窗口全部提升**（0.064–0.092 → 0.084–0.129，最好窗口 +40%）。
+   这是本轮消融的核心机制收益，且三个窗口方向一致。
+2. **`zero_z` 绝对响应下降约一半**（4.5e-3 → 2.4e-3），与 correction RMS 减半一致。
+   即公共偏置被削弱，而不是样本判别性被同倍放大 —— 比值上升是**分子分母同时下降、
+   分子下降更慢**的结果。论文口径必须同时报这两个数。
+3. **`prior_only` 同步下降到约 1e-3**（0.40× → 0.46× 于 zero_z），说明 prior 与
+   posterior 的相对关系没有被消融破坏，posterior 校正仍然产生可观测差异。
+4. **绝对量级仍是瓶颈**：`shuffle_z` head 1.96e-4–3.12e-4 与路线 B 450 iter
+   （2.9e-4–4.2e-4）在同一量级，离 2% 最终门槛仍差约 60–100 倍。本轮改善的是
+   **结构性质**（平台 + 依赖反转 + 比值），不是**可用性**。
+
+### 57.6 结论与下一步
+
+1. **消融假设被证实，而且是四个观察点同向。** `z_prev` 的 L2 normalize 确实是压制
+   样本信息的因素之一：去掉后 `correction²` 首次形成平台、`h_t`/`mu_q`/`innovation`/
+   `correction` 的样本特异占比全部上升、`mu_q` 对观测的依赖首次超过对 `h_t` 的依赖、
+   `shuffle/zero` 比值三窗口全部提升。
+2. **但它不是充分条件。** `shuffle_z` head 绝对量级仍在 1e-4–3e-4，比 2% 最终门槛
+   低约两个数量级；`h_t` specific 仍只有 1.73%（路线 B ep6 反而有 12.19%，但那是
+   经过 6 epoch 大量数据曝光后的结果，两者不能直接比）。消融解决的是「幅值被抹掉」，
+   没有解决「上游信号本身薄」。
+3. **本节的正确用途**：它是第 56 节预登记分支的**执行结果**，回答「该不该动 `z_prev`」
+   —— 答案是**该动，且要保留**。但它不构成「路线 B + rawnorm 可以进论文主表」的证据。
+4. **下一步（已启动）**：rawnorm 配置的 **ep6 AP 对照**（work_dir
+   `/data/lurui/work_dirs/lowdim_z_innovation_rawnorm_3x2x2_24e_seed0`，GPU 5/6/7，
+   seed 0，24e 日程跑到 ep6 验证落盘后停）。判定沿用第 56 节协议，并做**三方对照**：
+   rawnorm / 路线 B / no2d_igdr seed0，比较项为 ep6 Overall 3D moderate、逐类别构成、
+   `shuffle_z` head 绝对值与比值、`correction²` 是否继续保持平台。
+5. **仍未做**：路线 C（Object-Centric Latent Supervision）、路线 D 的去塌缩损失、
+   路线 E 的 KL balancing + 按 cell 聚合的 free-bits。三者继续后置；`raw KL` 目前
+   0.0657 仍远未爆炸。
+
+### 57.7 复现命令
+
+```bash
+# 450 iter 机制冒烟
+cd /home/lurui/workspace/R4Det && source .envrc
+tmux new-session -d -s routeB_rawnorm450 "cd /home/lurui/workspace/R4Det && source .envrc && \
+  CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
+  me_rssm/sanity/lowdim_z_innovation_rawnorm_smoke_450iter.py 3 --seed 0 --deterministic \
+  --work-dir /tmp/lowdim_z_rawnorm_smoke_450iter > /tmp/lowdim_rawnorm450.log 2>&1"
+
+# source 探针
+CFG=me_rssm/sanity/lowdim_z_innovation_rawnorm_smoke_450iter.py
+CKPT=/tmp/lowdim_z_rawnorm_smoke_450iter/iter_450.pth
+CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py --config $CFG --checkpoint $CKPT \
+  --start-index 3 --limit 4 --stride 700 --output /tmp/post_source_rawnorm450_stride700.json
+
+# 三窗口反事实诊断
+CUDA_VISIBLE_DEVICES=5 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 3    --limit 4 --batch-size 4 --shuffle-offset 2  --output /tmp/z_util_rawnorm450_w3.json
+CUDA_VISIBLE_DEVICES=6 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 100  --limit 4 --batch-size 4 --shuffle-offset 2  --output /tmp/z_util_rawnorm450_w100.json
+CUDA_VISIBLE_DEVICES=7 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 1800 --limit 4 --batch-size 4 --shuffle-offset -1 --output /tmp/z_util_rawnorm450_w1800.json
+```
