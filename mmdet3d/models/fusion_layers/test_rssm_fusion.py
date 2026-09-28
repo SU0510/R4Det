@@ -4,6 +4,7 @@ Run: python mmdet3d/models/fusion_layers/test_rssm_fusion.py
 """
 
 import torch
+import torch.nn.functional as F
 import unittest
 import sys
 import os
@@ -1129,6 +1130,80 @@ class TestSpatialReadoutLatentFusion(unittest.TestCase):
         # mu_q and mu_p differ, so the correction must be non-zero under the
         # posterior while the prior-only path disables it entirely.
         self.assertFalse(torch.allclose(posterior_out, prior_out, atol=1e-6))
+
+
+class TestZPrevNormalizeAblation(unittest.TestCase):
+    """Route-B follow-up: the `z_prev_normalize` single-variable switch."""
+
+    def _build(self, **overrides):
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            LowDimFutureConsistentLatentFusion,
+        )
+
+        kwargs = dict(
+            in_channels=256,
+            latent_dim=32,
+            hidden_dim=128,
+            latent_pool='adaptive',
+            latent_size=(4, 4),
+            future_loss_weight=0.0,
+            recon_target_mode='temporal_delta',
+            recon_input_mode='posterior_correction',
+            readout_mode='spatial',
+            posterior_obs_mode='scaled_raw',
+            posterior_obs_scale=0.1,
+            posterior_struct='innovation',
+        )
+        kwargs.update(overrides)
+        return LowDimFutureConsistentLatentFusion(**kwargs)
+
+    def test_default_is_normalize(self):
+        """The switch must default to the historical behaviour."""
+        fusion = self._build()
+        self.assertTrue(fusion.z_prev_normalize)
+
+    def test_non_bool_rejected(self):
+        with self.assertRaises(ValueError):
+            self._build(z_prev_normalize='yes')
+
+    def test_raw_changes_gru_input_magnitude(self):
+        """`raw` must feed the unnormalized pooled z into the GRU.
+
+        With a deliberately inflated z_state the normalized branch produces a
+        unit-norm GRU input while the raw branch keeps the original scale, so
+        the two branches cannot produce identical downstream latents.
+        """
+        fusion = self._build(z_prev_normalize=True)
+        fusion.eval()
+        feat = torch.randn(2, 256, 8, 8)
+        with torch.no_grad():
+            for _ in range(3):
+                fusion(feat, use_posterior=True, deterministic=True)
+            state_h = fusion.h_state.clone()
+            fusion.z_state.mul_(10.0)
+            state_z = fusion.z_state.clone()
+            norm_before = fusion._pool_latent(
+                F.normalize(fusion._pool_latent(fusion.z_state), dim=1)
+            ).norm(dim=1).mean().item()
+            out_norm, *_ = fusion(
+                feat, use_posterior=True, deterministic=True)
+
+        fusion_raw = self._build(z_prev_normalize=False)
+        fusion_raw.load_state_dict(fusion.state_dict(), strict=False)
+        fusion_raw.eval()
+        with torch.no_grad():
+            fusion_raw.h_state = state_h.clone()
+            fusion_raw.z_state = state_z.clone()
+            norm_after = fusion_raw._pool_latent(
+                fusion_raw.z_state).norm(dim=1).mean().item()
+            out_raw, *_ = fusion_raw(
+                feat, use_posterior=True, deterministic=True)
+
+        # Normalizing collapses every channel vector to unit norm; the raw
+        # branch keeps the inflated per-channel magnitude.
+        self.assertAlmostEqual(norm_before, 1.0, places=3)
+        self.assertGreater(norm_after, 5.0)
+        self.assertFalse(torch.allclose(out_norm, out_raw, atol=1e-6))
 
 
 if __name__ == '__main__':

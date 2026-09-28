@@ -7798,3 +7798,296 @@ head L2 比值 vs normal：
    **注意：路线 B 尚未测 AP**，因此严格说应先跑 ep6 取得 AP 与机制读数，
    再决定是否叠加路线 C。
 5. **仍未做**：`z_prev` 的 L2 normalize 消融、路线 D 的去塌缩损失、路线 E 的 KL balancing。
+
+---
+
+## 56. 路线 B ep6 门控：正式训练 AP + 机制联合判定（2026-09-27/28）
+
+### 56.0 状态与判定摘要
+
+路线 B 结构（Innovation-Conditioned RSSM，第 55 节）在 450 iter 冒烟中首次拿到
+系统性的机制改善，但**没有 AP 读数**，无法判断这种改善对检测是否有价值。本节按
+用户预登记的 ep6 门控协议跑正式训练，ep6 验证落盘后主动停止，并同时给出三窗口
+反事实诊断与 source 探针。
+
+**一句话结论：机制继续增强、AP 差距超过止损阈值 —— 按预登记分支，本路线不续跑
+ep12，也不叠加路线 C，下一步先做 `z_prev` normalize 的 450 iter 单变量消融。**
+
+| 检查项 | 要求 | ep6 实测 | 结论 |
+|---|---|---|---|
+| Overall 3D moderate（ep6 单点 vs no2d_igdr seed0 ep6） | 差距 ≤ 2.0 | 31.4895 vs 34.0243 = **−2.5348** | **未过（止损）** |
+| `shuffle_z` head 绝对值 | 不低于 450 iter 的 0.064–0.092（比值口径）；最好 ≥0.10 | 比值 0.0414–0.0712；head 绝对值 7.3e-3–1.1e-2 | 比值口径**未过**、绝对值**大幅上升**（详见 56.5） |
+| `shuffle_z` head | ep6 继续门槛 ≥0.2%，最终门槛 ≥2% | **0.73%–1.09%** | **过 ep6 门槛**，最终门槛仍差约 2 倍 |
+| `innovation` specific > `e_pooled` specific | 是 | 43.51% > 25.66% | **通过** |
+| `delta_mu` specific | ≥ 10% | 39.32% | **通过** |
+| `correction²` 不再单调塌缩、形成平台 | 是 | ep1→ep6：0.1489→0.0596，逐 epoch 单调下降且**未见平台** | **未过** |
+
+**分支判定**：AP 差距 2.53 > 2.0 ⟹ 按预登记协议
+
+```
+AP 差距 >2 → 不叠加 C；先做 z_prev normalize 的 450 iter 单变量消融
+```
+
+需要诚实标注的一点：本节为**单 seed、单 epoch、与不同代码版本的基线做同 epoch 对照**，
+样本量为 1，`−2.53` 与阈值 `−2.0` 的差距只有 0.53 点，而 no2d_igdr 三 seed 在
+ep12-16 的标准差就有 1.35 点。因此该判定是**按预登记规则执行**，不是「已被统计显著
+证伪」；它的作用是强制先做单变量消融，而不是给路线 B 下最终结论。
+
+### 56.1 配置与唯一变量
+
+| 项 | 值 |
+|---|---|
+| 配置 | `configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation.py` |
+| 对照 | `configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr.py`（no2d_igdr, seed0） |
+| 唯一变量 | `posterior_struct='innovation'` + `obs_pred_loss_weight=0.05`；其余继承链与对照一致 |
+| 训练日程 | **`max_epochs=24` 的 CosineAnnealing 原日程未改**，ep1-6 的 LR 与 KL warmup 因此与 24e 基线逐轮对齐 |
+
+关于训练长度做了一次显式取舍：曾考虑新建 `max_epochs=6` 的短配置，但
+`CosineAnnealingLrUpdaterHook` 用 `runner.max_epochs` 归一化进度，
+改成 6 会让 ep6 的 LR 落到约 `1e-5`（基线约 `1.3e-4`），AP 对照直接失真。
+最终保留 24e 日程、跑到 ep6 后用看门狗在验证与落盘完成后停止，因此**进度在 ep6
+截断，日程没有被截断** —— 这是本节与对照可比的前提。
+
+关键超参（与对照一致）：`optimizer=AdamW(lr=1.5e-4, betas=(0.95,0.99), wd=0.01)`、
+`GradientCumulativeOptimizerHook(cumulative_iters=2)`、`samples_per_gpu=2`、
+`workers_per_gpu=2`、`seq_len=4`、`checkpoint_config.interval=2`、`evaluation.interval=1`、
+KL warmup `0.01→1.0` over ep0-12、`free_nats=0.1`、`min_std=0.1`、`init_std=0.2`、
+`recon_loss_weight=0.1`、`obs_pred_loss_weight=0.05`、`future_loss_weight=0`、
+`latent_size=(16,16)`、`latent_dim=32`。
+
+`val.samples_per_gpu=4`：对照 seed0 的 ep1-6 由 val bs=1 的旧代码产出；第 51 节已用同一
+harness 做过 bs=1/2/4 A/B（Overall 3D mod 38.4516/38.4947/38.5420，差异在噪声内、
+无 batch 间串扰），且 offset 2.2 点的固定差已定位为 offline harness 与 EvalHook 的差异，
+与 batch 无关。本节与对照都在**训练内 EvalHook + evaluation.pipeline**下产生，口径一致。
+
+### 56.2 运行事实
+
+| 项 | 值 |
+|---|---|
+| work_dir | `/data/lurui/work_dirs/lowdim_z_innovation_routeB_3x2x2_24e_seed0` |
+| 日志 | 20260927_125916.log(.json)、`/tmp/lowdim_routeB_ep6.log` |
+| 硬件 | GPU 5/6/7，3 卡 DDP，seed 0，deterministic |
+| 起止 | 2026-09-27 12:59:24 UTC 启动；ep6 val 于 17:21:16 UTC 写完，随后主动停止 |
+| 训练吞吐 | 中位 **1.047 s/iter**（p10 1.019、p90 1.101，n=228 条训练日志）；峰值显存 **7446 MiB** |
+| 落盘 | `epoch_2.pth` / `epoch_4.pth` / `epoch_6.pth`（`checkpoint_config.interval=2`），`latest.pth -> epoch_6.pth` |
+| val 记录 | ep1-6 各一条，共 6 条，无重启重复计数 |
+| 停止方式 | 独立 tmux 看门狗检测 `Epoch(val) [6]` + `epoch_6.pth` 同时存在后发送 `C-c`；两处 tmux 会话均已退出，GPU 5/6/7 已释放 |
+| iter 450 对照 | 正式训练 ep1 iter450：recon 1.0024 / corr² 0.1396 / raw KL 0.3960 / clamped 0.2884，与 450 iter 冒烟末点（1.0812 / 0.0041 / 0.0466 / 0.8711）量级不同，见 56.4 讨论 |
+
+与 450 iter 冒烟的差异属于**预期**：冒烟是 `IterBasedRunner` 且学习率按 450 iter 余弦
+退火（末段已接近 0），正式训练是 24e 日程下 ep1 的前 450 iter，LR 仍在 1.5e-4 平台，
+KL warmup 也从 0.01 起步。两者只能对照曲线形状与机制读数，不能直接比较绝对值。
+
+### 56.3 完整逐 epoch 曲线
+
+主指标（`pts_bbox/KITTI/*`）：
+
+| epoch | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 20.8115 | 28.2116 | 24.7019 | 34.1987 | 17.2757 | 7.0698 |
+| 2 | 22.5532 | 31.7365 | 26.5524 | 34.8821 | 17.9785 | 10.7999 |
+| 3 | 28.1833 | 35.1923 | 34.7591 | 42.6058 | 22.9203 | 12.4479 |
+| 4 | 25.0003 | 36.0461 | 26.9185 | 40.6441 | 18.2509 | 14.1876 |
+| 5 | **34.8551** | 42.5291 | 45.1807 | 49.4583 | 23.8192 | 20.9621 |
+| 6 | 31.4895 | 39.0407 | 39.9860 | 43.5729 | 21.1131 | 21.2860 |
+
+同 epoch 对照（no2d_igdr seed0 真实曲线，非 seed1）：
+
+| epoch | 基线 Overall 3D | 路线 B Overall 3D | Δ | 基线 BEV | 路线 B BEV | Δ |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 15.2640 | 20.8115 | **+5.5475** | 23.2541 | 28.2116 | +4.9575 |
+| 2 | 26.3716 | 22.5532 | −3.8184 | 33.2335 | 31.7365 | −1.4970 |
+| 3 | 31.6591 | 28.1833 | −3.4758 | 39.5683 | 35.1923 | −4.3760 |
+| 4 | 32.8506 | 25.0003 | −7.8503 | 42.0088 | 36.0461 | −5.9627 |
+| 5 | 34.0827 | 34.8551 | +0.7724 | 44.1080 | 42.5291 | −1.5789 |
+| 6 | **34.0243** | **31.4895** | **−2.5348** | 42.4084 | 39.0407 | −3.3677 |
+
+> **勘误（重要）**：本次任务交接摘要中给出的「no2d_igdr seed0 ep1-6 曲线」
+> （ep1 17.9825 / ep2 25.1756 / ep3 33.3100 / ep4 34.4331 / ep5 36.2203 / ep6 37.3254）
+> **实际是 seed1 的曲线**（见第 48 节）。本节所有判定均改用 seed0 真实曲线
+> （ep1 15.2640 / ep2 26.3716 / ep3 31.6591 / ep4 32.8506 / ep5 34.0827 / ep6 34.0243），
+> 与用户指定的「no2d_igdr seed0 同 epoch」对照一致。若误用 seed1 曲线，ep6 门槛会变成
+> 35.33，本节会得出「−3.84 差距」的另一个结论；这里按 seed0 口径记录。
+
+逐类别四类构成项（loose 口径）：本节主表已按 Overall 的混合口径给出
+「Car strict / Truck strict / Cyclist loose / Ped loose」，下面是同四类的 strict 与
+BEV strict 拆解，用于误差归因：
+
+| epoch | Car strict | Truck strict | Cyc strict | Ped strict | Car BEV strict | Truck BEV strict | Cyc BEV strict | Ped BEV strict |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 24.7019 | 7.0698 | 9.1172 | 0.7745 | 42.5056 | 15.1996 | 19.4935 | 1.7430 |
+| 2 | 26.5524 | 10.7999 | 13.8097 | 0.1172 | 44.8704 | 25.7914 | 24.8019 | 0.3655 |
+| 3 | 34.7591 | 12.4479 | 22.8960 | 0.1036 | 52.3379 | 19.5932 | 30.9409 | 0.4452 |
+| 4 | 26.9185 | 14.1876 | 21.0205 | 0.0747 | 56.2863 | 22.4801 | 28.7086 | 0.1628 |
+| 5 | 45.1807 | 20.9621 | 24.1610 | 0.0733 | 57.0803 | 33.0548 | 38.0805 | 0.2513 |
+| 6 | 39.9860 | 21.2860 | 22.4470 | 0.0499 | 53.8754 | 31.2762 | 31.2796 | 0.1280 |
+
+**窗口均值（ep1-6，n=6，实际跨度 1-6，非标准 ep12-16 窗口）**：
+
+| 口径 | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
+|---|---:|---:|---:|---:|---:|---:|
+| 路线 B ep1-6 等权均值 | 27.1488 | 35.4594 | 33.0164 | 40.8937 | 20.2263 | 14.4589 |
+| no2d_igdr seed0 ep1-6 等权均值 | 29.0420 | 37.4302 | 39.9218 | 36.7749 | 19.7073 | 19.7642 |
+| Δ（B − 基线） | **−1.8932** | −1.9708 | **−6.9053** | **+4.1188** | +0.5189 | **−5.3054** |
+
+**三口径必填摘要**（本 run 有 6 条 val 记录）：
+
+| 口径 | 值 |
+|---|---|
+| 区间均值（ep1-6，n=6，实际跨度 1-6；标准 ep12-16 窗口不存在） | Overall 3D moderate **27.1488** |
+| 全轮峰值（所有有 val 的 epoch 中最高单点） | **34.8551 @ ep5** |
+| best saved（实际有权重的 epoch 中最高，`interval=2` 故仅 ep2/4/6） | **31.4895 @ ep6** |
+
+### 56.4 训练内诊断（每 epoch 的 mean over 38 条日志）
+
+| epoch | recon MSE | correction² | innovation² | obs_pred | raw KL | clamped | mu_diff² | post std | prior std |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.9937 | 0.1489 | 0.0397 | 0.0196 | 0.5245 | 0.2057 | 0.1489 | 0.2787 | 0.4156 |
+| 2 | 0.9460 | 0.0951 | 0.0438 | 0.0218 | 0.1361 | 0.6186 | 0.0951 | 0.6708 | 0.7434 |
+| 3 | 0.9354 | 0.0816 | 0.0494 | 0.0246 | 0.0540 | 0.8541 | 0.0816 | 0.9156 | 0.9377 |
+| 4 | 0.9308 | 0.0751 | 0.0511 | 0.0254 | 0.0444 | 0.8869 | 0.0751 | 0.9530 | 0.9645 |
+| 5 | 0.9285 | 0.0661 | 0.0489 | 0.0243 | 0.0376 | 0.9110 | 0.0661 | 0.9688 | 0.9752 |
+| 6 | 0.9266 | 0.0596 | 0.0487 | 0.0243 | 0.0331 | 0.9267 | 0.0596 | 0.9779 | 0.9819 |
+
+读数：
+
+1. **recon 有效但收益偏小**：0.9937 → 0.9266（**−6.75%**），远低于 15% 门槛。
+   注意正式训练的 recon 起点就比冒烟低（ep1 即 ≈0.99，冒烟 iter50 为 1.2213），
+   因为正式训练在继承链上先经过大量 epoch 级别的数据曝光。
+2. **`correction²` 仍在单调塌缩，没有形成平台**：ep1→ep6 每轮都在降
+   （0.1489 → 0.0951 → 0.0816 → 0.0751 → 0.0661 → 0.0596），ep6 之后没有出现用户
+   要求的平台；这条与 450 iter 冒烟的「0.0041 仍在滑落」一致，只是绝对量级高两个数量级
+   （正式训练 LR 更高、更新更多）。
+3. **`raw KL` 全程有界**（0.5245 → 0.0331），`clamped_ratio` 0.21→0.93。KL warmup
+   在 ep6 时 `kl_scale ≈ 5/12 ≈ 0.42`，因此 raw KL 的下降同时受调度影响，不能直接
+   解读为「posterior 主动贴近 prior」；不过它排除了 KL 爆炸这一病因。
+4. **`obs_pred` 不降反升**（0.0196 → 0.0243）：`obs_prior` 在正式训练里比冒烟更早
+   进入「h_t 预测观测」的较强拟合阶段，但 ep6 时绝对残差仍远大于 450 iter 冒烟末点
+   （0.0021）。这与 `innovation²` 在 0.044–0.051 平台一致：innovation 的绝对能量被
+   稳定在大约 0.05，说明 posterior 拿到的确实是残差，而不是被压到零。
+5. **posterior/prior std 同步上升**（0.279/0.416 → 0.978/0.982），两者差距随训练收窄，
+   与 `mu_diff²` 下降方向一致；没有出现 std 崩塌，也没有出现 prior 被 KL 拉爆。
+
+### 56.5 ep6 三窗口反事实诊断
+
+`tools/diagnose_z_utilization.py`，`epoch_6.pth`，各窗口 4 条序列，
+head L2 为「干预后 head 输出相对 normal 的 L2 变化 / normal head 范数」，取窗口内 4 条均值：
+
+| 窗口 | zero_z feature | zero_z head | shuffle_z feature | shuffle_z head | prior_only feature | prior_only head | shuffle/zero |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `[3..6]` | 1.0426 | 0.1577 | 0.0665 | 0.0086 | 0.2321 | 0.0265 | 0.0546 |
+| `[100..103]` | 1.1497 | 0.1755 | 0.0539 | 0.0073 | 0.2608 | 0.0363 | 0.0414 |
+| `[1800..1803]` | 0.9777 | 0.1534 | 0.0757 | 0.0109 | 0.2204 | 0.0264 | 0.0712 |
+
+与 450 iter 冒烟的三窗同口径对照：
+
+| 运行 | window | zero_z head | shuffle_z head | prior_only head | shuffle/zero |
+|---|---|---:|---:|---:|---:|
+| 路线 B 450 iter | `[3..6]` | 4.551e-3 | 4.188e-4 | 1.838e-3 | 0.092 |
+| 路线 B 450 iter | `[100..103]` | 4.496e-3 | 3.941e-4 | 1.848e-3 | 0.088 |
+| 路线 B 450 iter | `[1800..1803]` | 4.587e-3 | 2.936e-4 | 1.817e-3 | 0.064 |
+| 路线 B ep6 | `[3..6]` | **0.1577** | **0.0086** | 0.0265 | 0.055 |
+| 路线 B ep6 | `[100..103]` | **0.1755** | **0.0073** | 0.0363 | 0.041 |
+| 路线 B ep6 | `[1800..1803]` | **0.1534** | **0.0109** | 0.0264 | 0.071 |
+
+三点必须分开读，否则会得出互相矛盾的结论：
+
+1. **绝对量级大幅上升（好）**：`shuffle_z` head 从 3e-4–4e-4 提升到 **7.3e-3–1.1e-2**，
+   约 **20–25 倍**；`zero_z` 从 ~4.5e-3 提升到 ~1.6e-1，约 **35 倍**。
+   按用户给的 ep6 继续门槛（`shuffle_z` head ≥ 0.2%），**三窗口全部通过**
+   （0.73%、0.73%、1.09%），且窗口间呈同一量级。最严格的论文最终门槛（≥2%）
+   仍差约 **2 倍**（最好窗口 1.09%）。
+2. **比值口径反而下降（中性偏负）**：`shuffle/zero` 从 0.064–0.092 回落到 0.041–0.071。
+   也就是说，绝对响应变大主要来自**公共偏置项也一起变大**，而不是样本判别性变强。
+   这与路线 A 的结论同构（Xavier 曾把两者同倍放大）——只不过这次是 ep6 的检测损失
+   把整个 z 通路推强了。
+3. **`prior_only` 不再明显低于 posterior**：450 iter 时 prior_only head 是 posterior 的
+   0.40×；ep6 时 prior_only head（2.6e-2–3.6e-2）相对 `normal`（=1.0）虽然仍低，
+   但相对 zero_z（1.6e-1）只有 0.17–0.21×。**posterior 校正仍然有正向价值**
+   （prior_only ≠ normal），但没有形成「prior 明显不足、posterior 补足」的强分离。
+
+结论：ep6 的机制读数**支持「z 已经进入检测通路且被放大」，不支持「z 已经携带强样本
+判别信息」**。这两件事必须分开陈述。
+
+### 56.6 ep6 source 探针（`stride=700`，indices `[3,703,1403]`）
+
+| 张量 | 路线 A 组 4 | 路线 B 450 iter | 路线 B ep6 | 读法 |
+|---|---:|---:|---:|---|
+| `feat_pooled_raw` specific | — | — | 13.53% | 输入侧底色占比仍然高 |
+| `e_t_pooled_raw` specific | — | — | 25.66% | encoder 输出仍有 1/4 样本特异 |
+| `e_pooled` specific | 14.19% | 7.75% | 25.66% | ep6 明显高于 450 iter |
+| `h_t` specific | — | 0.86% | 12.19% | GRU 状态不再是近乎常量 |
+| `mu_p` specific | 0.49% | 1.71% | 7.96% | prior 也获得了样本性 |
+| `mu_q` specific | 1.79% | 3.93% | **11.32%** | +2.9 倍于 450 iter |
+| `obs_prior_e_hat` specific | — | 1.80% | 24.52% | obs_prior 拟合较快 |
+| `innovation` specific | — | 14.27% | **43.51%** | 仍高于 `e_pooled` ✅ |
+| **`correction (= delta_mu)` specific** | 12.11% | 13.51% | **39.32%** | ≥10% ✅（远超门槛） |
+| correction RMS | 0.06579 | 0.05739 | 0.28682 | 绝对幅度变大 5 倍 |
+| `z_proj` weight RMS | 0.0827 | 0.0868 | 0.0868 | 未再被推大 |
+
+门槛逐条：
+
+| 门槛 | 要求 | ep6 实测 | 结论 |
+|---|---|---|---|
+| `innovation` specific > `e_pooled` specific | 是 | 43.51% > 25.66% | **通过** |
+| `delta_mu` specific | ≥ 10% | 39.32% | **通过** |
+| `correction²` 平台（不单调塌缩） | 是 | 0.1489→0.0596 仍单调下降 | **未过** |
+| `prior_only` head 明显低于 posterior | 是 | 0.0265 vs 1.0 | 通过（但强度弱于 450 iter） |
+
+`mu_q_e_only` 的样本特异占比 9.00%，`mu_q_h_only` 为 10.87%，两者接近，且
+`mu_q_removal_of_h_rel_l2=0.259` 大于 `mu_q_removal_of_e_rel_l2=0.165` ——
+**posterior 对 h_t 的依赖反而强于对观测的依赖**。这提示 ep6 的高 `correction` 特异占比
+里，有一部分是 h_t 递归状态带来的（h_t specific 12.19%），不全是当前帧观测的贡献。
+这是后续消融需要继续分离的点。
+
+### 56.7 结论与下一步
+
+1. **AP：按预登记规则止损，但效应量不显著。** ep6 `31.4895` vs no2d_igdr seed0
+   `34.0243`，差 `−2.5348`，超过 2.0 阈值。同时必须记录：这是单 seed、单 epoch、
+   与不同代码版本基线的对照，且三 seed 基线在 ep12-16 的标准差本身就有 1.35 点，
+   0.53 点的超阈不能当作强证伪。真正可靠的结论要等 `z_prev` 消融与更长窗口。
+2. **机制：三个正向变化都是真的。** `innovation` 43.51% > `e_pooled` 25.66%；
+   `delta_mu` 39.32%；ep6 `shuffle_z` head 0.73%–1.09%，比 450 iter 高 20–25 倍且
+   三窗口一致，已越过用户给的 ep6 继续门槛 0.2%。这支持「Kalman 式 predict-correct
+   让 posterior 结构上更合理」这一动机。
+3. **机制：判别性比例没有同步改善。** `shuffle/zero` 比值回落到 0.041–0.071，
+   即绝对放大主要来自公共偏置。`correction²` 到 ep6 仍单调下降、未形成平台。
+   论文里不能只报「shuffle head 涨了 20 倍」，必须同时报比值与平台这两项。
+4. **归因：`h_t` 与观测的依赖不均衡。** `mu_q_removal_of_h_rel_l2`（0.259）>
+   `mu_q_removal_of_e_rel_l2`（0.165），说明 posterior 对 GRU 状态的依赖强于当前
+   观测。`h_t` 本身的样本特异占比已升到 12.19%，因此「correction 特异」中混入了
+   递归状态成分；这与 `z_prev` 先 normalize 再进 GRU 的设计直接相关。
+5. **下一步（按预登记分支执行）**：先做 **`z_prev` L2 normalize 的 450 iter 单变量
+   消融**（`F.normalize(pooled_z, dim=1)` 一行，`rssm_fusion.py:1448`）。
+   要观察：`h_t` specific 是否继续上升、`mu_q_removal_of_h/e` 比例是否改变、
+   `correction²` 是否形成平台、`shuffle/zero` 比值是否上升。只有这组消融给出正向
+   证据，才考虑路线 C（Object-Centric Latent Supervision）。
+6. **仍未做**：路线 C、路线 D 的去塌缩损失、路线 E 的 KL balancing + 按 cell 聚合的
+   free-bits。三者继续后置，理由与第 55 节一致：`raw KL` 全程有界，KL 不是当前瓶颈。
+
+### 56.8 复现命令
+
+```bash
+# 启动（24e 日程，跑到 ep6 验证落盘后停）
+cd /home/lurui/workspace/R4Det && source .envrc
+tmux new-session -d -s routeB_ep6 "cd /home/lurui/workspace/R4Det && source .envrc && \
+  CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
+  configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation.py \
+  3 --seed 0 --deterministic \
+  --work-dir /data/lurui/work_dirs/lowdim_z_innovation_routeB_3x2x2_24e_seed0 \
+  > /tmp/lowdim_routeB_ep6.log 2>&1"
+
+# ep6 三窗口反事实诊断
+CFG=configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation.py
+CKPT=/data/lurui/work_dirs/lowdim_z_innovation_routeB_3x2x2_24e_seed0/epoch_6.pth
+CUDA_VISIBLE_DEVICES=5 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 3    --limit 4 --batch-size 4 --shuffle-offset 2  --output /tmp/z_util_routeB_ep6_w3.json
+CUDA_VISIBLE_DEVICES=6 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 100  --limit 4 --batch-size 4 --shuffle-offset 2  --output /tmp/z_util_routeB_ep6_w100.json
+CUDA_VISIBLE_DEVICES=7 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 1800 --limit 4 --batch-size 4 --shuffle-offset -1 --output /tmp/z_util_routeB_ep6_w1800.json
+
+# source 探针
+CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py --config $CFG --checkpoint $CKPT \
+  --start-index 3 --limit 4 --stride 700 --output /tmp/post_source_routeB_ep6_stride700.json
+```

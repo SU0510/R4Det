@@ -62,7 +62,13 @@
      - **工具适配**：两个诊断工具原先硬编码 `posterior_mu` 输出为 `mu_q`，在 innovation 结构下会读错张量；现均检测 `posterior_struct` 并做 `desired − mu_p` 反演 / `mu_q = mu_p + delta` 还原，新增 2 条工具回归测试。
      - **结论**：结构方向被验证（支持 Kalman 式 predict-correct 动机，可作论文机制证据），但路线 B 解决的是「correction 由什么构成」，没有解决「correction 如何被检测头放大」；路线 A 已证明单纯放大 `z_proj` 会等比放大公共偏置与样本身份，所以不能再只调增益。
      - **运行事实**：GPU 5/6/7、3 卡 DDP、seed 0、deterministic、450 iter；显存 `7436 MiB`，`1.095 s/iter`。**无 val 记录**，无区间均值/全轮峰值/best saved，**AP 尚未测量**。
-   - **下一步**：严格说应先给路线 B 跑 ep6 取得 AP 与机制读数，再决定是否叠加路线 C（Object-Centric Latent Supervision）。路线 C/D/E（去塌缩损失、`z_prev` normalize 消融、KL balancing）均未开始。
+   - **路线 B ep6 门控（2026-09-27/28，已完成，AP 止损、机制通过 ep6 门槛）**：正式训练跑到 ep6 验证落盘后主动停止（保留 24e 余弦日程，避免 LR 对照失真），GPU 5/6/7、seed 0、deterministic。详见 `docs/training_runs_full.md` 第 56 节。
+     - **AP 止损**：ep6 Overall 3D moderate `31.4895` vs no2d_igdr **seed0** 同 epoch `34.0243`，差 **−2.5348**，超过 2.0 阈值。附记：交接摘要里那张 ep6 = 37.3254 的对照表实际是 **seed1** 曲线，已在本节勘误；本判定按 seed0 真实曲线执行。
+     - **机制门槛通过**：`innovation` specific `43.51% > e_pooled 25.66%`；`delta_mu` specific `39.32%`（≥10%）；`shuffle_z` head `0.73%–1.09%`（三窗口，越过 ep6 继续门槛 0.2%，比 450 iter 高 20–25 倍；论文最终门槛 2% 仍差约 2 倍）。
+     - **未过项**：`shuffle/zero` 比值从 450 iter 的 0.064–0.092 回落到 **0.041–0.071**（绝对放大主要来自公共偏置）；`correction²` ep1→ep6 `0.1489→0.0596` 仍单调下降、**未形成平台**；recon `−6.75%`（门槛 15%）。
+     - **归因**：ep6 的 `mu_q` 对 `h_t` 的依赖（removal 0.259）强于对观测的依赖（removal 0.165），`h_t` 自身 specific 已升到 12.19%，即 correction 的样本性中混入了递归状态成分，与 `z_prev` 先 L2 normalize 再进 GRU 直接相关。
+     - **三口径摘要**（6 条 val，跨度为 ep1-6，标准 ep12-16 窗口不存在）：区间均值 `27.1488`（n=6，实际跨度 1-6）；全轮峰值 `34.8551 @ ep5`；best saved `31.4895 @ ep6`（`interval=2`）。
+   - **下一步（预登记分支，进行中）**：AP 差距 >2 ⟹ **不叠加路线 C**，先做 `z_prev` normalize 的 450 iter 单变量消融（`F.normalize(pooled_z, dim=1)`，`rssm_fusion.py:1448`），观察 `h_t` specific、`mu_q_removal_of_h/e` 比例、`correction²` 平台与 `shuffle/zero` 比值。只有该消融给出正向证据，才考虑路线 C（Object-Centric Latent Supervision）。路线 C/D/E 仍未开始。
    - **本次主线结论**：三项结构修复（差分重建、排名损失、空间读出）全部未过门控，路线 A 的两轴修复均已证实有效但叠加后仍差 32 倍，完整曲线与归因见 `docs/training_runs_full.md` 第 53、54 节。
    - ④ KL 口径改动**仍后置**：待结构有效性过 ep6 门控后再做 stop-gradient 拆分（`L_dyn=KL(sg(q)||p)`、`L_rep=KL(q||sg(p))`，建议 `beta_dyn=1.0`、`beta_rep=0.1`）与按 cell 聚合的 free-bits（沿 channel 求和后 ~1.0 nat/cell，先固定不退火）。**不要在缺重建项时单独调 free-bits。**
    - 低维 bottleneck 与排他未来任务这两个设计方向**尚未被证伪**；本轮证伪的是「在无重建锚定 + prior 脱离 `h_t` 的前提下使用它们」。标准 RSSM 的四条关键要素（prior 依赖 `h_t`、观测似然/重建项、KL balancing、输出吃 `(h_t,z_t)`）与逐条对照见第 50.6.7 节。

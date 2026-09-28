@@ -1067,6 +1067,7 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         z_proj_init='small',
         posterior_struct='standard',
         obs_pred_loss_weight=0.05,
+        z_prev_normalize=True,
         modulation_scale=0.1,
         gate_init_bias=-1.0,
         norm_cfg=dict(type='BN', requires_grad=True),
@@ -1145,6 +1146,14 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
             raise ValueError('obs_pred_loss_weight must be >= 0')
         self.posterior_struct = posterior_struct
         self.obs_pred_loss_weight = obs_pred_loss_weight
+        if not isinstance(z_prev_normalize, bool):
+            raise ValueError('z_prev_normalize must be a bool')
+        # Route-B ep6 ablation switch. `normalize` reproduces the route-B and
+        # every earlier lowdim run bit-for-bit; `raw` feeds the pooled previous
+        # latent to the GRU unnormalized so its magnitude survives the
+        # recurrence. Only the scale is at stake: both branches keep the
+        # channel-wise direction.
+        self.z_prev_normalize = z_prev_normalize
         if self.recon_loss_weight > 0 and (
                 self.latent_pool == 'global' or min(self.latent_size) < 2):
             # The recon target is standardized across each sample, so a 1x1
@@ -1445,7 +1454,10 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
                 device=feat.device, dtype=feat.dtype)
 
         pooled_z = self._pool_latent(self.z_state)
-        z_prev = F.normalize(pooled_z, dim=1)
+        if self.z_prev_normalize:
+            z_prev = F.normalize(pooled_z, dim=1)
+        else:
+            z_prev = pooled_z
         if self.use_action:
             x = torch.cat([z_prev, velocity_map], dim=1)
         else:
