@@ -8580,3 +8580,285 @@ CUDA_VISIBLE_DEVICES=7 python tools/diagnose_z_utilization.py --config $CFG --ch
 CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py --config $CFG --checkpoint $CKPT \
   --start-index 3 --limit 4 --stride 700 --output /tmp/post_source_rawnorm_ep6_stride700.json
 ```
+
+---
+
+## 59. 路线 C：Object-Centric Latent Supervision（实现 + 450 iter 机制门控，2026-09-28）
+
+本节记录 **第 58 节预登记分支的执行**。第 58 节三方对照把 rawnorm 的 ep6 AP 差距
+定为 −1.1263，落入「AP 差距 1–2、机制成立但 `shuffle_z` 明显不足」区间，按协议
+下一步是**以 rawnorm ep6 为对照实施路线 C**，而不是直接续训 ep12，也不是先动
+`z_prev`。
+
+### 59.0 状态与判定摘要
+
+| 门控项 | 门槛 | 450 iter 实测 | 判定 |
+|---|---|---:|---|
+| heatmap 学习信号 | 持续上升 | hit@1 `0.0141 → 0.3988` | **通过** |
+| `correction` specific | ≥ 5% | **28.17%** | **通过** |
+| `shuffle_z` head | ≥ 2% | **0.58%**（最好窗口） | **未通过**（差约 3.4 倍） |
+| `correction²` | 不单调塌缩 | 最后 150 iter `0.0077 → 0.0076 → 0.0076 → 0.0075` | **通过（450 iter 尺度）** |
+| recon | 持续下降 | `1.2268 → 1.0682` | 通过 |
+| raw KL | 有界 | `0.2209 → 0.0764`，全程 ≤ 1.0 | 通过 |
+| ep6 AP（Car/Truck 等） | 不低于基线超 2 点 | **ep6 训练进行中** | 待定 |
+
+**机制门槛部分通过**：object-centric 监督确实给 correction 增加了当前帧独占的
+信息（hit@1 升到 0.399、`correction` specific 28%、RMS 翻倍），但**身份信号仍未达
+论文门槛**，且 `shuffle/zero` 比值相对 rawnorm **下降**。所有结论都必须在 ep6 AP
+出来后才允许下最终判断。
+
+### 59.1 配置与唯一变量
+
+配置：`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation_rawnorm_oc.py`
+（自 `..._innovation_rawnorm.py` 继承）。相对 rawnorm 对照的**唯一变量**：
+
+```python
+latent_object_loss_weight=0.1   # 预登记 0.05 未达梯度门槛后按协议升权
+num_object_classes=4
+object_head_hidden_dim=64
+object_min_radius=1
+```
+
+新增模块（`mmdet3d/models/fusion_layers/rssm_fusion.py`）：
+
+```
+correction (B,32,16,16) -> Conv3x3(32->64) + ReLU -> Conv1x1(64->4) -> logits
+target = bev_centers_to_heatmap(current frame GT, 16x16)   # Gaussian, class-wise max
+loss   = CenterNet focal (alpha=2, gamma=4), normalised by #GT centres
+```
+
+四条设计约束（都有回归测试）：
+
+1. **辅助头只吃 `posterior_correction`。** `h_t` 能看到则不成立——递归状态可以自己
+   解掉目标，pressure 会从 correction 上卸掉。测试 `test_head_consumes_correction_not_h_t`
+   用 forward pre-hook 断言 `head_in` 与 `stat_correction_sq` 逐位一致。
+2. **只在当前帧计算。** `reset_state()` 清空 target，detector 只在前向当前帧前调用
+   `set_current_object_target`；历史帧不带 target。
+3. **推理零开销。** `_object_heatmap_loss` 在 `self.training=False` 或权重为 0 时
+   直接返回零，检测输出从不读取该 head。
+4. **默认权重 0 时逐位不变。** `test_default_weight_zero_is_bitwise_inert` 断言在
+   仅换了 target 的情况下 loss 与未设置 target 的基线完全相等；`test_zero_weight_never_runs_head`
+   断言 head 的 forward 根本没被调用。
+
+辅助几何工具放在 `mmdet3d/core/utils/gaussian.py`：
+`bev_centers_to_heatmap`（纯 torch 光栅化，`H` 索引 x、`W` 索引 y，与全仓库 BEV 张量
+约定一致）与 `gaussian_radius_batch`（仓库 `gaussian_radius` 的向量化等价形式；
+标量版以 Python `min()` 结尾无法批次化，故单测逐元素断言两者相等）。
+
+### 59.2 运行事实
+
+| 项 | w=0.05（首次冒烟） | **w=0.1（门控冒烟）** |
+|---|---|---|
+| work_dir | `/tmp/lowdim_z_oc_smoke_450iter` | `/tmp/lowdim_z_oc100_check` |
+| 日志 | `/tmp/lowdim_z_oc450.log` | `/tmp/lowdim_z_oc100_check.log` |
+| GPU / 卡数 | 5,6,7 / 3 卡 DDP | 5,6,7 / 3 卡 DDP |
+| runner | IterBasedRunner 450 iter，无 val | 同左 |
+| 显存 | 7443 MiB | 7443 MiB |
+| 速度 | ≈1.05 s/iter | ≈1.06 s/iter |
+| 落盘 | `iter_450.pth` | `iter_450.pth` |
+
+**为什么先跑 0.05 再升到 0.1。** 预登记原文是「`latent_object_loss_weight=0.05`，
+若梯度太弱升到 0.1」。0.05 跑完后直接检查了辅助头参数：
+
+| 参数 | Xavier 初值 | 450 iter @ 0.05 | 变化 |
+|---|---:|---:|---|
+| `object_head.0.weight` RMS | 0.04811 | 0.04817 | +0.12% |
+| `object_head.2.weight` RMS | 0.17462 | 0.17429 | −0.19% |
+| `object_head.2.bias` 均值 | −2.19000 | −2.19207 | −0.00207 |
+
+首层 RMS 与初值在 0.1% 以内、末层 bias 几乎不动，**「梯度太弱」条件成立**，因此
+按预登记升到 0.1，没有引入任何其它机制。校准检查（head-only overfit probe，冻结
+其余参数、把权重当 1.0 用）确认 focal 目标本身是可学的：`prob_at_gt` 在 40 步内从
+0.133 升到 0.953。所以 0.05 的失败是**权重太小**，不是损失或接口写错。
+
+### 59.3 训练曲线（每 50 iter，w=0.1）
+
+| iter | `stat_object_hm` | hit@1 | #pos | `stat_correction_sq` | recon | raw KL | clamped | innovation² |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 50 | 2.2214 | 0.0141 | 7.96 | 0.0174 | 1.2268 | 0.2209 | 0.5196 | 0.0156 |
+| 100 | 2.2081 | 0.0282 | 7.61 | 0.0110 | 1.1704 | 0.1353 | 0.6165 | 0.0103 |
+| 150 | 2.1631 | 0.0468 | 7.28 | 0.0092 | 1.1391 | 0.1108 | 0.6639 | 0.0088 |
+| 200 | 2.0584 | 0.1485 | 7.53 | 0.0083 | 1.1138 | 0.0975 | 0.6961 | 0.0083 |
+| 250 | 1.9117 | 0.2448 | 7.83 | 0.0078 | 1.0952 | 0.0887 | 0.7217 | 0.0079 |
+| 300 | 1.8164 | 0.3549 | 8.33 | 0.0077 | 1.0817 | 0.0830 | 0.7404 | 0.0076 |
+| 350 | 1.7223 | 0.3537 | 7.81 | 0.0076 | 1.0731 | 0.0788 | 0.7563 | 0.0075 |
+| 400 | 1.6963 | 0.3527 | 7.41 | 0.0076 | 1.0684 | 0.0774 | 0.7620 | 0.0076 |
+| 450 | 1.7345 | 0.3988 | 7.20 | 0.0075 | 1.0682 | 0.0764 | 0.7650 | 0.0075 |
+
+同预算 0.05 对照（同一曲线，仅末段回弹更明显）：
+`stat_object_hm` 2.2243 → 1.9393（−12.8%，且 iter 400→450 回弹），hit@1 全程
+0.0000，`correction²` 0.0174 → 0.0066。
+
+读数：
+
+1. **hit@1 的上升是真实的、单调的**：0.0141 → 0.3988（约 28 倍），只在最后 50 iter
+   与 loss 一起回弹。这是本轮最强的机制证据——`correction` 里确实被逼出了目标中心
+   的位置信息。
+2. **`correction²` 在 450 iter 尺度上形成平台**（最后 150 iter 只从 0.0077 到
+   0.0075，−2.6%），且平台值 **0.0075 高于 rawnorm 450 iter 的 0.0054（+39%）**。
+   但按第 58 节的教训，**450 iter 平台不等于正式训练平台**，必须由 ep6 逐 epoch
+   曲线复核（rawnorm 的 450 iter 平台在 ep1-6 就退化成了单调下降）。
+3. **辅助项没有伤害主目标**：recon 1.2268 → 1.0682（−12.9%）、KL 0.2209 → 0.0764、
+   innovation² 0.0156 → 0.0075，均与 rawnorm 同预算轨迹可比，没有发散。
+4. **`stat_object_hm_thr50` 全程仍为 0**：focal 软目标不驱动概率越过 0.5，这是
+   预期行为，也说明**不能用固定阈值当 recall 口径**（首版诊断用 `prob>0.5`，在
+   0.05 冒烟里读数恒为 0，是口径问题而非模型问题）。现口径改为「每个**有 GT 的
+   类别通道**内 argmax 是否落在该类的 GT 中心」，另报 0.5 阈值命中率作为参考。
+
+### 59.4 三窗口反事实诊断（与 rawnorm 450 iter 同预算对照）
+
+`tools/diagnose_z_utilization.py`，`iter_450.pth`，每窗口 4 条序列，head 相对 L2：
+
+| 运行 | 窗口 | zero_z feature | zero_z head | shuffle_z feature | shuffle_z head | prior_only feature | prior_only head | shuffle/zero |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| rawnorm | `[3..6]` | 0.0660 | 2.420e-3 | 0.0077 | 3.120e-4 | 0.0207 | 1.125e-3 | **0.1289** |
+| rawnorm | `[100..103]` | 0.0737 | 2.356e-3 | 0.0077 | 2.830e-4 | 0.0230 | 1.084e-3 | **0.1201** |
+| rawnorm | `[1800..1803]` | 0.0557 | 2.332e-3 | 0.0042 | 1.960e-4 | 0.0159 | 9.092e-4 | **0.0841** |
+| **路线 C** | `[3..6]` | 0.1923 | 6.638e-3 | 0.0123 | **5.800e-4** | 0.0526 | 3.014e-3 | 0.0874 |
+| **路线 C** | `[100..103]` | 0.1536 | 6.251e-3 | 0.0091 | **4.880e-4** | 0.0360 | 2.289e-3 | 0.0781 |
+| **路线 C** | `[1800..1803]` | 0.1312 | 6.014e-3 | 0.0061 | **3.690e-4** | 0.0278 | 1.925e-3 | 0.0613 |
+
+**两条方向相反的读数必须一起写：**
+
+1. **`shuffle_z` 绝对 head 响应三窗口全部提升 1.7–1.9 倍**
+   （3.12e-4→5.80e-4、2.83e-4→4.88e-4、1.96e-4→3.69e-4）。这是路线 C 的直接
+   机制收益：correction 携带了更多**只能由当前帧观测提供**的分量。
+2. **`shuffle/zero` 比值三窗口全部下降**（0.1289→0.0874、0.1201→0.0781、
+   0.0841→0.0613）。原因是 `zero_z` 涨得更快：2.42e-3→6.64e-3（+174%）、
+   2.36e-3→6.25e-3（+165%）、2.33e-3→6.01e-3（+158%）。
+   即 **公共偏置与身份信号同时被放大，公共分量放大得更多**。这与第 58 节 rawnorm
+   相对路线 B 的模式正好相反（那次是分子分母同时下降、分子降得更慢）。
+
+因此：**路线 C 提高了 correction 的信息量（它现在确实编码目标位置），但没有提高
+它在检测头里的“相对”样本判别性。** 论文门槛要求 `shuffle_z` head ≥ 2%，当前
+0.58% 仍差约 3.4 倍。
+
+### 59.5 Source 探针（`stride=700`，indices `[3,703,1403]`）
+
+| 张量 specific | rawnorm 450 iter | **路线 C 450 iter** | 变化 |
+|---|---:|---:|---|
+| `feat_pooled_raw` | 19.62% | 18.03% | 持平 |
+| `e_t_pooled_raw` / `e_pooled` | 7.62% | **15.33%** | **+2.0 倍** |
+| `h_t` | 1.73% | 1.45% | 略降 |
+| `mu_p` | 1.47% | 0.73% | −50% |
+| `mu_q` | 5.16% | 2.62% | −49% |
+| `innovation` | 36.95% | 33.14% | 略降 |
+| `correction (= delta_mu)` | 30.97% | 28.17% | 略降 |
+| `obs_prior_e_hat` | 0.90% | 2.69% | +2.0 倍 |
+| `correction` RMS | 0.02895 | **0.06239** | **+115%** |
+| `innovation` RMS | 0.03576 | 0.06104 | +71% |
+| `mu_q` RMS | 0.07879 | 0.23930 | +204% |
+| `h_t` RMS | 0.06793 | 0.14837 | +118% |
+| `z_proj` weight RMS | 0.08342 | 0.08326 | 持平 |
+
+依赖方向：
+
+| 依赖方向 | rawnorm 450 iter | 路线 C 450 iter |
+|---|---:|---:|
+| `mu_q_removal_of_e_rel_l2` | 0.3152 | 0.2048 |
+| `mu_q_removal_of_h_rel_l2` | 0.2756 | 0.1601 |
+| h/e 比值 | 0.874 | **0.782** |
+
+读数与归因：
+
+1. **编码器上游变好了**：`e_pooled` specific 从 7.62% 翻倍到 15.33%，`feat_pooled_raw`
+   基本不变（19.62% → 18.03%）。唯一能对 encoder 施加新压力的路径就是 correction 的
+   辅助目标，所以这条证据支持「object-centric 监督经 correction 反传到 encoder」。
+   这与第 58 节反复出现的「上游信息不足」是同一瓶颈，路线 C 是**第一个在 450 iter
+   尺度上把该瓶颈推动的方法**。
+2. **但下游没有同比例跟上**：`mu_q` 与 `correction` 的 specific 占比反而略降，RMS
+   却大幅上升。也就是说，多出来的观测信息更多变成了**公共幅值**（zero_z 涨 158–174%）
+   而非样本区分度（shuffle_z 涨 72–88%）。这解释了 59.4 的比值下降。
+3. **`h_t` 的通路仍被压低**（1.45% vs rawnorm 1.73%），h/e 依赖比 0.782（比
+   rawnorm 的 0.874 更偏观测）。方向是对的，但量级仍小。
+4. **`z_proj` 权重尺度两轮完全一致**（0.0834 vs 0.0833），说明差异不是读出增益造成的，
+   而是 correction 内容本身变化。
+
+### 59.6 代码与测试
+
+提交：`6d7e865 feat(rssm): add object-centric latent supervision (route C)`。
+
+新增/修改文件：
+
+- `mmdet3d/models/fusion_layers/rssm_fusion.py`：`latent_object_loss_weight`、
+  `num_object_classes`、`object_head_hidden_dim`、`object_min_radius` 参数；
+  `object_head` 模块；`set_current_object_target`；`_object_heatmap_loss`；四个诊断键。
+  辅助头在 `init_weights()` **最后**初始化，避免改变既有模块的 RNG 消耗顺序，
+  保证旧 checkpoint 与旧消融仍逐位可比。
+- `mmdet3d/models/detectors/R4Det.py`：当前帧 forward 前生成并注入 GT 热图。
+- `mmdet3d/core/utils/gaussian.py` + `__init__.py`：`bev_centers_to_heatmap`、
+  `gaussian_radius_batch`。
+- `configs/r4det/..._lowdim_z_innovation_rawnorm_oc.py`、`me_rssm/sanity/lowdim_z_oc_smoke_450iter.py`。
+- `mmdet3d/models/fusion_layers/test_rssm_fusion.py`：新增 11 条路线 C 回归测试。
+
+**RSSM 单测 74 条通过**（`CUDA_VISIBLE_DEVICES=5 python -m unittest -v
+mmdet3d.models.fusion_layers.test_rssm_fusion`）。新增测试覆盖：
+
+- 默认权重 0 时 loss 与基线逐位相等、head 不被调用、诊断恒为 0；
+- head 输入恰为 `posterior_correction`（pre-hook 与 `stat_correction_sq` 对齐）；
+- target 形状/channel/批大小的校验错误路径；
+- 关闭 KL/recon/obs_pred 后，object 项是唯一梯度源且确实反传到 `posterior_mu`，
+  而只通往 `h_t` 的 `h_proj` 无梯度；
+- 空热图（无 GT）贡献严格为零；
+- hit@1 判据在「峰值落在中心」「峰值落在背景」「同类多中心」三种构造下的行为；
+- 诊断键不含 `loss` 子串；
+- 热图几何（中心 cell 落在 `[8,8]`、类别通道选择、越界框丢弃、非法标签跳过）；
+- `gaussian_radius_batch` 与仓库标量 `gaussian_radius` 在 64 组随机尺寸上逐元素相等。
+
+### 59.7 结论与下一步
+
+1. **实现层面完成且安全。** 默认关闭时行为逐位不变；推理完全不受影响；辅助目标是
+   可学的（head-only probe 40 步内概率到 0.95）；预登记的 0.05 → 0.1 升权有参数
+   证据支撑，不是事后调参。
+2. **机制层面部分通过。** hit@1 `0.0141 → 0.3988`、`correction` specific 28.17%、
+   `correction²` 450 iter 平台 0.0075、上游 `e_pooled` specific 翻倍——**四项都是
+   正向**，其中「encoder 上游被推动」是此前所有配置都没做到过的。
+3. **但核心门槛仍未过。** `shuffle_z` head 0.58% vs 2% 门槛（差 3.4 倍），
+   `shuffle/zero` 比值相对 rawnorm 反而下降。**当前证据只能说路线 C 让 correction
+   编码了更多观测内容，不能说它让检测头更依赖样本身份。**
+4. **ep6 是硬门控，不能由机制读数替代。** 训练已按 24e 日程启动
+   （`/data/lurui/work_dirs/lowdim_z_innovation_rawnorm_oc_3x2x2_24e_seed0`，GPU 5/6/7，
+   seed 0，看门狗在 ep6 验证落盘后停止）。必须同时检查：
+   - Overall 3D moderate 对比 no2d_igdr seed0 ep6 `34.0243`，以及**四类构成项**；
+   - `correction²` 的逐 epoch 曲线是否仍单调塌缩（450 iter 平台不作数）；
+   - 三窗口 `shuffle_z` head / `shuffle/zero` 是否保持 59.4 的形态；
+   - `stat_object_hm` / hit@1 在 6 epoch 尺度上的走向。
+5. **预登记分支（出来后按此判定）**：
+   - AP 差距 ≤ 1：若机制继续增强，可考虑 B/C 合并版续到 ep12；
+   - AP 差距 1–2 且 `shuffle_z` 仍不足：说明 object-centric 监督不足，进入**路线 D**
+     （跨样本去塌缩损失，直接惩罚 common 分量、给出 variance floor）；
+   - AP 差距 > 2：路线 C 单独不成立，回到结构层（路线 D 或 `z_prev` 之外的递归改造）；
+   - AP 上升但 hit@1 或 `shuffle_z` 退化：不能算 RSSM 方法成功，须查是否只是辅助损失
+     带来的普通优化收益。
+6. **仍未做**：路线 D（`L_common` + `L_var` 去塌缩）、路线 E（KL balancing +
+   按 cell 聚合的 free-bits）。KL 继续后置：raw KL 0.0764 有界，没有数量级异常。
+
+### 59.8 复现命令
+
+```bash
+# 450 iter 机制冒烟（无 val）
+cd /home/lurui/workspace/R4Det && source .envrc
+CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
+  me_rssm/sanity/lowdim_z_oc_smoke_450iter.py 3 --seed 0 --deterministic \
+  --work-dir /tmp/lowdim_z_oc100_check > /tmp/lowdim_z_oc100_check.log 2>&1
+
+# 三窗口反事实诊断（与 rawnorm 450 iter 同预算对照）
+CFG=configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation_rawnorm_oc.py
+CKPT=/tmp/lowdim_z_oc100_check/iter_450.pth
+CUDA_VISIBLE_DEVICES=5 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 3    --limit 4 --batch-size 4 --shuffle-offset 2  --output /tmp/z_util_oc450_w3.json
+CUDA_VISIBLE_DEVICES=6 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 100  --limit 4 --batch-size 4 --shuffle-offset 2  --output /tmp/z_util_oc450_w100.json
+CUDA_VISIBLE_DEVICES=7 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 1800 --limit 4 --batch-size 4 --shuffle-offset -1 --output /tmp/z_util_oc450_w1800.json
+CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py --config $CFG --checkpoint $CKPT \
+  --start-index 3 --limit 4 --stride 700 --output /tmp/post_source_oc450_stride700.json
+
+# ep6 正式训练（24e 日程，跑到 ep6 验证落盘后停）
+tmux new-session -d -s oc_ep6 "cd /home/lurui/workspace/R4Det && source .envrc && \
+  CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
+  configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation_rawnorm_oc.py \
+  3 --seed 0 --deterministic \
+  --work-dir /data/lurui/work_dirs/lowdim_z_innovation_rawnorm_oc_3x2x2_24e_seed0 \
+  > /tmp/lowdim_oc_ep6.log 2>&1"
+```
