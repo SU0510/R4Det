@@ -73,7 +73,13 @@
      - **但绝对量级仍不足**：`shuffle_z` head 1.96e-4–3.12e-4（与 normalize 冒烟同量级，距 2% 最终门槛约两个数量级）；`zero_z` 绝对响应同时减半（4.5e-3 → 2.4e-3），即比值上升是「分子分母同时下降、分子降得更慢」；`correction` RMS 0.0574 → 0.0290（−50%）。recon 轨迹几乎重合（末端 1.0852 vs 1.0812），raw KL 0.0657 有界。
      - **结论**：`z_prev` 的 L2 normalize 确实是压制样本信息的因素之一，**该动且要保留**；但它不是充分条件，不构成「可进论文主表」的证据。**即便机制正向，是否继续仍必须由 AP 决定**——这是 ep6 门控分支的硬约束，不能因为机制读数变好就跳过 AP。
      - **运行事实**：GPU 5/6/7、3 卡 DDP、seed 0、deterministic、450 iter；显存 `7436 MiB`、约 `1.08 s/iter`；`iter_450.pth` 已落盘；**无 val**，故无区间均值/全轮峰值/best saved。
-   - **下一步（进行中）**：rawnorm 配置的 **ep6 AP 三方对照**（rawnorm / 路线 B / no2d_igdr seed0），work_dir `/data/lurui/work_dirs/lowdim_z_innovation_rawnorm_3x2x2_24e_seed0`，GPU 5/6/7、seed 0、24e 日程跑到 ep6 验证落盘后停；判定沿用第 56 节协议，额外检查 `correction²` 是否继续保持平台。**注意：机制正向不等于可以跳过 AP 门控**，若 rawnorm ep6 的 AP 差距仍 >2，则按协议下一步才是路线 C 或后续单变量消融，不能直接续训到 ep12。路线 C/D/E 仍未开始。
+   - **rawnorm ep6 三方对照（2026-09-28，AP 通过止损、机制全面优于路线 B）**：work_dir `/data/lurui/work_dirs/lowdim_z_innovation_rawnorm_3x2x2_24e_seed0`，GPU 5/6/7、seed 0、24e 日程跑到 ep6 验证落盘后停。详见 `docs/training_runs_full.md` 第 58 节。
+     - **AP 差距收窄到 −1.1263**：ep6 Overall 3D moderate `32.8980` vs no2d_igdr seed0 `34.0243`；路线 B 同 epoch 为 `31.4895`（−2.5348）。这是低维 z 系列首次把 ep6 差距压到 1.2 点内（历史：第 50 节 −6.51、第 52 节 −6.90、路线 B −2.53）。**落入预登记的 1–2 区间**。
+     - **机制全面优于路线 B ep6**：`shuffle_z` head `0.84%–1.38%`（B 为 0.73%–1.09%，论文门槛 2% 仍差约 1.5 倍）；`shuffle/zero` 比值 `0.077–0.125`（B 为 0.041–0.071）；`innovation` specific `46.70% > e_pooled 16.32%`；`delta_mu` specific `38.01%`；`zero_z` 绝对响应同时低于 B（0.11–0.13 vs 0.15–0.18），即分子升、分母降。
+     - **两条反向证据（必须与 450 iter 结论并列）**：① `correction²` 在正式训练里仍**逐 epoch 单调下降**（0.2218→0.0685），第 57 节的「450 iter 平台」不是稳定性质；② `mu_q` 对 `h_t` 的依赖**重新超过**对观测的依赖（removal h/e = 1.46，路线 B ep6 为 1.57，450 iter 曾反转到 0.874）。**结论：rawnorm 改善的是 recurrent 通路的幅值尺度，不是信息流向**；「放大信号 ≠ 改变信息结构」。
+     - **三口径摘要**（6 条 val，跨度为 ep1-6）：区间均值 `28.4652`（n=6，实际跨度 1-6）；全轮峰值 `33.8487 @ ep5`（无对应权重）；best saved `32.8980 @ ep6`。
+     - **运行事实**：显存 `7438 MiB`、约 `1.05 s/iter`；ep1 前半段 `correction²` 冲到 0.5457、`grad_norm` 峰值 15.87 后自行回落，全程无发散；落盘 ep2/4/6；看门狗在 07:04:50 UTC 于 ep6 验证落盘后停止训练。
+   - **下一步（进行中，路线 C）**：以上述 **rawnorm ep6**（而非路线 B ep6）为对照，实施 **Object-Centric Latent Supervision**：`correction (16×16×32) → Conv 32→64 → 4 类 center heatmap`，CenterNet 风格 focal loss，`latent_object_loss_weight=0.05`（不足则升 0.1），只在当前帧计算，推理时删除辅助 head（零额外开销）。判定沿用同一协议，并**额外检查 `correction²` 是否真正停止塌缩**（rawnorm 遗留问题）。路线 D/E 仍未开始。
    - **本次主线结论**：三项结构修复（差分重建、排名损失、空间读出）全部未过门控，路线 A 的两轴修复均已证实有效但叠加后仍差 32 倍，完整曲线与归因见 `docs/training_runs_full.md` 第 53、54 节。
    - ④ KL 口径改动**仍后置**：待结构有效性过 ep6 门控后再做 stop-gradient 拆分（`L_dyn=KL(sg(q)||p)`、`L_rep=KL(q||sg(p))`，建议 `beta_dyn=1.0`、`beta_rep=0.1`）与按 cell 聚合的 free-bits（沿 channel 求和后 ~1.0 nat/cell，先固定不退火）。**不要在缺重建项时单独调 free-bits。**
    - 低维 bottleneck 与排他未来任务这两个设计方向**尚未被证伪**；本轮证伪的是「在无重建锚定 + prior 脱离 `h_t` 的前提下使用它们」。标准 RSSM 的四条关键要素（prior 依赖 `h_t`、观测似然/重建项、KL balancing、输出吃 `(h_t,z_t)`）与逐条对照见第 50.6.7 节。

@@ -8298,3 +8298,285 @@ CUDA_VISIBLE_DEVICES=6 python tools/diagnose_z_utilization.py --config $CFG --ch
 CUDA_VISIBLE_DEVICES=7 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
   --start-index 1800 --limit 4 --batch-size 4 --shuffle-offset -1 --output /tmp/z_util_rawnorm450_w1800.json
 ```
+
+---
+
+## 58. rawnorm ep6 门控：三方对照（rawnorm / 路线 B / no2d_igdr seed0，2026-09-28）
+
+### 58.0 状态与判定摘要
+
+第 57 节的 450 iter 消融给出 4/4 正向机制读数，按协议进入 ep6 AP 对照。本节是
+rawnorm 配置的正式 ep6 结果，并与路线 B（第 56 节）和 no2d_igdr seed0 做三方对照。
+
+**一句话结论：AP 差距收窄到 −1.1263（落入预登记的 1–2 区间）、机制指标全面优于
+路线 B（`shuffle_z` head 0.84%–1.38%、比值 0.077–0.125），按协议进入路线 C
+（Object-Centric Latent Supervision）。但仍有两条必须记录的反向证据：
+`correction²` 在正式训练里重新变成单调塌缩（与 450 iter 的「平台」结论相反），
+且 `mu_q` 对 `h_t` 的依赖再次超过对观测的依赖（与 450 iter 的反转结论相反）。**
+
+| 检查项 | 要求 | rawnorm ep6 | 路线 B ep6 | no2d_igdr seed0 ep6 | 结论 |
+|---|---|---|---|---|---|
+| Overall 3D moderate（同 epoch） | 差距 ≤2.0 继续 | **32.8980** | 31.4895 | 34.0243 | Δ_base **−1.1263**，**通过止损** |
+| `shuffle_z` head（ep6 继续门槛 0.2%） | ≥0.2% | **0.84%–1.38%** | 0.73%–1.09% | — | **通过，且优于路线 B** |
+| `shuffle/zero` 比值 | 高于路线 B 的 0.041–0.071 | **0.077–0.125** | 0.041–0.071 | — | **通过，三窗口一致** |
+| `innovation` specific > `e_pooled` specific | 是 | 46.70% > 16.32% | 43.51% > 25.66% | — | **通过** |
+| `delta_mu` specific | ≥10% | 38.01% | 39.32% | — | **通过** |
+| `correction²` 形成平台 | 是 | ep1→ep6 逐 epoch 均值：0.2218 → 0.0685（**单调下降**） | 0.1489→0.0596 | — | **未过（与 450 iter 结论相反）** |
+
+**预登记分支判定**：
+
+```
+AP 差距 1–2，机制成立但 shuffle_z 仍明显不足（1.38% < 2%）
+  → 以 B ep6 为对照，实施路线 C（Object-Centric Latent Supervision）
+```
+
+注意这次是 **rawnorm ep6** 而非 B ep6 作为路线 C 的对照基线：rawnorm 在 ep6 上
+同时拥有更小的 AP 差距（−1.13 vs −2.53）和更强的机制读数（`shuffle_z` head 最大值
+1.38% vs 1.09%、比值 0.125 vs 0.071），是更合适的起跳点。
+
+### 58.1 配置与唯一变量
+
+| 项 | 值 |
+|---|---|
+| 配置 | `configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation_rawnorm.py` |
+| 相对路线 B 的唯一差异 | `z_prev_normalize: True → False` |
+| 训练日程 | **`max_epochs=24` 的 CosineAnnealing 原日程未改**，ep1-6 的 LR/KL warmup 与两个对照逐轮对齐 |
+| val 口径 | 训练内 EvalHook + evaluation.pipeline，`val.samples_per_gpu=4`，`evaluation.interval=1` |
+| 落盘 | `checkpoint_config.interval=2` |
+
+三个 run 的对照关系（本节全部按此表口径）：
+
+| run | `posterior_struct` | `z_prev_normalize` | 其他 |
+|---|---|---|---|
+| no2d_igdr seed0 | 无低维 latent（对照基线） | — | FG-FULL 全监督，无 2D/IGDR |
+| 路线 B ep6 | `innovation` | `True` | 路线 A 组 4 + obs_pred |
+| **rawnorm ep6** | `innovation` | **`False`** | 与路线 B 完全相同 |
+
+### 58.2 运行事实
+
+| 项 | 值 |
+|---|---|
+| work_dir | `/data/lurui/work_dirs/lowdim_z_innovation_rawnorm_3x2x2_24e_seed0` |
+| 日志 | `20260928_023*.log(.json)`、`/tmp/lowdim_rawnorm_ep6.log` |
+| 硬件 | GPU 5/6/7，3 卡 DDP，seed 0，deterministic |
+| 起止 | 2026-09-28 02:37:37 UTC 启动；ep6 val 于 07:04:50 UTC 写完，看门狗随后停止训练 |
+| 显存 / 速度 | `7438 MiB` / 约 `1.05 s/iter`（与路线 B ep6 同量级） |
+| 落盘 | `epoch_2.pth` / `epoch_4.pth` / `epoch_6.pth`，`latest.pth -> epoch_6.pth` |
+| val 记录 | ep1-6 各一条，共 6 条 |
+| 稳定性 | 无发散：`correction²` 在 ep1 iter 250 冲到峰值 0.5457 后回落并在 ep1 后半段稳定在 0.24–0.28，ep1 全 epoch 均值 0.2218，此后逐 epoch 单调降到 0.0685；`grad_norm` 全程 5.75–15.87，`raw KL` 全程 0.0345–1.3713，两者都有界、无 NaN |
+
+**关于早期尖峰**：去掉归一化后，`z_prev` 的幅值不再被裁剪，ep1 前半段出现
+`correction²` 0.0253→0.5457 的快速上升（约 22 倍）与 `grad_norm` 8.1→15.9 的抬升。
+它在 ep1 iter 300 后自行回落到 0.24–0.26，ep1 全 epoch 均值 0.2218，之后逐 epoch
+单调下降（0.1288 → 0.0685），全程没有发散或 NaN。
+这是 rawnorm 与路线 B 在动力学上最显著的区别，必须在复现时注意：
+rawnorm 不是「更温和」，而是「前 250 iter 更激进、之后稳定在更高幅值」。
+
+### 58.3 完整逐 epoch 曲线
+
+主指标（`pts_bbox/KITTI/*`）：
+
+| epoch | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 20.1118 | 27.6784 | 28.2763 | 27.1383 | 16.2622 | 8.7703 |
+| 2 | 28.1775 | 35.9377 | 34.7473 | 38.9211 | 18.2066 | 20.8352 |
+| 3 | 28.0411 | 34.2050 | 37.5963 | 42.3158 | 20.0612 | 12.1911 |
+| 4 | 27.7140 | 36.5433 | 32.1546 | 36.1416 | 24.1069 | 18.4528 |
+| 5 | **33.8487** | 39.6282 | 43.6507 | 46.0788 | 24.5194 | 21.1458 |
+| 6 | 32.8980 | 39.3133 | 45.6647 | 41.8833 | 22.2281 | 21.8159 |
+
+三方同 epoch 对照（Overall 3D moderate）：
+
+| epoch | no2d_igdr seed0 | 路线 B | **rawnorm** | Δ vs base | Δ vs B |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 15.2640 | 20.8115 | 20.1118 | **+4.8478** | −0.6997 |
+| 2 | 26.3716 | 22.5532 | 28.1775 | **+1.8059** | **+5.6243** |
+| 3 | 31.6591 | 28.1833 | 28.0411 | −3.6180 | −0.1422 |
+| 4 | 32.8506 | 25.0003 | 27.7140 | −5.1366 | **+2.7137** |
+| 5 | 34.0827 | 34.8551 | 33.8487 | −0.2340 | −1.0064 |
+| 6 | 34.0243 | 31.4895 | **32.8980** | **−1.1263** | **+1.4085** |
+
+逐类别（loose 口径）：
+
+| epoch | Car loose | Truck loose | Cyc loose | Ped loose |
+|---:|---:|---:|---:|---:|
+| 1 | 49.1750 | 32.0069 | 27.1383 | 16.2622 |
+| 2 | 55.3444 | 43.0059 | 38.9211 | 18.2066 |
+| 3 | 56.3237 | 37.5297 | 42.3158 | 20.0612 |
+| 4 | 59.1984 | 36.2573 | 36.1416 | 24.1069 |
+| 5 | 59.6940 | 43.0993 | 46.0788 | 24.5194 |
+| 6 | 62.5624 | 43.5216 | 41.8833 | 22.2281 |
+
+逐类别 strict 口径：
+
+| epoch | Car strict | Truck strict | Cyc strict | Ped strict |
+|---:|---:|---:|---:|---:|
+| 1 | 28.2763 | 8.7703 | 6.8277 | 0.1623 |
+| 2 | 34.7473 | 20.8352 | 18.1247 | 0.0719 |
+| 3 | 37.5963 | 12.1911 | 21.0104 | 0.1260 |
+| 4 | 32.1546 | 18.4528 | 18.5261 | 0.0316 |
+| 5 | 43.6507 | 21.1458 | 22.4000 | 0.0501 |
+| 6 | 45.6647 | 21.8159 | 17.9584 | 0.0349 |
+
+**窗口均值（ep1-6，n=6，实际跨度 1-6，非标准 ep12-16 窗口）**：
+
+| 口径 | Overall 3D | Overall BEV | Car strict | Cyclist loose | Ped loose | Truck strict |
+|---|---:|---:|---:|---:|---:|---:|
+| rawnorm ep1-6 等权均值 | 28.4652 | 35.5510 | 37.0150 | 38.7465 | 20.8974 | 17.2018 |
+| 路线 B ep1-6 等权均值 | 27.1488 | 35.4594 | 33.0164 | 40.8937 | 20.2263 | 14.4589 |
+| no2d_igdr seed0 ep1-6 等权均值 | 29.0420 | 37.4302 | 39.9218 | 36.7749 | 19.7073 | 19.7642 |
+| Δ（rawnorm − 基线） | **−0.5768** | −1.8792 | −2.9068 | +1.9716 | +1.1901 | −2.5624 |
+| Δ（rawnorm − 路线 B） | **+1.3164** | +0.0916 | **+3.9986** | −2.1472 | +0.6711 | +2.7429 |
+
+**三口径必填摘要**（本 run 有 6 条 val 记录）：
+
+| 口径 | 值 |
+|---|---|
+| 区间均值（ep1-6，n=6，实际跨度 1-6；标准 ep12-16 窗口不存在） | Overall 3D moderate **28.4652** |
+| 全轮峰值（所有有 val 的 epoch 中最高单点） | **33.8487 @ ep5**（无对应权重） |
+| best saved（实际有权重的 epoch 中最高，`interval=2` 故仅 ep2/4/6） | **32.8980 @ ep6** |
+
+### 58.4 训练内诊断（每 epoch 的 mean）
+
+| epoch | recon MSE | correction² | innovation² | obs_pred | raw KL | clamped | grad norm |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.9978 | 0.2218 | 0.0350 | 0.0174 | 0.7222 | 0.1392 | 12.37 |
+| 2 | 0.9466 | 0.1288 | 0.0344 | 0.0171 | 0.2513 | 0.3842 | 10.20 |
+| 3 | 0.9427 | 0.1033 | 0.0413 | 0.0206 | 0.0745 | 0.7802 | 8.36 |
+| 4 | 0.9344 | 0.0855 | 0.0426 | 0.0212 | 0.0521 | 0.8584 | 7.32 |
+| 5 | 0.9330 | 0.0757 | 0.0438 | 0.0218 | 0.0428 | 0.8895 | 6.93 |
+| 6 | 0.9310 | 0.0685 | 0.0444 | 0.0221 | 0.0374 | 0.9082 | 6.34 |
+
+与路线 B ep6 对照：
+
+| 诊断量 | 路线 B ep6 | rawnorm ep6 | 读法 |
+|---|---:|---:|---|
+| recon MSE | 0.9266 | 0.9310 | 几乎相同（rawnorm 未靠更简单的重建换取指标） |
+| correction² | 0.0596 | **0.0685** | **1.15 倍**，绝对幅值更大 |
+| innovation² | 0.0487 | 0.0444 | 同量级 |
+| obs_pred | 0.0243 | 0.0221 | 同量级 |
+| raw KL | 0.0331 | 0.0374 | 同量级，远未爆炸 |
+| clamped | 0.9267 | 0.9082 | 同量级 |
+| grad norm | ~8 | 6.34 | 同量级，未失稳 |
+
+**关键反向证据（必须与 450 iter 结论并列记录）**：
+
+450 iter 冒烟里 rawnorm 的 `correction²` 在最后 100 iter **完全持平在 0.0054**，
+据此判定「首次形成平台」。但在 ep1-6 的正式训练里它是**单调下降**的：
+ep1 0.2218 → ep6 0.0685（−69%），形态与路线 B ep6（0.1489→0.0596）一致。
+
+两者不矛盾但结论不同：**450 iter 的「平台」不是稳定性质，只是短预算下的局部现象。**
+第 57 节把它写成「首次形成平台」在当时的数据下是正确的，本节必须显式更正其适用范围：
+**在 6 epoch 尺度上，rawnorm 仍未阻止 `correction²` 的单调塌缩。**
+
+### 58.5 rawnorm ep6 三窗口反事实诊断
+
+| 窗口 | zero_z feature | zero_z head | shuffle_z feature | shuffle_z head | prior_only feature | prior_only head | shuffle/zero |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `[3..6]` | 0.6844 | 0.1103 | 0.0754 | **1.3783e-2** | 0.1701 | 2.851e-2 | **0.1250** |
+| `[100..103]` | 0.8341 | 0.1262 | 0.0645 | **1.0394e-2** | 0.2176 | 3.516e-2 | **0.0824** |
+| `[1800..1803]` | 0.8222 | 0.1098 | 0.0547 | **8.4264e-3** | 0.1848 | 2.769e-2 | **0.0768** |
+
+三方对照（head L2 ratio vs normal，三窗口范围）：
+
+| run | zero_z head | shuffle_z head | prior_only head | shuffle/zero |
+|---|---:|---:|---:|---:|
+| 路线 B 450 iter | 4.50e-3–4.59e-3 | 2.94e-4–4.19e-4 | 1.82e-3–1.85e-3 | 0.064–0.092 |
+| 路线 B ep6 | 0.1534–0.1755 | 7.28e-3–1.09e-2 | 2.64e-2–3.63e-2 | 0.041–0.071 |
+| **rawnorm ep6** | 0.1098–0.1262 | **8.43e-3–1.38e-2** | 2.77e-2–3.52e-2 | **0.077–0.125** |
+
+读数：
+
+1. **`shuffle_z` head 绝对量级首次进入 1% 区间**：最好窗口 1.3783e-2，三窗口均 ≥8.4e-3。
+   论文最终门槛 2% 仍差约 1.5 倍，但这是目前为止最接近的一次。
+2. **`shuffle/zero` 比值三窗口全部高于路线 B ep6**（0.125/0.082/0.077 vs 0.055/0.041/0.071）。
+   与 450 iter 的方向一致，说明「去掉 normalize 提高判别性占比」在正式尺度上仍然成立。
+3. **`zero_z` 绝对响应略低于路线 B ep6**（0.11–0.13 vs 0.15–0.18），即公共偏置被削弱，
+   而 `shuffle_z` 同时上升 —— 这次是**分子上升、分母下降**，比 450 iter 的
+   「双降、分子降得慢」更强。
+4. **`prior_only` 与路线 B 持平**（2.8e-2–3.5e-2），posterior 校正的相对价值没有退化。
+
+### 58.6 rawnorm ep6 source 探针（`stride=700`，indices `[3,703,1403]`）
+
+| 张量 | 路线 B ep6 | **rawnorm ep6** | 变化 |
+|---|---:|---:|---|
+| `feat_pooled_raw` specific | 13.53% | 15.27% | — |
+| `e_t_pooled_raw` specific | 25.66% | 16.32% | 略降 |
+| `e_pooled` specific | 25.66% | 16.32% | 略降 |
+| `h_t` specific | 12.19% | **10.71%** | 同量级 |
+| `mu_p` specific | 7.96% | 7.32% | 同量级 |
+| `mu_q` specific | 11.32% | 10.61% | 同量级 |
+| `obs_prior_e_hat` specific | 24.52% | 13.19% | 略降 |
+| `innovation` specific | 43.51% | **46.70%** | 略升 |
+| `correction (= delta_mu)` specific | 39.32% | **38.01%** | 同量级 |
+| correction RMS | 0.28682 | 0.25869 | 略降 |
+| `z_proj` weight RMS | 0.0868 | 0.0856 | 同尺度 |
+
+**第二条反向证据**：
+
+| 依赖方向 | 路线 B ep6 | rawnorm 450 iter | **rawnorm ep6** |
+|---|---:|---:|---:|
+| `mu_q_removal_of_e_rel_l2` | 0.1653 | **0.3152** | 0.1325 |
+| `mu_q_removal_of_h_rel_l2` | 0.2589 | 0.2756 | **0.1932** |
+| h/e 比值 | 1.57 | **0.874** | **1.46** |
+
+450 iter 里观测到的「依赖反转」（h/e 0.874）在 ep6 尺度上**回归到 1.46**，与路线 B ep6
+的 1.57 基本一致。即：**去掉 `z_prev` normalize 并不能在正式训练里让 posterior 持续
+以当前观测为主。** 第 57 节的「依赖反转」结论同样只在 450 iter 尺度成立。
+
+把两条反向证据放在一起看，一个一致的解读是：**rawnorm 改变的是 recurrent 通路的
+幅值尺度（correction RMS 与 KL 都放大数倍），而不是信息流向。** ep6 的机制改善
+（`shuffle_z` 绝对值进入 1%、比值上升）来自更大的幅值，而非「观测替代了递归状态」。
+这与路线 A 的教训形式相同：**放大信号 ≠ 改变信息结构。**
+
+### 58.7 结论与下一步
+
+1. **AP：差距从 −2.53 收窄到 −1.13，通过止损并落入 1–2 区间。** 这是本任务中低维
+   z 变体第一次在 ep6 把与基线的差距压到 1.2 点以内（历史对照：第 50 节低维无重建
+   ep8-12 −6.51、第 52 节 recon+h_t 修复 ep8-12 −6.90、路线 B ep6 −2.53）。
+   优点必须写清楚：**这是目前唯一一个既没有崩掉 AP、又让 `shuffle_z` head 进入 1% 的配置。**
+2. **机制：三项指标全面优于路线 B ep6。** `shuffle_z` head 0.84%–1.38%（B 为
+   0.73%–1.09%）、`shuffle/zero` 0.077–0.125（B 为 0.041–0.071）、
+   `innovation` 46.70%（B 为 43.51%）。三窗口方向一致。
+3. **但 450 iter 的两条正向结论在 ep6 尺度上不成立，必须更正。** `correction²`
+   在 ep1-6 仍单调下降（0.3024→0.2176），`mu_q` 对 `h_t` 的依赖重新超过对观测的依赖
+   （h/e 1.46）。**结论：rawnorm 改善的是幅值，不是信息流向。** 第 57 节关于
+   「平台」和「依赖反转」的表述仅适用于 450 iter 预算，必须在论文与后续引用中
+   按尺度区分，不能当作稳定机制性质。
+4. **`shuffle_z` 仍未达论文门槛。** 最好窗口 1.38%，距 2% 差约 1.5 倍。方向明确
+   （需要 correction 携带更多观测量而非纯递归状态），所以下一步是路线 C：
+   用 object-centric 监督（BEV center heatmap）直接给 correction 一个**当前帧独占、
+   h_t 无法预测**的任务。
+5. **下一步（按预登记协议）**：以上述 rawnorm ep6 为对照，实施**路线 C
+   （Object-Centric Latent Supervision）**：
+   `correction (16×16×32) → Conv 32→64 → 4 类 center heatmap`，CenterNet 风格
+   focal loss，`latent_object_loss_weight=0.05`（不足则升 0.1），只在当前帧计算，
+   推理时删除辅助 head（零额外开销）。判定沿用同一协议，并额外检查
+   `correction²` 是否真正停止塌缩 —— 这是 rawnorm 留下的未解决问题。
+6. **仍未做**：路线 D 的去塌缩损失、路线 E 的 KL balancing + 按 cell 聚合的 free-bits。
+   `raw KL` 目前 0.0374（rawnorm ep6 逐 epoch 均值；全程 0.0345–1.3713）仍然有界，KL 继续后置。
+
+### 58.8 复现命令
+
+```bash
+# ep6 正式训练（24e 日程，跑到 ep6 验证落盘后停）
+cd /home/lurui/workspace/R4Det && source .envrc
+tmux new-session -d -s rawnorm_ep6 "cd /home/lurui/workspace/R4Det && source .envrc && \
+  CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
+  configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation_rawnorm.py \
+  3 --seed 0 --deterministic \
+  --work-dir /data/lurui/work_dirs/lowdim_z_innovation_rawnorm_3x2x2_24e_seed0 \
+  > /tmp/lowdim_rawnorm_ep6.log 2>&1"
+
+# ep6 三窗口反事实诊断 + source 探针
+CFG=configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation_rawnorm.py
+CKPT=/data/lurui/work_dirs/lowdim_z_innovation_rawnorm_3x2x2_24e_seed0/epoch_6.pth
+CUDA_VISIBLE_DEVICES=5 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 3    --limit 4 --batch-size 4 --shuffle-offset 2  --output /tmp/z_util_rawnorm_ep6_w3.json
+CUDA_VISIBLE_DEVICES=6 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 100  --limit 4 --batch-size 4 --shuffle-offset 2  --output /tmp/z_util_rawnorm_ep6_w100.json
+CUDA_VISIBLE_DEVICES=7 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 1800 --limit 4 --batch-size 4 --shuffle-offset -1 --output /tmp/z_util_rawnorm_ep6_w1800.json
+CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py --config $CFG --checkpoint $CKPT \
+  --start-index 3 --limit 4 --stride 700 --output /tmp/post_source_rawnorm_ep6_stride700.json
+```
