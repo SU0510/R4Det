@@ -1860,6 +1860,7 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         # it (nor compare a 16x16 map against the full BEV grid).
         return output, None, latent_loss, h_t, z_t, stats
 
+
 @FUSION_LAYERS.register_module()
 class MotionAlignedInnovationRSSMFusion(MotionAlignedRSSMFusion):
     """Full-resolution motion-aligned RSSM with an innovation-conditioned posterior.
