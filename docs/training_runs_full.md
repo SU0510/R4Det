@@ -9476,3 +9476,200 @@ CUDA_VISIBLE_DEVICES=7 python tools/diagnose_z_utilization.py --config $CFG --ch
 CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py --config $CFG --checkpoint $CKPT \
   --start-index 3 --limit 4 --stride 700 --output /tmp/post_source_oc_ep12_stride700.json
 ```
+
+---
+
+## 62. 回到强主线：Motion-Aligned Innovation RSSM（MAI）实现 + 标准 RSSM 同 epoch 基线（2026-09-29）
+
+本节执行用户在第 61 节之后给出的新方向：**不再继续低维路线，回到全分辨率
+`MotionAlignedRSSMFusion` 主线，把已在路线 B/C 中验证过的 innovation posterior
+原样移植过来**。第一轮严格单变量，不加 object heatmap、不改 KL/free-bits、不改读出、
+不降维；唯一新增项是 `L_obs = 0.05 * smooth_l1(e_hat, stopgrad(e_t))`。
+
+### 62.0 状态与判定摘要
+
+| 项目 | 结果 |
+|---|---|
+| 标准 RSSM 同 epoch 机制基线（用户步骤 1） | **已完成**（seed1 权重，ep6/ep12 三窗口 probe + source 探针） |
+| MAI 实现（用户步骤 2） | **已完成**，`MotionAlignedInnovationRSSMFusion`，RSSM 单测 85 条通过 |
+| 450 iter 冒烟（用户步骤 3） | **已完成，`EXIT=0`**；recon −82.7%、obs_pred −61.2%、innovation 有界 |
+| ep6 正式训练（用户步骤 4） | 已启动（24e 日程截断在 ep6，GPU 5/6/7，seed 0，看门狗待命） |
+| 逐步三口径（区间均值 / 全轮峰值 / best saved） | 见 62.6（450 iter 无 val，不产生三口径） |
+
+### 62.1 为什么必须先用标准 RSSM 建立同 epoch 基线
+
+用户步骤 1 要求在跑 MAI 之前，先对**现有标准 RSSM** 的 `epoch_6/12` 跑同一套
+三窗口 probe。原因：MAI 是对主线的**单变量替换**，它的门控（`shuffle_z` 不得低于标准
+同 epoch）只有在同 config、同 epoch、同 probe 口径下才有意义。
+
+一个必须记录的运行事实：`fgfull_N4_no2d_igdr_2x4_24e_seed0` 的 ep6/ep12 权重已在
+2026-09-24 的磁盘清理中删除（保留 ep14/ep22），但**seed1 保留了完整 ep2-ep20 权重**，
+配置与 seed0 完全相同。因此本节基线用 seed1 权重，并明确这带来一层 seed 差异；
+门控时按「机制量级」而不是逐位相等来判读。
+
+### 62.2 标准 RSSM 三窗口反事实基线（seed1，216×248 全分辨率）
+
+| epoch | 窗口 | zero_h | shuffle_h | prior_h | shuffle/zero |
+|---|---|---:|---:|---:|---:|
+| ep6 | `[3..6]` | 0.3697 | **0.4973** | 0.2383 | 1.3450 |
+| ep6 | `[100..103]` | 0.4087 | 0.0330 | 0.0877 | 0.0807 |
+| ep6 | `[1800..1803]` | 0.4429 | 0.0336 | 0.0657 | 0.0758 |
+| ep12 | `[3..6]` | 0.2639 | 0.0271 | 0.0426 | 0.1026 |
+| ep12 | `[100..103]` | 0.4766 | 0.0471 | 0.0789 | 0.0988 |
+| ep12 | `[1800..1803]` | 0.5434 | 0.0414 | 0.0557 | 0.0763 |
+
+feature 侧同窗口原始值：
+
+| epoch | 窗口 | zero feature | shuffle feature | prior feature |
+|---|---|---:|---:|---:|
+| ep6 | `[3..6]` | 0.8241 | 1.9231 | 0.5788 |
+| ep6 | `[100..103]` | 0.9461 | 0.1565 | 0.3710 |
+| ep6 | `[1800..1803]` | 0.9626 | 0.1335 | 0.2639 |
+| ep12 | `[3..6]` | 0.6186 | 0.1120 | 0.1253 |
+| ep12 | `[100..103]` | 0.9639 | 0.1488 | 0.1962 |
+| ep12 | `[1800..1803]` | 0.9642 | 0.1192 | 0.1515 |
+
+读数：
+
+1. **ep6 的 `[3..6]` 窗口有极强离散度**：该窗口 4 条样本中样本 3 的 shuffle head
+   达 161.6%，而样本 4/6 只有 1.1% 左右；因此 ep6 那个 0.4973 的均值是
+   「单样本主导」的假象，**不能当作标准 RSSM 在 ep6 的近距能力**。ep12 同一窗口回落到
+   0.0271，说明它没有在正式训练里保持。
+2. **中/远距窗口是稳定口径**：ep6 为 3.30%/3.36%，ep12 为 4.71%/4.14%。
+3. **与路线 C（16×16，seed0）对照**：路线 C ep12 的 shuffle_z head 为
+   2.429%/1.710%/1.071%。除近距窗口外，**标准全分辨率 RSSM 的 4.71%/4.14% 实际上
+   高于路线 C**，直接验证了用户「低维路线尚未超过原主线的 z 使用程度」的判断。
+
+### 62.3 标准 RSSM Source 探针（`stride=700`，indices `[3,703,1403]`）
+
+| 张量 sample-specific energy | ep6 | ep12 |
+|---|---:|---:|
+| `feat_pooled_raw` | 14.78% | 29.96% |
+| `e_t_pooled_raw` | 33.74% | **66.35%** |
+| `h_t` | 20.65% | 17.03% |
+| `mu_p` | 22.25% | 18.21% |
+| `mu_q` | 22.48% | 18.75% |
+| `correction` | 36.63% | **41.66%** |
+
+RMS 与依赖方向：
+
+| 量 | ep6 | ep12 |
+|---|---:|---:|
+| `h_t` RMS | 0.1393 | 0.1673 |
+| `mu_p` RMS | 0.2971 | 0.3852 |
+| `mu_q` RMS | 0.2965 | 0.3865 |
+| `correction` RMS | 0.1079 | 0.0889 |
+| `mu_q_removal_of_e_rel_l2` | 0.3959 | 0.3787 |
+| `mu_q_removal_of_h_rel_l2` | 0.8820 | 0.8855 |
+| **h/e 依赖比** | **2.228** | **2.338** |
+
+读数：标准主线里 encoder 输出 `e_t` 的样本特异占比在 ep6→ep12 从 33.7% 涨到
+66.4%，**上游信息一直很充足**；但 `mu_q` 特异占比反而从 22.5% 降到 18.8%，
+h/e 依赖比从 2.23 升到 2.34——即**posterior 越来越依赖 h_t、越来越不依赖充满足够
+信息的 e_t**。这正是 MAI 要修的「predict-correct 形态」问题，而不是「上游没信息」。
+
+### 62.4 MAI 实现与唯一变量
+
+| 项 | 值 |
+|---|---|
+| 新类 | `MotionAlignedInnovationRSSMFusion`（`mmdet3d/models/fusion_layers/rssm_fusion.py`） |
+| 配置 | `configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_mai.py` |
+| 对照 | `..._no2d_igdr.py`（`MotionAlignedRSSMFusion`） |
+| 唯一变量 | 后验均值产生方式 + `obs_pred_loss_weight=0.05` |
+| 保持不变 | latent 216×248（`latent_dim=256`）、ConvGRU `transition`、deformable h/z 对齐、`free_nats=1.0`、KL warm-up ep0-10、reconstruction、`output_proj` 残差读出、24e cosine |
+
+结构：
+
+```python
+e_hat_t    = self.obs_prior(h_t)                 # 新参数，仅由 L_obs 训练
+obs_pred   = smooth_l1(e_hat_t, e_t.detach())
+innovation = e_t - e_hat_t.detach()
+delta_mu   = self.posterior_mu(cat([h_t, innovation]))
+mu_q       = self.prior_mu(h_t) + delta_mu
+```
+
+`obs_prior` 在 `super().__init__()` **之后**创建并 Xavier 初始化，保证父类所有既有模块的
+初始化 RNG 顺序不变、主线 checkpoint 对共享键逐位可加载（有回归测试）。诊断键
+`stat_obs_pred`、`stat_innovation_sq` 均不含 `loss` 子串。完整 RSSM 单测 **85 条通过**
+（原 75 + 新 10）。
+
+### 62.5 450 iter 机制冒烟（用户步骤 3）
+
+运行事实：3 卡 DDP（GPU 5/6/7）、seed 0、deterministic、IterBasedRunner 450 iter、
+无 val；显存 17.27→17.28 GiB/卡，1.55–1.61 s/iter，`EXIT=0`，无 NaN/Inf。
+
+| iter | recon | kl_raw | clamped | mu_diff² | obs_pred | innovation² | grad_norm |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 50 | 0.9537 | 1.7304 | 0.8621 | 0.3178 | 0.1249 | 0.9205 | 12.97 |
+| 100 | 0.5451 | 0.5211 | 0.9285 | 0.1777 | 0.0709 | 0.9395 | 16.19 |
+| 150 | 0.3828 | 0.3508 | 0.9741 | 0.1045 | 0.0611 | 0.8837 | 20.24 |
+| 200 | 0.2781 | 0.2648 | 0.9845 | 0.0685 | 0.0528 | 0.8825 | 22.23 |
+| 250 | 0.2192 | 0.2500 | 0.9892 | 0.0512 | 0.0465 | 0.8745 | 20.69 |
+| 300 | 0.1883 | 0.2362 | 0.9900 | 0.0481 | 0.0452 | 0.8528 | 16.39 |
+| 350 | 0.1723 | 0.2411 | 0.9884 | 0.0430 | 0.0458 | 0.8301 | 15.61 |
+| 400 | 0.1668 | 0.2298 | 0.9865 | 0.0417 | 0.0486 | 0.8200 | 16.45 |
+| 450 | 0.1649 | 0.2258 | 0.9862 | 0.0417 | 0.0484 | 0.8136 | 16.10 |
+
+读数：
+
+1. **接口正确**：recon 下降 82.7%，`obs_prior` 的 `stat_obs_pred` 下降 61.2%，
+   证明新增观测预测通路确实在学；`innovation²` 稳定在 0.81–0.94，没有塌到 0。
+2. **KL 有界、未爆炸**：`kl_raw` 从 1.73 收敛到 0.226，`clamped_ratio ≈0.986`。
+   与标准主线的长期行为一致（标准主线同样长期被 free-bits 钳制），再次支持
+   「KL 不是首要病因」。
+3. **但 `mu_diff²` 从 0.3178 单调降到 0.0417**（−86.9%），只在最后 100 iter 形成
+   平台（0.0417→0.0417）。这一点是**明确的下行风险**：如果 correction 在正式训练里
+   继续向 0 收缩，innovation 的样本判别信息会再次被压掉。ep6 门控必须专门检查。
+4. 显存 17.3 GiB/卡（标准主线约 5–6 GiB 的读数来自低维路线；全分辨率主线本身即
+   约 17 GiB），比标准主线只多一个 `Conv2d(256,256,3×3)` 的开销，符合预期。
+
+### 62.6 三口径记录
+
+450 iter 冒烟是 IterBasedRunner、`evaluation.interval=4500`，**不带 val**，因此
+**不产生任何区间均值 / 全轮峰值 / best saved**，也不能给出任何 AP 结论。本节的三口径
+记录在 62.7（ep6 门控）与后续 ep12 小节中补齐。
+
+### 62.7 ep6 门控（进行中）
+
+于 2026-09-29 13:05:59 UTC 在 tmux `mai_ep6` 启动，24e 余弦日程截断在 ep6；
+watchdog `mai_ep6_watch` 在 `Epoch(val) [6]` 与 `epoch_6.pth` 同时存在后发送 SIGINT。
+预登记门控（用户第 4 步）：
+
+1. Overall 3D moderate 与 no2d_igdr seed0 同 epoch 差距 `≤1`（seed0 ep6 = 34.0243）；
+2. 任一类别下降不超过 2（seed0 ep6：Car 43.2792 / Truck 21.9299 / Ped 27.1223 / Cyc 43.7657）；
+3. `shuffle_z`/`zero_z` 不低于标准 RSSM 同 epoch（ep6 稳定窗口：shuffle 3.30%/3.36%，
+   zero 40.87%/44.29%；近距窗口因单样本主导而单独标注）。
+
+结果待 ep6 验证与 `epoch_6.pth` 落盘后回填。
+
+### 62.8 复现命令
+
+```bash
+cd /home/lurui/workspace/R4Det && source .envrc
+
+# 450 iter 机制冒烟
+CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
+  me_rssm/sanity/mai_smoke_450iter.py 3 --seed 0 --deterministic \
+  --work-dir /tmp/mai_smoke_450iter > /tmp/mai_smoke_450iter.log 2>&1
+
+# ep6 门控正式训练（24e 日程截断在 ep6）
+CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
+  configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_mai.py \
+  3 --seed 0 --deterministic \
+  --work-dir /data/lurui/work_dirs/fgfull_N4_no2d_igdr_mai_2x4_24e_seed0 \
+  > /tmp/mai_ep6.log 2>&1
+
+# 标准 RSSM 同 epoch 机制基线（seed1，全分辨率）
+CFG=configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr.py
+for ep in 6 12; do
+  CKPT=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_seed1/epoch_${ep}.pth
+  CUDA_VISIBLE_DEVICES=5 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+    --start-index 3    --limit 4 --batch-size 4 --shuffle-offset 2  --output /tmp/z_util_stdep${ep}_w3.json
+  CUDA_VISIBLE_DEVICES=6 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+    --start-index 100  --limit 4 --batch-size 4 --shuffle-offset 2  --output /tmp/z_util_stdep${ep}_w100.json
+  CUDA_VISIBLE_DEVICES=7 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+    --start-index 1800 --limit 4 --batch-size 4 --shuffle-offset -1 --output /tmp/z_util_stdep${ep}_w1800.json
+  CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py --config $CFG --checkpoint $CKPT \
+    --start-index 3 --limit 4 --stride 700 --output /tmp/post_source_std_ep${ep}_stride700.json
+done
+```
