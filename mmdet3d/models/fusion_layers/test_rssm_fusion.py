@@ -1540,5 +1540,220 @@ class TestBevCentersToHeatmap(unittest.TestCase):
             batch_radii, scalar_radii, atol=1e-6))
 
 
+class TestMotionAlignedInnovationRSSMFusion(unittest.TestCase):
+    """Regression tests for the full-resolution motion-aligned innovation RSSM."""
+
+    def _build(self, **overrides):
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            MotionAlignedInnovationRSSMFusion)
+
+        kwargs = dict(
+            in_channels=256,
+            out_channels=256,
+            latent_dim=256,
+            hidden_dim=64,
+            action_dim=2,
+            kl_scale=0.1,
+            free_nats=1.0,
+            min_std=0.1,
+            init_std=0.2,
+            obs_pred_loss_weight=0.05,
+            align_kernel_size=3,
+            align_deform_groups=1,
+            align_z_state=True,
+        )
+        kwargs.update(overrides)
+        fusion = MotionAlignedInnovationRSSMFusion(**kwargs)
+        fusion.eval()
+        return fusion
+
+    def _build_small(self, **overrides):
+        kwargs = dict(
+            in_channels=32, out_channels=32, latent_dim=32, hidden_dim=16,
+        )
+        kwargs.update(overrides)
+        return self._build(**kwargs)
+
+    def test_negative_obs_pred_weight_rejected(self):
+        with self.assertRaises(ValueError):
+            self._build(obs_pred_loss_weight=-0.1)
+
+    def test_interface_matches_motion_aligned_rssm(self):
+        """Six-tuple return with the same shapes as the standard main line."""
+        fusion = self._build()
+        B, C, H, W = 2, 256, 8, 8
+        logstd_bias = fusion.obs_prior.bias.detach().clone()
+        feat = torch.randn(B, C, H, W)
+
+        with torch.no_grad():
+            out = fusion(feat, use_posterior=True, deterministic=True)
+
+        self.assertEqual(len(out), 6)
+        output, recon, latent_loss, h_t, z_t, stats = out
+        self.assertEqual(tuple(output.shape), (B, C, H, W))
+        self.assertEqual(tuple(recon.shape), (B, C, H, W))
+        self.assertEqual(tuple(h_t.shape), (B, 256, H, W))
+        self.assertEqual(tuple(z_t.shape), (B, 256, H, W))
+        self.assertTrue(torch.isfinite(latent_loss).all())
+        # obs_prior must not have been re-initialized away from the parent's
+        # RNG stream: its own init is separate and its forward ran.
+        self.assertEqual(tuple(fusion.obs_prior.bias.shape),
+                         tuple(logstd_bias.shape))
+        # supervised diagnostics present, and named without the 'loss'
+        # substring so mmdet's _parse_losses does not fold them in.
+        self.assertIn('stat_obs_pred', stats)
+        self.assertIn('stat_innovation_sq', stats)
+        self.assertNotIn('loss', 'stat_obs_pred')
+        self.assertNotIn('loss', 'stat_innovation_sq')
+
+    def test_observation_path_survives_zero_obs_prior_weight(self):
+        """With weight 0 the innovation term still must not detach the graph.
+
+        `innovation = e_t - stopgrad(e_hat)`; even at weight 0 the posterior
+        must remain differentiable w.r.t. the encoder output so the detector
+        loss can still train the observation pathway.
+        """
+        fusion = self._build(obs_pred_loss_weight=0.0)
+        fusion.train()
+        B, C, H, W = 2, 256, 8, 8
+        feat = torch.randn(B, C, H, W, requires_grad=True)
+
+        out, _, latent_loss, _, z_t, _ = fusion(
+            feat, use_posterior=True, deterministic=True)
+        (out.mean() + latent_loss).backward()
+        self.assertIsNotNone(fusion.encoder[0].conv.weight.grad)
+        self.assertGreater(
+            fusion.encoder[0].conv.weight.grad.abs().sum().item(), 0.0)
+
+    def test_obs_prior_trained_only_by_observation_prediction(self):
+        """obs_prior must receive gradient from its own term, not from z_t.
+
+        The prediction term is the only path into `obs_prior`: the innovation
+        uses `e_hat.detach()`, and no other branch reads `e_hat`. So a
+        backward pass on the latent loss alone must leave that term's
+        contribution nonzero while `delta_mu` contributes through the
+        posterior instead.
+        """
+        fusion = self._build_small(obs_pred_loss_weight=0.05)
+        B, C, H, W = 2, 32, 8, 8
+        feat = torch.randn(B, 32, H, W)
+        out, _, latent_loss, _, _, _ = fusion(
+            feat, use_posterior=True, deterministic=True)
+        latent_loss.backward()
+        self.assertIsNotNone(fusion.obs_prior.weight.grad)
+        self.assertGreater(
+            fusion.obs_prior.weight.grad.abs().sum().item(), 0.0)
+
+    def test_stats_do_not_leak_into_total_loss(self):
+        """Diagnostics must avoid the 'loss' substring entirely."""
+        fusion = self._build_small()
+        B, C, H, W = 1, 32, 8, 8
+        feat = torch.randn(B, 32, H, W)
+        with torch.no_grad():
+            *_, stats = fusion(feat, use_posterior=True, deterministic=True)
+        for key in stats:
+            self.assertNotIn('loss', key)
+
+    def test_use_prior_only_falls_back_to_prior_mean(self):
+        fusion = self._build_small()
+        B, C, H, W = 1, 32, 8, 8
+        feat = torch.randn(B, 32, H, W)
+        fusion.reset_state()
+        with torch.no_grad():
+            _, _, _, _, z_post, _ = fusion(
+                feat, use_posterior=True, deterministic=True)
+        fusion.reset_state()
+        with torch.no_grad():
+            _, _, _, _, z_prior, _ = fusion(
+                feat, use_posterior=False, deterministic=True)
+        self.assertFalse(torch.allclose(z_post, z_prior))
+
+    def test_deterministic_replay_is_bitwise_identical(self):
+        fusion = self._build_small()
+        B, C, H, W = 1, 32, 8, 8
+        feat = torch.randn(B, 32, H, W)
+
+        fusion.reset_state()
+        with torch.no_grad():
+            out_a, _, _, _, _, _ = fusion(
+                feat, use_posterior=True, deterministic=True)
+        fusion.reset_state()
+        with torch.no_grad():
+            out_b, _, _, _, _, _ = fusion(
+                feat, use_posterior=True, deterministic=True)
+        self.assertTrue(torch.equal(out_a, out_b))
+
+    def test_state_carries_across_calls_and_resets(self):
+        fusion = self._build_small()
+        B, C, H, W = 1, 32, 8, 8
+        f1 = torch.randn(B, 32, H, W)
+        f2 = torch.randn(B, 32, H, W)
+
+        fusion.reset_state()
+        with torch.no_grad():
+            fusion(f1, use_posterior=True, deterministic=True)
+            h_after_first = fusion.h_state.detach().clone()
+            out_second, _, _, _, _, _ = fusion(
+                f2, use_posterior=True, deterministic=True)
+            self.assertFalse(torch.allclose(
+                h_after_first, torch.zeros_like(h_after_first)))
+
+            fusion.reset_state()
+            out_fresh, _, _, _, _, _ = fusion(
+                f2, use_posterior=True, deterministic=True)
+        # Second frame differs with vs without history.
+        self.assertFalse(torch.allclose(out_second, out_fresh))
+
+    def test_added_modules_preserve_parent_rng_stream(self):
+        """Constructing the subclass must not shift the parent's init RNG.
+
+        Existing checkpoints only carry the parent's keys; if the added
+        obs_prior consumed RNG before the parent finished initializing, every
+        inherited parameter would silently land on different values and the
+        loaded baseline weights would no longer be reproducible.
+        """
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            MotionAlignedRSSMFusion)
+
+        common = dict(
+            in_channels=32, out_channels=32, latent_dim=32, hidden_dim=16,
+            action_dim=2, kl_scale=0.1, free_nats=1.0, min_std=0.1,
+            init_std=0.2, align_kernel_size=3, align_deform_groups=1,
+            align_z_state=True,
+        )
+        torch.manual_seed(1234)
+        parent = MotionAlignedRSSMFusion(**common)
+        parent_state = {
+            k: v.detach().clone() for k, v in parent.state_dict().items()}
+
+        torch.manual_seed(1234)
+        child = self._build(**common)
+        for key, value in parent_state.items():
+            self.assertTrue(
+                torch.equal(child.state_dict()[key], value),
+                msg=f'inherited parameter {key} drifted from parent init')
+
+    def test_shared_checkpoint_keys_load_without_obs_prior(self):
+        """A plain main-line checkpoint must load into this variant."""
+        from mmdet3d.models.fusion_layers.rssm_fusion import (
+            MotionAlignedRSSMFusion)
+
+        common = dict(
+            in_channels=32, out_channels=32, latent_dim=32, hidden_dim=16,
+            action_dim=0, kl_scale=1.0, free_nats=1.0, min_std=0.1,
+            init_std=0.2, align_kernel_size=3, align_deform_groups=1,
+            align_z_state=True,
+        )
+        torch.manual_seed(7)
+        parent = MotionAlignedRSSMFusion(**common)
+        torch.manual_seed(7)
+        child = self._build(**common)
+        # only obs_prior.* is absent from the parent checkpoint.
+        missing, unexpected = child.load_state_dict(
+            parent.state_dict(), strict=False)
+        self.assertTrue(all(k.startswith('obs_prior.') for k in missing))
+        self.assertEqual(unexpected, [])
+
+
 if __name__ == '__main__':
     unittest.main()

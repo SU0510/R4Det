@@ -1859,3 +1859,185 @@ class LowDimFutureConsistentLatentFusion(BaseModule):
         # the detector's legacy full-resolution recon path must not double-count
         # it (nor compare a 16x16 map against the full BEV grid).
         return output, None, latent_loss, h_t, z_t, stats
+
+@FUSION_LAYERS.register_module()
+class MotionAlignedInnovationRSSMFusion(MotionAlignedRSSMFusion):
+    """Full-resolution motion-aligned RSSM with an innovation-conditioned posterior.
+
+    This is the main-line successor to route B. Route B's innovation posterior
+    was validated on the *low-dim* (16x16x32) family, where it fixed the
+    predict/correct semantics but could not recover AP: route C ended at
+    ep8-12 35.0289 versus the no2d_igdr baseline 38.8906 (-3.8617). The
+    low-dim replacement had also removed three main-line capabilities at once
+    (deformable motion alignment, native 216x248 resolution, and the
+    full-resolution readout), so that gap cannot be attributed to the
+    posterior alone.
+
+    This class keeps the entire MotionAlignedRSSMFusion backbone intact --
+    encoder, ConvGRU `transition`, deformable h/z alignment, prior, logstd
+    heads, decoder, output_proj residual readout, state management, and the
+    legacy KL + reconstruction losses -- and changes only how the posterior
+    mean is produced:
+
+        standard:   mu_q = posterior_mu([h_t, e_t])
+        innovation: e_hat = obs_prior(h_t)
+                    innovation = e_t - stopgrad(e_hat)
+                    delta = posterior_mu([h_t, innovation])
+                    mu_q = mu_p + delta
+
+    `obs_prior` is trained only by the observation-prediction term
+    (smooth L1 against a stop-gradient of the encoder output), so the
+    posterior conditions on the part of the current observation that the
+    recurrent state could not already predict. `delta` is the model's own
+    correction rather than the difference of two batch-common vectors.
+
+    Every added parameter is created after `super().__init__()`, so all
+    pre-existing modules keep their initialization RNG order and existing
+    checkpoints remain bitwise loadable for the shared keys.
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size=3,
+        latent_dim=None,
+        hidden_dim=64,
+        action_dim=2,
+        kl_scale=1.0,
+        free_nats=0.0,
+        min_std=0.1,
+        init_std=0.2,
+        obs_pred_loss_weight=0.05,
+        norm_cfg=dict(type='BN', requires_grad=True),
+        act_cfg=dict(type='ReLU', inplace=True),
+        align_kernel_size=3,
+        align_deform_groups=1,
+        align_z_state=True,
+        init_cfg=None
+    ):
+        if obs_pred_loss_weight < 0:
+            raise ValueError('obs_pred_loss_weight must be >= 0')
+        self.obs_pred_loss_weight = obs_pred_loss_weight
+        self.posterior_struct = 'innovation'
+
+        # Parent builds encoder / transition / prior / posterior / decoder /
+        # output_proj / alignment and runs init_weights().
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            latent_dim=latent_dim,
+            hidden_dim=hidden_dim,
+            action_dim=action_dim,
+            kl_scale=kl_scale,
+            free_nats=free_nats,
+            min_std=min_std,
+            init_std=init_std,
+            norm_cfg=norm_cfg,
+            act_cfg=act_cfg,
+            align_kernel_size=align_kernel_size,
+            align_deform_groups=align_deform_groups,
+            align_z_state=align_z_state,
+            init_cfg=init_cfg,
+        )
+
+        # Added AFTER the parent's init_weights(): obs_prior must not perturb
+        # the RNG stream consumed by the inherited modules.
+        self.obs_prior = nn.Conv2d(
+            out_channels, self.latent_dim, 3, padding=1)
+        xavier_init(self.obs_prior, distribution='uniform')
+
+    def forward(self, feat, velocity=None, use_posterior=True,
+                deterministic=True, detach_state=True):
+        """Same interface as MotionAlignedRSSMFusion.forward().
+
+        Returns:
+            output, reconstruction, latent_loss, h_t, z_t, stats
+        """
+        B, C, H, W = feat.shape
+
+        if self.use_action:
+            if velocity is None:
+                velocity = torch.zeros(
+                    B, self.action_dim, device=feat.device)
+            velocity_map = velocity[:, :, None, None].expand(
+                B, self.action_dim, H, W)
+        else:
+            velocity_map = None
+
+        if self.h_state is None or self.h_state.shape[0] != B:
+            self.h_state = torch.zeros(
+                B, self.channels, H, W, device=feat.device, dtype=feat.dtype)
+            self.z_state = torch.zeros(
+                B, self.latent_dim, H, W, device=feat.device, dtype=feat.dtype)
+
+        # ---- motion-aware alignment of historical state ----------------
+        h_aligned = self._deform_align(
+            self.h_state, feat,
+            self.align_h_offset_mask, self.align_h_deform_conv)
+        if self.align_z_state:
+            z_aligned = self._deform_align(
+                self.z_state, feat,
+                self.align_z_offset_mask, self.align_z_deform_conv)
+        else:
+            z_aligned = self.z_state
+
+        # ---- deterministic transition -----------------------------------
+        if self.use_action:
+            x = torch.cat([z_aligned, velocity_map], dim=1)
+        else:
+            x = z_aligned
+        h_t = self.transition(x, h_aligned)
+
+        # ---- prior ------------------------------------------------------
+        mu_p = self.prior_mu(h_t)
+        logstd_p = self.prior_logstd(h_t)
+
+        # ---- observation encoding (native resolution) -------------------
+        e_t = self.encoder(feat)
+
+        # ---- innovation-conditioned posterior ---------------------------
+        e_hat_t = self.obs_prior(h_t)
+        obs_pred = F.smooth_l1_loss(e_hat_t, e_t.detach())
+        innovation = e_t - e_hat_t.detach()
+        posterior_input = torch.cat([h_t, innovation], dim=1)
+        delta_mu = self.posterior_mu(posterior_input)
+        mu_q = mu_p + delta_mu
+        logstd_q = self.posterior_logstd(posterior_input)
+
+        # ---- select z_t -------------------------------------------------
+        if use_posterior:
+            z_t = mu_q if deterministic else self.sample(mu_q, logstd_q)
+        else:
+            z_t = mu_p if deterministic else self.sample(mu_p, logstd_p)
+
+        # ---- KL ---------------------------------------------------------
+        kl, stats = self.kl_loss(mu_q, logstd_q, mu_p, logstd_p)
+
+        # ---- reconstruction ---------------------------------------------
+        reconstruction = self.decoder(torch.cat([h_t, z_t], dim=1))
+
+        # ---- output -----------------------------------------------------
+        output = self.output_proj(z_t)
+        output = output + feat
+
+        # ---- state ------------------------------------------------------
+        if detach_state:
+            self.h_state = h_t.detach()
+            self.z_state = z_t.detach()
+        else:
+            self.h_state = h_t
+            self.z_state = z_t
+
+        latent_loss = kl * self.kl_scale
+        if self.obs_pred_loss_weight > 0:
+            latent_loss = latent_loss + self.obs_pred_loss_weight * obs_pred
+
+        stats['stat_obs_pred'] = obs_pred.detach()
+        stats['stat_innovation_sq'] = innovation.square().mean().detach()
+
+        # The detector consumes index 1 as a full-resolution reconstruction
+        # for its own MSE term; keep it so the legacy recon path keeps working
+        # exactly as for MotionAlignedRSSMFusion.
+        return output, reconstruction, latent_loss, h_t, z_t, stats
