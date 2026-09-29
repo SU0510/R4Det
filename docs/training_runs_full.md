@@ -8862,3 +8862,325 @@ tmux new-session -d -s oc_ep6 "cd /home/lurui/workspace/R4Det && source .envrc &
   --work-dir /data/lurui/work_dirs/lowdim_z_innovation_rawnorm_oc_3x2x2_24e_seed0 \
   > /tmp/lowdim_oc_ep6.log 2>&1"
 ```
+
+---
+
+## 60. 路线 C ep6 门控：AP + 机制联合判定（2026-09-28/29）
+
+本节执行第 59 节预登记的 ep6 硬门控。训练按 24e 余弦日程启动、跑到 ep6 验证与
+`epoch_6.pth` 落盘后主动停止，因此进度在 ep6 截断、LR/KL 日程与 24e 主实验完全一致。
+本节回答两个问题：**object-centric 辅助监督有没有把 AP 拉回基线附近**，以及
+**`z_t` 的样本判别性在 6 epoch 尺度上是否真的继续增强**。
+
+### 60.0 状态与判定摘要
+
+**三口径摘要**（6 条 val，跨度 ep1-6；标准 ep12-16 窗口不存在）：
+
+| 口径 | 数值 |
+|---|---|
+| 区间均值 | **26.8101**（n=6，实际跨度 ep1-6，等权） |
+| 全轮峰值 | **34.2513 @ ep6** |
+| best saved | **34.2513 @ ep6**（`epoch_6.pth` 存在；与全轮峰值相同） |
+
+**ep6 门控表**：
+
+| 门控项 | 门槛 | ep6 实测 | 判定 |
+|---|---|---:|---|
+| Overall 3D moderate vs no2d_igdr seed0 同 epoch | 差距 ≤ 2.0 | **+0.2270**（34.2513 vs 34.0243） | **通过**（首次为正） |
+| `shuffle_z` head | ≥ 0.2%（继续门槛），最好 ≥ 0.10 | **1.141%–1.364%**（三窗口） | **通过**（比 450 iter 的 0.58% 翻约 2 倍） |
+| `shuffle_z` head（论文最终门槛） | ≥ 2% | 最好 1.364% | **未通过**（差约 1.5 倍） |
+| `shuffle/zero` 比值 | 不低于 450 iter 各窗口值 | 0.0995 / 0.0818 / 0.0753 vs 450 iter 0.0874 / 0.0781 / 0.0613 | **通过**（三窗口均不低） |
+| innovation specific > e_pooled specific | 保持 | **50.13% > 30.98%** | **通过** |
+| delta_mu specific | ≥ 10% | **44.90%** | **通过** |
+| `correction²` | 不单调塌缩、至少形成平台 | **0.2736 → 0.0793 逐 epoch 单调下降** | **未通过**（450 iter 平台未在正式训练保持） |
+
+**联合判定：AP 门控通过、核心身份信号增强、`correction²` 仍塌缩。** 按第 59 节与
+用户 ep6 预登记分支，「AP 差距 ≤1 且机制继续增强 → 续到 ep12」，因此**已从
+`epoch_6.pth` 续训至 ep12**（保持 24e 日程、GPU 5/6/7、seed 0、看门狗在 ep12 验证
+落盘后停止）。`correction²` 单调下降被登记为 ep12 必须一并复核的风险项，而不是
+被 AP 读数掩盖。
+
+### 60.1 配置与唯一变量
+
+配置：`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation_rawnorm_oc.py`
+
+相对 rawnorm 对照（第 58 节）的**唯一变量**仍为：
+
+```python
+latent_object_loss_weight = 0.1     # 0.05 预登记探针判定梯度太弱后按协议升权
+num_object_classes = 4
+object_head_hidden_dim = 64
+object_min_radius = 1
+```
+
+完整继承链（均为已记录配置，本 run 未改动其中任何一项）：
+
+```text
+..._lowdim_z_innovation_rawnorm_oc
+  -> ..._lowdim_z_innovation_rawnorm      # z_prev_normalize=False
+  -> ..._lowdim_z_innovation              # posterior_struct='innovation', obs_pred_loss_weight=0.05
+  -> ..._lowdim_z                          # latent_dim=32, latent_size=16x16, kl_scale=1.0, free_nats=0.1
+  -> ..._no2d_igdr                         # 无 2D 分支、IGDR 打开
+  -> ..._pretrained_v2_head                # 自 checkpoints/pretrained_tj4d.pth 初始化
+```
+
+关键生效参数（取自 run 目录内配置快照）：`posterior_obs_mode='scaled_raw'`、
+`posterior_obs_scale=0.1`、`z_proj_init='xavier'`、`z_prev_normalize=False`、
+`posterior_struct='innovation'`、`obs_pred_loss_weight=0.05`、
+`recon_loss_weight=0.1`、`recon_target_mode='temporal_delta'`、
+`recon_input_mode='posterior_correction'`、`direct_correction_readout=True`、
+`readout_mode='spatial'`、`future_loss_weight=0.0`。
+KL 超参未动：`kl_scale=1.0`（由 `KLScaleSchedulerHook` 在 ep0-12 从 0.01 线性升到 1.0）、
+`free_nats=0.1`。
+
+### 60.2 运行事实
+
+| 项 | 值 |
+|---|---|
+| work_dir | `/data/lurui/work_dirs/lowdim_z_innovation_rawnorm_oc_3x2x2_24e_seed0` |
+| 日志 | `/tmp/lowdim_oc_ep6.log`；run 内 `20260928_134741.log(.json)` |
+| GPU / 卡数 | 物理 GPU 5,6,7 / 3 卡 DDP |
+| seed / deterministic | 0 / 是 |
+| 日程 | EpochBasedRunner `max_epochs=24`，CosineAnnealing `lr=1.5e-4`，`cumulative_iters=2` |
+| 启动 | 2026-09-28 13:47:41 UTC（`Start running` 13:47:51） |
+| 各 epoch val 时刻 | ep1 14:31:00 / ep2 15:14:46 / ep3 15:58:23 / ep4 16:42:23 / ep5 17:26:37 / ep6 18:10:54 |
+| 落盘 | `epoch_2.pth` 15:04:53、`epoch_4.pth` 16:32:42、`epoch_6.pth` 18:00:42（`checkpoint_config.interval=2`） |
+| 停止 | ep6 val 于 18:10:54 写完，看门狗随后停止训练 |
+| 显存 | 7439 → 7445 MiB |
+| 速度 | ≈1.05 s/iter |
+| 续训 | 2026-09-29 02:03:06 UTC 以 `--resume-from epoch_6.pth` 续跑，`resumed epoch 6, iter 11412`，保持 24e 日程 |
+| 异常 | 无 NaN/Inf、无 OOM、无 rank error |
+
+ep6 验证 170 batch/rank（`val.samples_per_gpu=4`，与第 58 节及基线一致），因此本节
+AP 与 no2d_igdr seed0 可直接同 epoch 对照。
+
+### 60.3 完整逐 epoch 曲线（6 条 val）
+
+| ep | 3D easy | **3D mod** | 3D hard | BEV mod | 2D mod | Car_s | Truck_s | Ped_l | Cyc_l |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 13.8963 | 13.6636 | 13.2881 | 20.9942 | 21.1794 | 18.5979 | 6.0011 | 9.4825 | 20.5731 |
+| 2 | 25.6671 | 23.9531 | 23.2196 | 33.3351 | 33.7235 | 27.5025 | 15.0210 | 17.0661 | 36.2227 |
+| 3 | 31.0141 | 29.1884 | 28.3493 | 35.8858 | 36.0555 | 41.5042 | 13.1242 | 22.6300 | 39.4951 |
+| 4 | 29.3713 | 27.2512 | 26.5147 | 38.8290 | 36.7110 | 25.9025 | 14.2276 | 23.2377 | 45.6369 |
+| 5 | 34.6705 | 32.5530 | 31.5030 | 40.1290 | 39.8928 | 38.7054 | 20.7789 | 26.7200 | 44.0076 |
+| 6 | 36.6531 | **34.2513** | 32.8831 | 42.2583 | 41.4949 | 44.1535 | 26.6900 | 23.2093 | 42.9525 |
+
+窗口逐项均值（ep1-6，n=6，等权）：
+
+| 指标 | 均值 | 全轮峰值 |
+|---|---:|---|
+| Overall 3D moderate | 26.8101 | 34.2513 @ ep6 |
+| Car strict | 32.7277 | 44.1535 @ ep6 |
+| Truck strict | 15.9738 | 26.6900 @ ep6 |
+| Ped loose | 20.3909 | 26.7200 @ ep5 |
+| Cyc loose | 38.1480 | 45.6369 @ ep4 |
+
+### 60.4 四方同 epoch 对照（no2d_igdr / 路线 B / rawnorm / 路线 C）
+
+Overall 3D moderate，全部为 seed 0、同 24e 日程、同 val 配置：
+
+| ep | no2d_igdr | 路线 B | rawnorm | **路线 C** | **C − base** | C − B |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 15.2640 | 20.8115 | 20.1118 | 13.6636 | −1.6004 | −7.1479 |
+| 2 | 26.3716 | 22.5532 | 28.1775 | 23.9531 | −2.4185 | +1.3999 |
+| 3 | 31.6591 | 28.1833 | 28.0411 | 29.1884 | −2.4707 | +1.0051 |
+| 4 | 32.8506 | 25.0003 | 27.7140 | 27.2512 | −5.5994 | +2.2509 |
+| 5 | 34.0827 | 34.8551 | 33.8487 | 32.5530 | −1.5297 | −2.3021 |
+| 6 | 34.0243 | 31.4895 | 32.8980 | **34.2513** | **+0.2270** | **+2.7618** |
+| ep1-6 均值 | 29.0420 | 27.1488 | 28.4652 | **26.8101** | −2.2319 | −0.3387 |
+| 全轮峰值 | 34.0827 @ ep5 | 34.8551 @ ep5 | 33.8487 @ ep5 | **34.2513 @ ep6** | — | — |
+
+**ep6 是低维 z 系列第一次在单点 AP 上超过 no2d_igdr seed0**（+0.2270）。但必须同时
+写下三条约束：
+
+1. **ep1-6 均值仍低 2.23 点**（26.8101 vs 29.0420）。路线 C 的早期 epoch 收敛更慢
+   （ep1 只有 13.66，比 base 低 1.60、比路线 B 低 7.15），单点反超出现在最后一轮，
+   不能据此宣布整体追平；最终必须看 ep12-16 窗口均值。
+2. **ep6 的四类构成不均**：Truck strict +4.7601、Car strict +0.8743 为正，而
+   Ped loose −3.9130、Cyc loose −0.8132 为负。即 ep6 Overall 的反超主要来自
+   Truck/Car，行人仍然明显落后。
+3. 第 58 节记录的两条反向证据（`correction²` 单调塌缩、`h/e` 依赖方向反转）在
+   路线 C 中**依然存在**，见 60.6。
+
+ep6 逐类别拆解：
+
+| 指标 | base | 路线 B | rawnorm | **路线 C** | C − base |
+|---|---:|---:|---:|---:|---:|
+| Overall 3D moderate | 34.0243 | 31.4895 | 32.8980 | **34.2513** | **+0.2270** |
+| Car strict | 43.2792 | 39.9860 | 45.6647 | 44.1535 | +0.8743 |
+| Truck strict | 21.9299 | 21.2860 | 21.8159 | **26.6900** | **+4.7601** |
+| Ped loose | 27.1223 | 21.1131 | 22.2281 | 23.2093 | −3.9130 |
+| Cyc loose | 43.7657 | 43.5729 | 41.8833 | 42.9525 | −0.8132 |
+
+### 60.5 逐 epoch 训练内诊断（38 条 train 记录的 epoch 均值）
+
+| ep | `stat_object_hm` | hit@1 | thr50 | `stat_correction_sq` | recon | raw KL | clamped | innovation² | obs_pred |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1.1093 | 0.4933 | 0.1935 | 0.2736 | 0.9781 | 0.6698 | 0.1142 | 0.0415 | 0.0206 |
+| 2 | 0.6923 | 0.6764 | 0.4274 | 0.2185 | 0.9418 | 0.1713 | 0.5483 | 0.0469 | 0.0233 |
+| 3 | 0.5605 | 0.7389 | 0.5312 | 0.1458 | 0.9365 | 0.0879 | 0.7405 | 0.0440 | 0.0219 |
+| 4 | 0.4832 | 0.7730 | 0.5857 | 0.1103 | 0.9313 | 0.0622 | 0.8212 | 0.0425 | 0.0211 |
+| 5 | 0.4320 | 0.7875 | 0.6246 | 0.0903 | 0.9287 | 0.0496 | 0.8642 | 0.0425 | 0.0211 |
+| 6 | 0.3919 | 0.8107 | 0.6585 | 0.0793 | 0.9281 | 0.0427 | 0.8884 | 0.0438 | 0.0218 |
+
+`stat_object_hm_pos` 全程稳定在 7.70–7.72（每 batch 约 7.7 个 GT 中心），说明 hit@1
+的上升不是正样本数量变化造成的。读数：
+
+1. **辅助目标是可学的，且在正式训练尺度上没有过拟合崩坏**：`stat_object_hm`
+   1.1093 → 0.3919（−64.7%），hit@1 0.4933 → 0.8107。
+2. **`correction²` 仍然逐 epoch 单调下降**：0.2736 → 0.0793（−71.0%），
+   逐轮降幅 −20.2% / −33.3% / −24.3% / −18.1% / −12.2%，降幅在收窄但**没有一轮
+   持平或回升**。第 59 节 450 iter 观察到的平台（最后 150 iter 0.0077 → 0.0075）
+   在正式训练里没有保持；形态与 rawnorm 的 0.2218 → 0.0685 几乎相同（路线 C 起点
+   更高、终点也略高，为 +15.8%）。
+3. **主目标没有被辅助项拖坏**：`stat_recon_mse` 0.9781 → 0.9281（−5.1%），raw KL
+   0.6698 → 0.0427，clamped 0.1142 → 0.8884，`stat_innovation_sq` 与
+   `stat_obs_pred` 基本持平（≈0.043 / ≈0.021）。没有任何一项发散。
+4. **`stat_mu_diff_sq` 与 `stat_correction_sq` 逐轮完全相同**（如 ep6 均为 0.0793），
+   这是 innovation 结构的预期：`correction_t = delta_mu = mu_q − mu_p`，两键是同一
+   张量的两条记录路径。
+
+### 60.6 ep6 三窗口反事实诊断（`epoch_6.pth`）
+
+`tools/diagnose_z_utilization.py`，每窗口 4 条序列、`batch-size 4`，head 相对 L2：
+
+| 运行 | 窗口 | zero feature | zero head | shuffle feature | shuffle head | prior feature | prior head | shuffle/zero |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| rawnorm ep6 | `[3..6]` | 0.6844 | 1.1025e-1 | 0.0754 | 1.3783e-2 | 0.1701 | 2.8509e-2 | 0.1250 |
+| rawnorm ep6 | `[100..103]` | 0.8341 | 1.2619e-1 | 0.0645 | 1.0394e-2 | 0.2176 | 3.5156e-2 | 0.0824 |
+| rawnorm ep6 | `[1800..1803]` | 0.8222 | 1.0978e-1 | 0.0547 | 8.4264e-3 | 0.1848 | 2.7692e-2 | 0.0768 |
+| **路线 C ep6** | `[3..6]` | 0.8290 | 1.3707e-1 | 0.0818 | **1.3640e-2** | 0.1641 | 2.9079e-2 | **0.0995** |
+| **路线 C ep6** | `[100..103]` | 0.7856 | 1.4214e-1 | 0.0661 | **1.1621e-2** | 0.1866 | 3.5135e-2 | **0.0818** |
+| **路线 C ep6** | `[1800..1803]` | 0.9131 | 1.5148e-1 | 0.0709 | **1.1411e-2** | 0.1814 | 2.9033e-2 | **0.0753** |
+
+与 450 iter 同窗口对照（路线 C 自身，验证机制是否随训练继续增强）：
+
+| 窗口 | 450 iter shuffle head | ep6 shuffle head | 倍数 | 450 iter shuffle/zero | ep6 shuffle/zero |
+|---|---:|---:|---:|---:|---:|
+| `[3..6]` | 5.800e-4 | 1.3640e-2 | **23.5×** | 0.0874 | 0.0995 |
+| `[100..103]` | 4.880e-4 | 1.1621e-2 | **23.8×** | 0.0781 | 0.0818 |
+| `[1800..1803]` | 3.690e-4 | 1.1411e-2 | **30.9×** | 0.0613 | 0.0753 |
+
+读数（正反并列）：
+
+1. **绝对身份信号显著增强。** `shuffle_z` head 1.141%–1.364%，越过 ep6 继续门槛
+   0.2% 并在最好的两个窗口超过「最好 ≥0.10」的期望值；相对 rawnorm ep6 的
+   0.843%–1.378%，低窗口提升为主（+35%、+12%），高窗口持平（−1%）。
+   相对 450 iter 的 0.369%–0.580%，三窗口提升 23–31 倍。
+2. **`shuffle/zero` 比值守住且不再退化。** 三窗口 0.0753–0.0995，均不低于 450 iter
+   的对应值（0.0613–0.0874），也落在 rawnorm ep6 的 0.0768–0.1250 区间内。这与
+   第 59 节 450 iter「比值三窗口全部下降」的形态不同：**训练到 ep6 后，公共偏置与
+   身份信号同步放大、但不再由公共偏置单方面领跑。**
+3. **`zero_z` head 绝对值仍在上升**（rawnorm ep6 0.110–0.126 → 路线 C ep6
+   0.137–0.151，+13%~+38%）。因此比值改善主要来自分子（shuffle）跟上，而非分母
+   下降；公共偏置仍是检测头响应的主导成分。
+4. **论文最终门槛 2% 仍未过**：最好的 `[3..6]` 窗口 1.364%，差约 1.5 倍。
+   `[1800..1803]` 窗口内部离散度为 0.711%–1.769%（4 条样本），说明远距离窗口的
+   身份信号还依赖样本，尚未稳定。
+
+逐样本 `shuffle_z` head（4 条/窗口）：
+
+| 窗口 | 样本 1 | 样本 2 | 样本 3 | 样本 4 |
+|---|---:|---:|---:|---:|
+| `[3..6]` | 1.4044e-2 | 1.3185e-2 | 1.4116e-2 | 1.3216e-2 |
+| `[100..103]` | 1.1393e-2 | 1.1725e-2 | 1.1494e-2 | 1.1873e-2 |
+| `[1800..1803]` | 1.7686e-2 | 1.2743e-2 | 7.1070e-3 | 8.1082e-3 |
+
+### 60.7 ep6 Source 探针（`stride=700`，indices `[3,703,1403]`）
+
+| 张量 specific | rawnorm ep6 | **路线 C ep6** | 变化 |
+|---|---:|---:|---|
+| `feat_pooled_raw` | 15.27% | 12.64% | −17% |
+| `e_t_pooled_raw` / `e_pooled` | 16.32% | **30.98%** | **+90%** |
+| `h_t` | 10.71% | **14.39%** | +34% |
+| `mu_p` | 7.32% | 11.76% | +61% |
+| `mu_q` | 10.61% | 15.43% | +45% |
+| `correction` | 38.01% | **44.90%** | +18% |
+| `innovation` | 46.70% | **50.13%** | +7% |
+| `obs_prior_e_hat` | 13.19% | 21.16% | +60% |
+| `correction` RMS | 0.25869 | 0.25656 | 持平 |
+| `z_proj` weight RMS | 0.08564 | 0.08546 | 持平 |
+
+依赖方向：
+
+| 依赖方向 | rawnorm ep6 | 路线 C ep6 |
+|---|---:|---:|
+| `mu_q_removal_of_e_rel_l2` | 0.1325 | 0.1380 |
+| `mu_q_removal_of_h_rel_l2` | 0.1932 | 0.2010 |
+| h/e 比值 | 1.458 | 1.456 |
+
+读数与归因：
+
+1. **上游观测通路被继续推动**：`e_pooled` specific 16.32% → 30.98%（+90%），
+   `obs_prior_e_hat` 13.19% → 21.16%。`e_pooled` 的 specific 从 450 iter 的 15.33%
+   继续升至 30.98%，说明 object-centric 目标经 correction 反传到 encoder 的路径在
+   正式训练里成立且幅度更大。
+2. **correction 的 specific 占比也到 44.90%**，但 RMS 保持 0.25656（450 iter 时是
+   0.06239，ep6 已被放大到 4.1 倍后稳定）。即此时 correction 的样本区分度来自
+   **方向分化**而不是幅度膨胀——去掉了第 59 节 450 iter「specific 略降、RMS 翻倍」
+   的形态。
+3. **`h_t` 的依赖仍强于观测**：`mu_q_removal_of_h` 0.2010 > `removal_of_e` 0.1380，
+   h/e 比值 1.456，与 rawnorm ep6 的 1.458 几乎一致（450 iter 路线 C 曾到 0.782）。
+   递归状态重新主导 posterior，这是 `correction²` 继续塌缩的同一个信号：
+   检测头对 z 的响应在增长，但 z 的内容仍偏向 h_t 能预测的部分。
+4. `z_proj` weight RMS 两轮一致（0.0856 vs 0.0855），排除了读出增益造成的读数差异。
+
+### 60.8 结论与下一步
+
+1. **AP 门控通过。** ep6 Overall 3D moderate 34.2513 vs no2d_igdr seed0 34.0243，
+   差 +0.2270，落入「差距 ≤1」分支，是低维 z 系列首次单点反超基线。
+2. **身份信号继续增强。** `shuffle_z` head 1.141%–1.364%，相对 450 iter 提升
+   23–31 倍；`shuffle/zero` 比值三窗口不再退化；source 探针显示 `e_pooled`
+   specific 继续上升。按用户 ep6 预登记门槛，`shuffle_z ≥0.2%` 与「innovation
+   specific > e_pooled」「delta_mu specific ≥10%」均通过。
+3. **但有两条必须并列的反向证据**：① `correction²` 仍逐 epoch 单调下降
+   （0.2736 → 0.0793），第 59 节的 450 iter 平台没有在正式训练保持；② `h/e`
+   依赖比 1.456 与 rawnorm 相同，posterior 仍由 `h_t` 主导。两者共同说明：
+   **路线 C 提升了 z 的使用强度和身份信号，但还没有改变「correction 由 h_t 可预测
+   成分主导、样本独占分量被逐年压缩」的动力学。**
+4. **执行分支**：按「AP 差距 ≤1 且机制继续增强」预登记，已从 `epoch_6.pth` 续训至
+   ep12（24e 日程、GPU 5/6/7、seed 0，看门狗在 ep12 验证与 `epoch_12.pth` 落盘后
+   停止）。ep12 必须复核：
+   - ep12 Overall 与 no2d_igdr seed0 `39.2953` 的差距（≤1 可继续 ep16）；
+   - `correction²` 是否出现平台或回升，而不是继续单调下降；
+   - `shuffle_z` head 是否继续向 2% 靠近（ep6 为 1.14%–1.36%）；
+   - `h/e` 依赖比是否向观测侧移动（ep6 为 1.456）。
+5. **若 ep12 出现「AP 上升但机制退化」，按用户预登记不能算 RSSM 方法成功**，须先排
+   查是否只是辅助损失/初始化带来的普通优化收益。真正未使用的后续手段仍是路线 D
+   （跨样本去塌缩：`L_common + L_var` 方差下限）与路线 E（KL balancing +
+   按 cell 聚合的 free-bits）；两者都在 identity 门槛通过前不启动。
+
+### 60.9 复现命令
+
+```bash
+cd /home/lurui/workspace/R4Det && source .envrc
+
+# ep6 门控训练（24e 日程，跑到 ep6 验证落盘后由看门狗停止）
+CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
+  configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation_rawnorm_oc.py \
+  3 --seed 0 --deterministic \
+  --work-dir /data/lurui/work_dirs/lowdim_z_innovation_rawnorm_oc_3x2x2_24e_seed0 \
+  > /tmp/lowdim_oc_ep6.log 2>&1
+
+# ep6 三窗口反事实诊断
+CFG=configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation_rawnorm_oc.py
+CKPT=/data/lurui/work_dirs/lowdim_z_innovation_rawnorm_oc_3x2x2_24e_seed0/epoch_6.pth
+CUDA_VISIBLE_DEVICES=5 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 3    --limit 4 --batch-size 4 --shuffle-offset 2  --output /tmp/z_util_oc_ep6_w3.json
+CUDA_VISIBLE_DEVICES=6 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 100  --limit 4 --batch-size 4 --shuffle-offset 2  --output /tmp/z_util_oc_ep6_w100.json
+CUDA_VISIBLE_DEVICES=7 python tools/diagnose_z_utilization.py --config $CFG --checkpoint $CKPT \
+  --start-index 1800 --limit 4 --batch-size 4 --shuffle-offset -1 --output /tmp/z_util_oc_ep6_w1800.json
+
+# ep6 source 探针
+CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py --config $CFG --checkpoint $CKPT \
+  --start-index 3 --limit 4 --stride 700 --output /tmp/post_source_oc_ep6_stride700.json
+
+# ep6 -> ep12 续训（保留 24e 余弦日程与优化器状态）
+CUDA_VISIBLE_DEVICES=5,6,7 SEED=0 bash tools/dist_train.sh \
+  configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_lowdim_z_innovation_rawnorm_oc.py \
+  3 --seed 0 --deterministic \
+  --resume-from /data/lurui/work_dirs/lowdim_z_innovation_rawnorm_oc_3x2x2_24e_seed0/epoch_6.pth \
+  --work-dir /data/lurui/work_dirs/lowdim_z_innovation_rawnorm_oc_3x2x2_24e_seed0 \
+  > /tmp/lowdim_oc_ep12.log 2>&1
+```

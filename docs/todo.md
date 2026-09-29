@@ -85,9 +85,15 @@
      - **机制正向（四项）**：① hit@1 `0.0141 → 0.3988`（约 28 倍，单调）；② `correction²` 最后 150 iter 平台 `0.0077 → 0.0075`，平台值比 rawnorm 450 iter 的 0.0054 高 39%；③ `correction` specific `28.17%`（≥5% 门槛）；④ **上游 `e_pooled` specific 7.62% → 15.33%（+2.0 倍）**，是此前任何配置都没做到的 encoder 侧推进。recon `1.2268 → 1.0682`、raw KL `0.2209 → 0.0764` 有界，未发散。
      - **核心门槛仍未过**：`shuffle_z` head 最好仅 `0.000580`（0.58%），距 2% 论文门槛差约 3.4 倍；`shuffle/zero` 比值三窗口**全部下降**（0.129→0.087、0.120→0.078、0.084→0.061），原因是 `zero_z` 涨得更多（+158%~+174%）而 `shuffle_z` 只涨 72%~88% —— **公共偏置与身份信号同时放大，公共分量放大更多**。结论：路线 C 让 correction 编码了更多观测内容，但没让检测头更依赖样本身份。
      - **诊断口径修正**：首版 recall 用 `prob>0.5`，对 focal 软目标恒为 0（是口径问题不是模型问题）；现改为「每个**有 GT 的类别通道**内 argmax 是否落在该类 GT 中心」的 hit@1，另报 `stat_object_hm_thr50` 作参考。
-     - **ep6 是硬门控**：训练已按 24e 日程启动（`/data/lurui/work_dirs/lowdim_z_innovation_rawnorm_oc_3x2x2_24e_seed0`，GPU 5/6/7、seed 0、看门狗 ep6 落盘后停）。必须同时检查 Overall 3D moderate（对比 no2d_igdr seed0 ep6 `34.0243`）+ 四类构成项、`correction²` 逐 epoch 曲线（450 iter 平台不作数，rawnorm 前例已证明会退化）、三窗口 `shuffle_z`/`shuffle_ratio`、`stat_object_hm`/hit@1 走势。
-     - **预登记分支**：AP 差距 ≤1 且机制增强 → 可考虑 B/C 合并续 ep12；AP 差距 1–2 且 `shuffle_z` 不足 → 进入 **路线 D**（跨样本去塌缩损失）；AP 差距 >2 → 路线 C 单独不成立；AP 升但机制退化 → 不能算 RSSM 成功。
-     - **仍未做**：路线 D/E 未开始。KL 继续后置（raw KL 0.0764 有界）。
+     - **ep6 门控已完成（2026-09-28/29，AP 通过、身份信号增强、`correction²` 仍塌缩）**：work_dir `/data/lurui/work_dirs/lowdim_z_innovation_rawnorm_oc_3x2x2_24e_seed0`，GPU 5/6/7、seed 0、24e 日程跑到 ep6 验证与权重落盘后停。详见 `docs/training_runs_full.md` 第 60 节。
+     - **AP 门控通过，首次单点反超基线**：ep6 Overall 3D moderate `34.2513` vs no2d_igdr seed0 `34.0243`（**+0.2270**），落入预登记的「差距 ≤1」分支。但 ep1-6 均值仍低 `2.2319`（`26.8101` vs `29.0420`），ep1 尤其慢（`13.6636`，比 base 低 1.60），单点反超不能推广为整体追平。
+     - **ep6 四类构成不均**：Truck strict `+4.7601`（`26.6900` vs `21.9299`）、Car strict `+0.8743` 为正；Ped loose `−3.9130`（`23.2093` vs `27.1223`）、Cyc loose `−0.8132` 为负。Overall 反超主要由 Truck/Car 贡献。
+     - **身份信号相对 450 iter 增强 23–31 倍**：`shuffle_z` head 三窗口 `1.141%–1.364%`（450 iter 为 `0.369%–0.580%`），越过 ep6 继续门槛 `0.2%`；`shuffle/zero` 比值 `0.0753–0.0995`，三窗口均不低于 450 iter，不再退化。论文最终门槛 2% 仍差约 1.5 倍。
+     - **source 探针继续正向**：`e_pooled` specific `16.32% → 30.98%`（+90%，450 iter 为 15.33%）、`correction` specific `38.01% → 44.90%`、`innovation` `46.70% → 50.13%`；`correction` RMS 稳定在 `0.25656`（450 iter 时 0.06239），即增益来自方向分化而非幅度膨胀。`delta_mu` specific `44.90% ≥ 10%`，`innovation > e_pooled` 均通过。
+     - **两条反向证据（必须与 AP 并列）**：① `correction²` 正式训练里仍**逐 epoch 单调下降** `0.2736 → 0.0793`（−71.0%，逐轮 −20.2%/−33.3%/−24.3%/−18.1%/−12.2%），第 59 节的 450 iter 平台未保持，形态与 rawnorm 几乎相同；② `mu_q` 对 `h_t` 依赖仍**超过**观测（removal h/e = `1.456`，rawnorm ep6 为 `1.458`），posterior 仍由 `h_t` 主导。
+     - **三口径摘要**（6 条 val，跨度为 ep1-6）：区间均值 `26.8101`（n=6，实际跨度 1-6）；全轮峰值 `34.2513 @ ep6`；best saved `34.2513 @ ep6`（两者相同）。
+     - **执行分支**：按「AP 差距 ≤1 且机制继续增强」预登记，已从 `epoch_6.pth` 续训至 ep12（2026-09-29 02:03:06 UTC 启动，保持 24e 余弦日程与优化器状态，采用 B/C 组合版）。ep12 需复核：Overall 对比 base ep12 `39.2953`、`correction²` 是否出现平台或回升、`shuffle_z` 是否继续向 2% 靠近、`h/e` 是否转向观测侧。
+     - **仍未做**：路线 D（跨样本去塌缩 `L_common + L_var`）/ E（KL balancing + 按 cell 聚合 free-bits）未开始；两者都在 identity 门槛通过前不启动。KL 继续后置（raw KL 0.0427 有界）。
    - **本次主线结论**：三项结构修复（差分重建、排名损失、空间读出）全部未过门控，路线 A 的两轴修复均已证实有效但叠加后仍差 32 倍，完整曲线与归因见 `docs/training_runs_full.md` 第 53、54 节。
    - ④ KL 口径改动**仍后置**：待结构有效性过 ep6 门控后再做 stop-gradient 拆分（`L_dyn=KL(sg(q)||p)`、`L_rep=KL(q||sg(p))`，建议 `beta_dyn=1.0`、`beta_rep=0.1`）与按 cell 聚合的 free-bits（沿 channel 求和后 ~1.0 nat/cell，先固定不退火）。**不要在缺重建项时单独调 free-bits。**
    - 低维 bottleneck 与排他未来任务这两个设计方向**尚未被证伪**；本轮证伪的是「在无重建锚定 + prior 脱离 `h_t` 的前提下使用它们」。标准 RSSM 的四条关键要素（prior 依赖 `h_t`、观测似然/重建项、KL balancing、输出吃 `(h_t,z_t)`）与逐条对照见第 50.6.7 节。
