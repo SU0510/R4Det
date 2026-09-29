@@ -118,11 +118,30 @@ def main():
             captured[name] = value
         return hook
 
+    # Module names differ across the two lineages. The low-dim family runs a
+    # dedicated `latent_gru` on (16,16) pooled features; the full-resolution
+    # standard/motion-aligned RSSM runs `transition` at native BEV resolution
+    # and has no `latent_gru` at all. Reading `latent_gru` unconditionally made
+    # this probe crash on the very checkpoints it is supposed to baseline, so
+    # select the transition module and record the resolution each one used.
+    if hasattr(fusion, 'latent_gru'):
+        transition = fusion.latent_gru
+        pooled_res = (16, 16)
+    else:
+        transition = fusion.transition
+        pooled_res = None
+
+    def make_encoder_hook(name, pool):
+        if pool is None:
+            return make_hook(name)
+        return make_hook(name, pool=pool)
+
     handles = [
-        fusion.encoder.register_forward_hook(make_input_hook('feat_pooled')),
-        fusion.latent_gru.register_forward_hook(make_hook('h_t')),
+        transition.register_forward_hook(make_hook('h_t')),
         fusion.encoder.register_forward_hook(
-            make_hook('e_t', pool=(16, 16))),
+            make_input_hook('feat_pooled', pool=pooled_res or (16, 16))),
+        fusion.encoder.register_forward_hook(
+            make_encoder_hook('e_t', pooled_res)),
         fusion.posterior_mu.register_forward_hook(
             make_hook('posterior_head')),
         fusion.prior_mu.register_forward_hook(make_hook('mu_p')),
@@ -136,7 +155,10 @@ def main():
     # Honor the fusion's own observation mode: route-A's scaled_raw cells do
     # not L2-normalize, so hard-coding F.normalize here would report the
     # pre-change input for a changed model.
-    e_pooled = fusion._posterior_observation(captured['e_t'])
+    if hasattr(fusion, '_posterior_observation'):
+        e_pooled = fusion._posterior_observation(captured['e_t'])
+    else:
+        e_pooled = captured['e_t']
     mu_p = captured['mu_p']
     # Innovation-conditioned posteriors (route B) emit delta_mu from
     # posterior_mu, so mu_q = mu_p + delta and the correction *is* the delta.
@@ -178,6 +200,9 @@ def main():
                 torch.cat([torch.zeros_like(h_t), e_pooled], dim=1))
     stats = {
         'indices': idx,
+        'fusion_class': type(fusion).__name__,
+        'latent_resolution': (
+            list(e_pooled.shape[-2:]) if pooled_res is None else list(pooled_res)),
         'readout_mode': getattr(fusion, 'readout_mode', 'film'),
         'feat_pooled_raw': split(captured['feat_pooled']),
         'e_t_pooled_raw': split(captured['e_t']),
