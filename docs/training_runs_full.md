@@ -9764,6 +9764,12 @@ RMS 与依赖方向：
 | `mu_q_removal_of_h_rel_l2` | 0.8820 | 0.3098 |
 | **h/e 依赖比** | **2.228** | **0.9996** |
 
+> 口径说明：`probe_posterior_source.py` 对 `posterior_struct='innovation'` 自动切换
+> ——零化的是 posterior 两半输入 `[h_t, innovation]`，因此 MAI 的 `removal_of_e`
+> 指的是**移除 innovation**（即 `e_t − stopgrad(e_hat)`），不是移除原始 `e_t`。
+> 标准 RSSM 的两半仍是 `[h_t, e_t]`，所以两列可以直接对比「posterior 对递归侧
+> 的依赖 vs 对观测侧的依赖」这个结构量。
+
 读数：
 
 1. **h/e 依赖比首次降到 1.0 以下**：标准主线 2.228、路线 C ep12 最低只到 1.275，
