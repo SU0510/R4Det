@@ -58,17 +58,12 @@ NOTEMPORAL = [47.86, 27.07, 41.89, 25.53, 35.59,
 N4RSSM = [51.35, 31.32, 50.09, 30.76, 40.88,
           70.61, 33.54, 51.81, 43.45, 49.85]
 
-# GRU column: NOT measured.  This is the prior estimate from
-# assets/r4det_baseline_prediction.md (Overall 3D pinned at 38.50); every other
-# column takes the same fraction of the N4 - No-Temporal gap, which keeps the
-# four-class identity exact.  Asserted below so the construction stays
-# self-documenting.  The rendered table and every derived artifact label this
-# row as a prior so it is never mistaken for a run result.
-GRU_IS_PRIOR = True
-GRU_OVL3D = 38.50
-FRAC = (GRU_OVL3D - NOTEMPORAL[4]) / (N4RSSM[4] - NOTEMPORAL[4])
-GRU = [round(a + FRAC * (b - a), 2) for a, b in zip(NOTEMPORAL, N4RSSM)]
-GRU[4] = GRU_OVL3D
+# GRU row, measured: fgfull_N4_temporal_baseline_seed0, BEST 39.54 @ep11
+# (FG stack, seed0; val through ep20/24, training stopped mid-ep21 — see
+# assets/r4det_baseline_prediction.md for the prior this replaces).
+# It beats N4 RSSM on Cyclist BEV loose, so the win-rate check below is 9/10.
+GRU = [49.69, 29.31, 49.91, 29.27, 39.54,
+       66.13, 31.77, 52.10, 37.10, 46.77]
 
 # deltas from the rounded displayed values, so a reader can verify by
 # subtraction (Car 3D: exact +3.48, displayed +3.49)
@@ -166,7 +161,7 @@ def data_row(name, vals, *, ours=False, delta=False, size=10.5):
 data_row("N4 RSSM", N4RSSM, ours=True)
 data_row("No-Temporal", NOTEMPORAL)
 data_row("Δ (N4 − No-Temporal)", DELTA_NT, delta=True)
-data_row("GRU (prior)", GRU)
+data_row("GRU", GRU)
 data_row("Δ (N4 − GRU)", DELTA_GRU, delta=True)
 
 NOTES = [
@@ -174,9 +169,10 @@ NOTES = [
     "Truck 3D moderate strict · Overall 3D moderate ·",
     "　　　　　Car BEV moderate strict · Pedestrian BEV moderate loose · Cyclist BEV moderate loose · "
     "Truck BEV moderate strict · Overall BEV moderate",
-    "Overall = 四类均值（已验证逐位相等）。N4 RSSM BEST @ep14（主模型最高 seed）；No-Temporal BEST @ep20。",
-    "GRU 行为先验估计（prior），非实测：同栈 GRU 控制 run 尚未跑出结果。"
-    "数据仅 N4 RSSM / No-Temporal 两行来自原始 *.log.json 重算；Δ 由显示值相减得到。",
+    "Overall = 四类均值（按未取整值成立；逐位取整后最大偏差 0.005）。N4 RSSM：非 FG 栈 seed2 BEST @ep14；"
+    "No-Temporal：非 FG 栈 BEST @ep20；GRU：FG 栈 BEST @ep11（val 至 ep20/24）。",
+    "N4 RSSM 对 No-Temporal 10/10 全胜；对 GRU 9/10，唯一落后项为 Cyclist BEV loose（−0.29）。"
+    "数据来源：原始 *.log.json 重算；Δ 由显示值相减得到。",
 ]
 note_ts = [ax.text(0, NOTE_Y0 - NOTE_DY * k, txt, ha="left", va="top",
                    fontsize=fs(8.5), color=DIM) for k, txt in enumerate(NOTES)]
@@ -222,22 +218,23 @@ for t, _ in boxes:
 
 # arithmetic identities
 for label, v in (("No-Temporal", NOTEMPORAL), ("N4 RSSM", N4RSSM), ("GRU", GRU)):
-    assert abs(sum(v[0:4]) / 4 - v[4]) < 0.005, (label, "3D", sum(v[0:4]) / 4, v[4])
-    assert abs(sum(v[5:9]) / 4 - v[9]) < 0.005, (label, "BEV", sum(v[5:9]) / 4, v[9])
+    # displayed values are 2dp-rounded, so the mean of the four rounded
+    # constituents can sit up to 0.005 off the rounded Overall
+    assert abs(sum(v[0:4]) / 4 - v[4]) <= 0.0051, (label, "3D", sum(v[0:4]) / 4, v[4])
+    assert abs(sum(v[5:9]) / 4 - v[9]) <= 0.0051, (label, "BEV", sum(v[5:9]) / 4, v[9])
 for a, b, d in zip(NOTEMPORAL, N4RSSM, DELTA_NT):
     assert abs(round(b, 2) - round(a, 2) - d) < 0.005, ("dNT", a, b, d)
 for a, b, d in zip(GRU, N4RSSM, DELTA_GRU):
     assert abs(round(b, 2) - round(a, 2) - d) < 0.005, ("dGRU", a, b, d)
 assert all(b > a for a, b in zip(NOTEMPORAL, N4RSSM)), "N4 must beat No-Temporal in all 10"
-# GRU is a prior, so its "N4 wins" relation is an assumption of the
-# construction, not a measurement.  Keep the check but name it honestly.
-assert all(b > a for a, b in zip(GRU, N4RSSM)), "prior construction assumes N4 beats GRU in all 10"
-for k, (a, b, g) in enumerate(zip(NOTEMPORAL, N4RSSM, GRU)):
-    assert abs(g - round(a + FRAC * (b - a), 2)) < 0.005, ("interp", k, g)
+# Measured: N4 RSSM wins 9/10 against GRU; the one loss is Cyclist BEV loose.
+wins = sum(b > a for a, b in zip(GRU, N4RSSM))
+assert wins == 9, f"expected 9/10 N4 wins over GRU, got {wins}"
+assert GRU[7] > N4RSSM[7] and N4RSSM[2] > GRU[2], "expected loss/hold on Cyclist BEV/3D"
 
 out = "/home/lurui/workspace/R4Det/assets/r4det_paper_table_three_way"
 fig.savefig(out + ".png", dpi=200)
 fig.savefig(out + ".pdf")
 print(f"OK  {len(boxes)} cells, assertions passed "
-      f"(layout + Overall identity x3 + both Δ rows + 10/10 win x2)")
+      f"(layout + Overall identity x3 + both Δ rows + 10/10 vs No-Temporal + 9/10 vs GRU)")
 print(f"    {out}.png\n    {out}.pdf")

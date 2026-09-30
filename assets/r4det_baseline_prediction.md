@@ -3,6 +3,12 @@
 > 性质：**实验前的先验估计（prior），不是实测结果，不能写进论文当数字用**。
 > 目的：给「要不要花 3 卡 × 24h 重跑同栈 GRU 控制」和「汇报时怎么摆 baseline 那一行」提供决策依据。
 > 生成日期：2026-09-22（盘上状态：`fgfull_N4_no2d_igdr` 正在 ep18+ 收尾）
+>
+> **✅ 已被实测取代（2026-09-30 回填）**：`fgfull_N4_temporal_baseline_seed0` 重跑完成
+> （val 至 ep20/24，ep21 中途停，无进程），**BEST 39.54 @ep11 / 窗口 37.57**，落在预测区间内
+> （FG 栈 BEST 预测 39.3，区间 37.8–41.3）。逐类别预测偏差最大的是 Cyclist：预测 3D 46.40 / BEV 48.41，
+> 实测 49.91 / 52.10——GRU 在 Cyclist BEV loose 上**反超 N4 RSSM（51.81）0.29**，是 10 列里唯一输的一列。
+> 预测正文保留在下方作为记录，凡与实测冲突处以本条和实测为准。
 
 ---
 
@@ -10,7 +16,7 @@
 
 | 读法 | 具体对象 | 状态 |
 |---|---|---|
-| **本文采用的读法** | GRU 时序基线 `TemporalDeformableFusionBaseline`（= 18e 的 `baseline_temporal` 模块）在当前栈上训练 | **无任何实测**，只死过一次（`fgfull_N4_temporal_baseline_seed0`，ep1 iter900 被杀，无 val、无权重） |
+| **本文采用的读法** | GRU 时序基线 `TemporalDeformableFusionBaseline`（= 18e 的 `baseline_temporal` 模块）在当前栈上训练 | **已实测**：`fgfull_N4_temporal_baseline_seed0`，BEST 39.54 @ep11 / 窗口 37.57（第一次 ep1 iter900 被杀，2026-09-22 12:59 重跑后跑到 ep21 中途停止，val 共 20 个 epoch） |
 | 另一读法 | 单帧对照 `no_temporal`（时序关闭） | **已实测**：35.59 BEST / 34.65 窗口（`no_temporal_N4_2x4_24e_seed0`），不需要预测 |
 
 所以下面预测的是**当前栈口径下的 GRU 时序基线**。
@@ -110,7 +116,41 @@ GRU 基线在结构上没有自维护隐状态、没有随机 z、没有对 h/z 
 
 ---
 
-## 6. 数据来源
+## 6. 实测回填（2026-09-30）
+
+**Run 状态**：`fgfull_N4_temporal_baseline_seed0` 于 2026-09-22 12:59 重跑，2026-09-23 ~04:02 停在 ep21 中途
+（无进程、无报错记录），val 共 20 个 epoch。BEST 39.54 @ep11，其后 9 个 epoch 在 36.75–39.00 平台波动，
+lr 已进入 1e-5 尾段，剩余 ep21–24 刷新 39.54 的可能性很低（结论按 39.54 使用，但报告时应注明 val 至 ep20/24）。
+
+**预测 vs 实测（FG 栈，seed0，BEST 口径）**：
+
+| 项 | 预测（§2） | 实测 | 偏差 |
+|---|---:|---:|---:|
+| Overall 3D BEST | 39.3（37.8–41.3） | **39.54** @ep11 | +0.24 ✓ |
+| Overall 3D 窗口 | 38.9（37.5–40.4） | **37.57** | −1.33，贴近下沿 |
+| Overall BEV BEST | —（未单列） | 46.77 | — |
+| Cyclist 3D | 46.40（插值） | **49.91** | +3.5，插值低估 |
+| Cyclist BEV | 48.41（插值） | **52.10** | +3.7，插值低估，且**反超 N4 RSSM 0.29** |
+| Car strict 3D | 49.78（插值） | 49.69 | −0.09 ✓ |
+
+Overall 预测命中（区间中点 39.3 vs 实测 39.54）；逐类别插值在 Cyclist 上明显低估——
+插值假设「各类按同一比例分享总增量」不成立，GRU 的时序收益高度集中在 Cyclist。
+
+**同栈配对结论（全部 FG 栈、seed0、BEST）**：
+
+| 配对 | 数值 | 差值 |
+|---|---|---:|
+| FG 满血 RSSM `fgfull_N4_2x4_24e_seed0` | 40.69 @ep16 / 窗口 40.02 | — |
+| FG GRU 控制（本 run） | 39.54 @ep11 / 窗口 37.57 | **RSSM +1.15 BEST / +2.45 窗口** |
+| FG no2d+no-IGDR（方法 run） | 40.39 @ep14 / 窗口 39.28 | 对 GRU +0.85 BEST |
+
+§3 的预判成立：同栈下 RSSM 对 GRU 的领先是 **+1.15**（单点口径），不是表里 vs 18e 34.50 的 +6.38；
+且窗口口径下领先扩大到 +2.45（GRU 的 BEST 在 ep11，后段平台更早、更低）。
+**Cyclist BEV loose 是唯一 GRU 赢 N4 RSSM 的列**（52.10 vs 51.81），叙事时应主动披露。
+
+---
+
+## 7. 数据来源
 
 - BEST / 窗口：各 `work_dirs/<run>/*.log.json`，每 epoch 取最后一条 `mode=val`，脚本 `tools/summarize_run.py` 的 `load_eval_series`，
   指标 `pts_bbox/KITTI/Overall_3D_moderate`（混合口径 = mean(Ped_loose, Cyc_loose, Car_strict, Truck_strict)）。
