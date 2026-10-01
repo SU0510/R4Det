@@ -10417,3 +10417,53 @@ CUDA_VISIBLE_DEVICES=7 python tools/diagnose_z_utilization.py --config $CFG --ch
 CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py --config $CFG --checkpoint $WD/epoch_16.pth \
   --start-index 3 --limit 4 --stride 700 --output /tmp/post_source_mai_ep16_stride700.json
 ```
+
+---
+
+## 65. MAI seed1 → seed2 自动续接运行记录（进行中，2026-10-01）
+
+本节只记录运行事实与保护机制；seed1/seed2 的指标结果必须在各自 ep16 闸门完成后
+另节记录，不能把进行中的运行当成性能结论。
+
+### 65.1 配置与唯一变量
+
+- 配置：`configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_mai.py`。
+- 唯一变量：`seed`。seed1 与 seed2 都使用同一 MAI 配置、同一 GPU 5/6/7、同一
+  `--deterministic` 与同一 24e 日程；差异仅为 `--seed` 和 work_dir/日志路径。
+- 运行保护：不修改 `max_epochs`，由 ep16 闸门在 `Epoch(val) [16]` 与
+  `epoch_16.pth` 落盘后发 SIGINT 停止训练。
+
+### 65.2 运行事实
+
+- seed1：2026-10-01 03:07:49 UTC 启动，tmux `mai_seed1_ep16`；work_dir
+  `/data/lurui/work_dirs/fgfull_N4_no2d_igdr_mai_2x4_24e_seed1`，日志
+  `/tmp/mai_seed1_ep16.log`。
+- seed1 的 ep1-13 已完成验证；ep14 训练中。seed1 尚未产生 ep16 结果。
+- 2026-10-01 17:13:27 UTC 停用旧的 seed1 专用 watcher，启动链式 watcher
+  `me_rssm/sanity/watch_mai_seed1_then_seed2_ep16.sh`，tmux 会话仍为
+  `mai_seed1_ep16_watch`。
+- 链式 watcher 的交接顺序固定为：seed1 ep16 闸门 → 停 seed1 → seed1 四个 probe
+  → 确认 GPU 5/6/7 空闲 → 启动 seed2 → seed2 ep16 闸门 → 停 seed2 → seed2 四个 probe。
+- seed2 目标路径：work_dir
+  `/data/lurui/work_dirs/fgfull_N4_no2d_igdr_mai_2x4_24e_seed2`，日志
+  `/tmp/mai_seed2_ep16.log`，tmux `mai_seed2_ep16`。
+
+### 65.3 无人值守保护与隔离彩排
+
+链式 watcher 在正式上线前已做独立彩排，验证过：
+
+1. seed1 必须真正退出、且四个 probe 结束后才允许 seed2 启动，避免两个 DDP 任务抢 GPU；
+2. `Epoch(val) [16]` 只在 watcher 启动后新增的日志行中计数，配合权重尺寸和
+   文件落定时间，避免复用旧日志或正在写入的半成品 checkpoint；
+3. seed2 训练进程若在 ep16 前退出，会清理残留 tmux 会话并从 work_dir 中最近一个
+   完整 `epoch_*.pth` 自动恢复，最多尝试 3 次；
+4. 单个 probe 有 30 min 硬超时；probe 失败只记录警告，不阻塞后续训练阶段；
+5. dry-run 会校验融合类型 `MotionAlignedInnovationRSSMFusion`、`max_epochs=24`、
+   `evaluation.interval=1`、`checkpoint_config.interval=2`、`val_bs=4` 和 ep16 的
+    checkpoint 覆盖关系。
+
+### 65.4 完成状态
+
+- seed1 ep16 结果：**未完成**。
+- seed2 ep16 结果：**未开始，等待 seed1 交接**。
+- 三口径（区间均值 ep12-16 / 全轮峰值：值+epoch / best saved）：**尚无，禁止提前填写**。
