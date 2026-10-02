@@ -40,6 +40,7 @@ cd /home/lurui/workspace/R4Det
 
 RUN_CHAIN=${RUN_CHAIN:-0}
 SOURCE_ONLY=${SOURCE_ONLY:-0}
+START_PHASE=${START_PHASE:-seed1}
 GPU_LIST=${GPU_LIST:-5,6,7}
 CFG=${CFG:-configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_mai.py}
 EPOCH=${EPOCH:-16}
@@ -61,7 +62,7 @@ SEED2_GATE_TIMEOUT_SEC=${SEED2_GATE_TIMEOUT_SEC:-129600}  # 36 h from seed2 star
 
 CHAIN_LOG=${CHAIN_LOG:-/tmp/mai_seed1_then_seed2_ep16_chain.log}
 RELEASE_TIMEOUT_SEC=${RELEASE_TIMEOUT_SEC:-1800}
-STOP_TIMEOUT_SEC=${STOP_TIMEOUT_SEC:-600}
+STOP_TIMEOUT_SEC=${STOP_TIMEOUT_SEC:-1800}
 STALL_TIMEOUT_SEC=${STALL_TIMEOUT_SEC:-2700}
 POLL_SEC=${POLL_SEC:-30}
 RESTART_DELAY_SEC=${RESTART_DELAY_SEC:-60}
@@ -259,7 +260,12 @@ stop_session() {
     tmux send-keys -t "$session" C-c 2>/dev/null || true
   fi
   if ! wait_for_training_stopped "$session" "$work_dir" "$seed" "$STOP_TIMEOUT_SEC"; then
-    return 1
+    if wait_for_gpus_idle "$RELEASE_TIMEOUT_SEC"; then
+      log "WARN: $label process did not disappear within ${STOP_TIMEOUT_SEC}s; GPUs are idle, treating stop as complete"
+    else
+      log "FATAL: $label did not stop cleanly and GPUs remain busy"
+      return 1
+    fi
   fi
   if session_exists "$session"; then
     log "$label training stopped; killing lingering tmux session $session"
@@ -486,19 +492,34 @@ check_prerequisites
 log "chain started (watch_start=$WATCH_START)"
 
 if [ "$RUN_CHAIN" = "1" ]; then
-  handoff_seed1
-  start_seed2
-  touch "/tmp/${SEED1_TAG}_done"
+  case "$START_PHASE" in
+    seed1)
+      handoff_seed1
+      start_seed2
+      touch "/tmp/${SEED1_TAG}_done"
+      ;;
+    seed2)
+      log "resuming chain at seed2 phase (seed1 handoff skipped)"
+      start_seed2
+      ;;
+    *)
+      die "unknown START_PHASE=$START_PHASE (expected seed1 or seed2)"
+      ;;
+  esac
   log "chain finished rc=$FINAL_RC"
   exit "$FINAL_RC"
 fi
 
-log "dry-run: checking seed1 gate state"
-if gate_hit_any_time "$SEED1_LOG" "$SEED1_CKPT"; then
-  log "dry-run: seed1 ep${EPOCH} gate already present"
-elif session_exists "$SEED1_SESSION"; then
-  log "dry-run: seed1 session exists; chain is ready to wait"
+if [ "$START_PHASE" = "seed2" ]; then
+  log "dry-run: seed2 phase selected; seed2 prerequisites OK"
 else
-  die "seed1 session is missing and the ep${EPOCH} gate is not present"
+  log "dry-run: checking seed1 gate state"
+  if gate_hit_any_time "$SEED1_LOG" "$SEED1_CKPT"; then
+    log "dry-run: seed1 ep${EPOCH} gate already present"
+  elif session_exists "$SEED1_SESSION"; then
+    log "dry-run: seed1 session exists; chain is ready to wait"
+  else
+    die "seed1 session is missing and the ep${EPOCH} gate is not present"
+  fi
 fi
 log "dry-run complete: prerequisites OK"
