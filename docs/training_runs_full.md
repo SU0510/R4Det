@@ -10587,3 +10587,60 @@ h/e 依赖比 = `mu_q` 对 h/e 的依赖比：`h_t` specific 15.08% / `e_t` spec
   source probe，以及三 seed 汇总。
 - 当前禁止用 seed0/seed1 两个 seed 提前宣布 MAI 的性能结论；三 seed 未齐前
   AP 方向仍可能翻转。
+
+---
+
+## 66. 完整 18e `MotionAlignedRSSMFusion` seed0 自动接力（已排队，2026-10-02）
+
+本节记录一个尚未产生 val 的排队实验。它不沿用 MAI，也不把历史 24e 日程在第 18
+轮截断；目标是用完整 18-epoch cosine/KL horizon 训练标准 `MotionAlignedRSSMFusion`
+seed0，再看完整 ep18 与历史 24e 日程 ep18 的区别。
+
+### 66.1 唯一变量与配置
+
+| 项 | 值 |
+|---|---|
+| 融合模块 | `MotionAlignedRSSMFusion`（标准主线，不是 MAI） |
+| 配置 | `configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_18e_pretrained_v2_head_no2d_igdr.py` |
+| 继承 | `..._24e_pretrained_v2_head_no2d_igdr.py` |
+| 训练轮数 | `runner.max_epochs=18` |
+| LR | 完整 18e cosine，峰值仍 `1.5e-4`，`min_lr_ratio=1e-5` |
+| KL warmup | `0 -> 1.0`，`start_epoch=0`、`end_epoch=8` |
+| seed / GPU | seed 0；GPU 5/6/7；3 卡 DDP；`--deterministic` |
+| 数据与优化 | 训练/验证 pipeline、优化器、梯度累积、`val_bs=4`、`workers_per_gpu=2` 均与 24e 父配置一致 |
+| cadence | `evaluation.interval=1`、`checkpoint_config.interval=2` |
+
+**日程口径说明**：这是独立完整的 18e schedule（LR 在 ep18 到达最低点），
+**不是 24e cosine 在第 18 轮被提前截断**。因此它与历史 24e 基线的 ep18 单点
+并不是同一 LR 日程，后续比较时必须并列写出这一点，不能把差值与“相同日程下
+18e vs 24e”混为一谈。
+
+### 66.2 运行事实与自动接力
+
+- 目标 work_dir：`/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_18e_seed0`；
+  日志 `/tmp/fgfull18_seed0_ep18.log`；tmux `fgfull18_seed0_ep18`。
+- 上游为 MAI seed2 ep16 链；其 `Epoch(val) [16]`、`epoch_16.pth`、四个 probe
+  JSON 全部就绪，seed2 进程和 tmux 完全退出，GPU 5/6/7 空闲后，才允许启动 18e。
+- watcher：`me_rssm/sanity/watch_after_mai_seed2_run_fgfull18_seed0.sh`。生产模式为
+  `RUN_WATCH=1`；默认 dry-run。它同时检查真实 `torch.load` 可读的 checkpoint、
+  四个非空 JSON、进程/会话双重退出和 GPU idle，避免再次发生在上一轮未退出时抢卡。
+- 2026-10-02 15:23:11 UTC 正式 watcher 已启动并处于等待 seed2 交接状态。
+
+### 66.3 三口径摘要
+
+当前 **尚无任何 val 记录**，因此没有区间均值、全轮峰值或 best saved；不得用上游客串或
+历史 run 的数字代替本 run。训练完成后必须补齐：
+
+1. 区间均值：完整 18e 不存在 24e 标准 ep12-16，需明确实际窗口，优先
+   `ep14-18` 或预先写明的最终五轮，并标注 n 与跨度；
+2. 全轮峰值：`指标值 + epoch`，不要求对应权重；
+3. best saved：仅在 `interval=2` 实际落盘 epoch 中取最高 val，并列出落盘集合。
+
+### 66.4 完成状态
+
+| 项目 | 状态 |
+|---|---|
+| 18e config / schedule audit | 已通过（`me_rssm/sanity/test_fgfull18_schedule.py`） |
+| 隔离彩排 | 已通过（旧 marker 无证据拒绝、有证据接管、缺 probe 阻断、发射失败重试、ep18 完成与 GPU 释放） |
+| 正式 watcher | 2026-10-02 15:23:11 UTC 已启动，等待 MAI seed2 ep16 交接 |
+| 18e 训练 / val | 未开始；完成后补三口径、逐 epoch、逐类别和诊断 |

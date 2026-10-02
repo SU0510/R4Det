@@ -32,6 +32,7 @@
 
 1. 探索原 DreamerV3 的 BlockGRU scaling 方法和超参数使用方法。
 2. 解决 `z_t` 失效：冻结 checkpoint 因果诊断已于 2026-09-25 完成，详见 `docs/training_runs_full.md` 第 49 节；继续调 Gaussian、KL/free_nats、fixed noise 或 learnable std 都不会解决。
+   - **完整 18e 主模型对照（已排队，2026-10-02）**：MAI seed2 ep16 完成停训和四个 probe 后，自动从零启动 `MotionAlignedRSSMFusion`（标准主线，非 MAI）seed0、完整 18 epoch。配置 `configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_18e_pretrained_v2_head_no2d_igdr.py`：`max_epochs=18`、完整 18e cosine（峰值 LR 仍 `1.5e-4`）、KL warmup `0->1.0` 缩到 ep0-8；架构、优化器、梯度累积、val_bs=4、checkpoint cadence 与 24e 基线一致。目的是比较完整 18e 日程下的 ep18 与历史 24e 日程 ep18，不与 24e 截断混称。接力保护见 `me_rssm/sanity/watch_after_mai_seed2_run_fgfull18_seed0.sh`。
    - 因果诊断结论：`zero_z` 在 no2d_igdr seed0 ep14 上使 BEV 特征平均变化 82.53%、head 输出平均变化 38.02%，所以 z 不是完全无因果作用；但 `shuffle_z` 只使 head 平均变化 4.67%，prior `mu_p` 只使 head 平均变化 5.87%，clean 主线也得到同构结果。这说明 z 主要是公共偏置/底色，缺少样本级判别信息。
    - **进度（2026-09-26）**：低维 bottleneck + 排他未来任务已实现，但首轮正式训练因 detector 解包接线错误（把 `z_t` 当 loss、丢弃真正的 KL+future 目标）而无效，ep1-4 全部作废，详见 `docs/training_runs_full.md` 第 50 节。接线、未来任务方向、KL 二次归一化、mask 广播、`stat_*loss` 命名共 5 处已修复（commit `f5d900f`），29 个单测 + 450 iter 冒烟通过，随后重启 24e 正式训练（结果见下条）。
    - **结果（2026-09-26，负结果）**：低维 bottleneck（16×16×32）+ 排他未来任务训练到 ep12 后按预设止损终止。ep8-12（n=5，实际跨度，窗口不完整）Overall 3D moderate `33.3887`，低于 no2d_igdr 三 seed 同窗口 `39.8979 ± 0.9554` 达 **6.51 点**；全轮峰值 `35.6352 @ ep9`（该 epoch 无对应权重），best saved `34.4123 @ ep6`。KL 被 free-bits 完全截断（`clamped_ratio → 0.980`），`mu_diff²` 腰斩（0.0256→0.0024），future MSE ep9 后平台化。完整曲线、逐类别拆解与归因见 `docs/training_runs_full.md` 第 50.6 节。**该配置判为负结果，不再继续训练。**
