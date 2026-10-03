@@ -83,8 +83,6 @@ def main():
     load_checkpoint(model, a.checkpoint, map_location='cpu')
     model = model.cuda().eval()
     fusion = model.temporal_fusion
-    assert hasattr(fusion, '_last_h_t'), \
-        'target model does not stash _last_h_t (not an MCI variant)'
     latent_dim = fusion.latent_dim
 
     class A:
@@ -144,8 +142,9 @@ def main():
     # MCI: h_t does not flow through a module whose hook could capture it
     # (the dynamic-gated GRU calls the cell convs directly); read the
     # eval-mode stash of the LAST (current) frame instead.
-    h_t = fusion._last_h_t
-    assert h_t is not None, 'eval run did not stash _last_h_t'
+    assert hasattr(fusion, '_last_h_t') and fusion._last_h_t is not None, \
+        'eval run did not stash _last_h_t (not an MCI variant or no forward)'
+    h_t = fusion._last_h_t.detach().float()
     h_t = h_t.detach().float()
     if hasattr(fusion, '_posterior_observation'):
         e_pooled = fusion._posterior_observation(captured['e_t'])

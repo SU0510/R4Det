@@ -22,11 +22,11 @@ set -u
 cd /home/lurui/workspace/R4Det
 
 TRAIN_SESSION=mci_ep6
-LOG=/tmp/mci_ep6.log
+LOG=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_mci_2x4_24e_seed0/stdout.log
 WORK_DIR=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_mci_2x4_24e_seed0
 CFG=me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_mci.py
 CKPT="$WORK_DIR/epoch_6.pth"
-WATCH_LOG=/tmp/mci_ep6_watch.log
+WATCH_LOG=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_mci_2x4_24e_seed0/watch_ep6.log
 
 START_TS=$(date +%s)
 echo "[watch] $(date -u '+%F %T') waiting for ep6 val + checkpoint (start ts $START_TS) ..." >> "$WATCH_LOG"
@@ -58,24 +58,24 @@ echo "[watch] $(date -u '+%F %T') GPUs released; running probes" >> "$WATCH_LOG"
 # shellcheck disable=SC1091
 source .envrc
 
-CUDA_VISIBLE_DEVICES=5 python tools/diagnose_z_utilization.py \
+CUDA_VISIBLE_DEVICES=5 python me_rssm/sanity/probe_z_utilization_gated.py \
   --config "$CFG" --checkpoint "$CKPT" \
   --start-index 3 --limit 4 --batch-size 4 --shuffle-offset 2 \
-  --output /tmp/z_util_mci_ep6_w3.json >> "$WATCH_LOG" 2>&1
+  --output /data/lurui/work_dirs/fgfull_N4_no2d_igdr_mci_2x4_24e_seed0/z_util_gated_ep6_w3.json >> "$WATCH_LOG" 2>&1
 
-CUDA_VISIBLE_DEVICES=6 python tools/diagnose_z_utilization.py \
+CUDA_VISIBLE_DEVICES=6 python me_rssm/sanity/probe_z_utilization_gated.py \
   --config "$CFG" --checkpoint "$CKPT" \
   --start-index 100 --limit 4 --batch-size 4 --shuffle-offset 2 \
-  --output /tmp/z_util_mci_ep6_w100.json >> "$WATCH_LOG" 2>&1
+  --output /data/lurui/work_dirs/fgfull_N4_no2d_igdr_mci_2x4_24e_seed0/z_util_gated_ep6_w100.json >> "$WATCH_LOG" 2>&1
 
-CUDA_VISIBLE_DEVICES=7 python tools/diagnose_z_utilization.py \
+CUDA_VISIBLE_DEVICES=7 python me_rssm/sanity/probe_z_utilization_gated.py \
   --config "$CFG" --checkpoint "$CKPT" \
   --start-index 1800 --limit 4 --batch-size 4 --shuffle-offset -1 \
-  --output /tmp/z_util_mci_ep6_w1800.json >> "$WATCH_LOG" 2>&1
+  --output /data/lurui/work_dirs/fgfull_N4_no2d_igdr_mci_2x4_24e_seed0/z_util_gated_ep6_w1800.json >> "$WATCH_LOG" 2>&1
 
-CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py \
+CUDA_VISIBLE_DEVICES=5 python me_rssm/sanity/probe_posterior_source_gated.py \
   --config "$CFG" --checkpoint "$CKPT" \
   --start-index 3 --limit 4 --stride 700 \
-  --output /tmp/post_source_mci_ep6_stride700.json >> "$WATCH_LOG" 2>&1
+  --output /data/lurui/work_dirs/fgfull_N4_no2d_igdr_mci_2x4_24e_seed0/post_source_gated_ep6_stride700.json >> "$WATCH_LOG" 2>&1
 
 echo "[watch] $(date -u '+%F %T') probes done; gate decision is a manual step" >> "$WATCH_LOG"

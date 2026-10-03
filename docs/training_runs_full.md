@@ -11011,3 +11011,165 @@ python3 tools/summarize_run.py $WD --window 12-16
 - **所有后续正式 run 继续按 ep12-16 五轮等权均值为横向口径**；18e 之类不同
   长度的 run 必须写明实际窗口跨度与样本数，并列写全轮峰值（值 + epoch）
   与 best saved，禁止用单个 `BEST` 混淆三者。
+
+## 68. MCI-RSSM（测量条件化 Innovation RSSM）：实现、验证、450 iter 机制冒烟与 24e ep6 门控启动（2026-10-03）
+
+### 68.0 摘要
+
+- **MCI 已实现并通过全部静态验证**：37 条单测（含 E1/E2/E3 三种逐位等价、
+  checkpoint/RNG 契约、门控语义）+ 配置构建审计（9 配置加载、单变量隔离、
+  预训练键集、主线与 7 消融的 DDP 未用参数审计）全绿；temporal 参数
+  **+0.416M**（与 ME-RSSM 设计估计 +0.42M 一致）。本节之前文档中「MCI 尚未
+  训练」的状态自此更新。
+- **450 iter 冒烟（3 卡 DDP，5/6/7）**：无 NaN/发散；`stat_obs_pred`
+  0.1126 → 0.0329（−71%，obs_prior 在学）；`stat_innovation_sq`
+  0.91 → 0.72 有界不塌缩；recon 0.953 → 0.149。
+- **身份信号（决定性机制指标，通过且大幅超线）**：干预对象为**最终 z_t**
+  （门控之后）的门控版反事实探针给出三窗 `shuffle_z` head
+  **3.67% / 3.35% / 3.57%**，为 MAI 同期 450 iter（0.369–0.580%）的
+  **6–10 倍**；且 **shuffle/zero = 1.06–1.26** —— 本项目全部历史变体
+  （标准主线、低维 A/B/C、MAI）该比值都在 0.03–0.13、即 z 的因果作用以
+  公共偏置为主，MCI 是第一个 shuffle ≥ zero 的变体，说明 head 对 z 的
+  响应第一次以样本内容为主（对应 review P1 的修复方向）。
+- **预登记门动态范围线未全过**：G2（时间散布）/G3（均值区间）通过，
+  G1（空间方差 >0.005）未过——correct 门 0.0028、readout 门 0.0034。
+  归因见 68.4：门 conv 权重 RMS 仅 0.0033–0.0040（典型 Xavier ~0.08 的
+  ~4%）且方差平台化与冒烟日程把 LR 退火到 4.7e-6 的时间点重合，判读为
+  「机制存活但发育不足 + 冒烟日程混淆」，**不据此止损**；GO/NO-GO 交给
+  预登记的 ep6 AP+机制联合门控（68.6）。
+- **R6 已启动**：MCI seed0 完整 24e（GPU 5/6/7，3 卡 DDP，15:34 UTC），
+  R7 看门狗将在 ep6 验证+权重落盘后自动停训并跑门控版三窗 + source 探针
+  （输出进 work_dir）。ep6 判定规则预登记见 68.6，结果待 68.7 补录。
+
+### 68.1 设计与实现（全部在 me_rssm/ 内，原项目零修改）
+
+- 新类 `MeasurementConditionedInnovationRSSMFusion`（`me_rssm/mci_rssm.py`），
+  继承 `MotionAlignedInnovationRSSMFusion`，合并三部分：
+  ① MAI 的 innovation posterior（`e_hat=obs_prior(h_t)`、
+  `innovation=e_obs−sg(e_hat)`、`mu_q=mu_p+posterior_mu([h,innovation])`）；
+  ② ME-RSSM 的 Doppler 三机制（C1 运动条件化对齐偏移、C3 动态证据调制
+  GRU 更新门 `u'=u+tanh(β)du(1−u)`、C2 模态观测 `e_obs=e_t+obs_proj(...)`
+  与置信 c_cam/c_mot）；
+  ③ **门控 correct 与门控 readout（P1 修复）**：
+  `z_t = z_sel + dev_c·(z_sel−mu_p)`、`output = feat + res + dev_r·res`，
+  `dev = tanh(conv([c_cam, c_mot, |innovation|↓]))` 零初始化。
+- 三个相对 ME-RSSM 原设计的关键修订（`me_rssm/docs/12_mci_rssm.md`）：
+  ① **偏差形式门控**：ME 的 `σ(conv+4)≈0.982` 起步不逐位；`1+tanh(·)` 零
+  初始化使初始行为与 MAI **逐位相同**（`mu_p+1.0*(z_sel−mu_p)` 有浮点重构
+  误差，偏差形式绕开）；② **门控输入加入 |innovation|**（06-P2 预登记），
+  经零初始化 1×1 conv 归约且 **detach**（门观察分歧度但不得成为压缩
+  innovation 的梯度捷径）；③ **条件构造**：开关关闭的模块根本不构造，
+  主线与全部消融在 DDP 下零未用参数（构造期 ValueError 校验非法组合）。
+- 7 个单变量消融配置 + stateinit 单变量 + 450 iter 冒烟配置全部落地；
+  `abl_no_modality_obs` 与 `abl_no_innovation` 存在**耦合开关组**（bus 组、
+  innovation 组），单变量隔离按组校验。
+
+### 68.2 静态验证（R1+R2，2026-10-03 通过）
+
+| 检查 | 结果 |
+|---|---|
+| R1 单测（`test_mci_rssm.py`） | **37/37 通过**（E1 空 bus、E2 开关全关、E3 全开新初始化三种逐位等价；MAI ckpt 键集/RNG 流；门梯度可达；innovation 幅值 detach；动态门概率不变式；`_z_intervention`/`_last_h_t` 挂点） |
+| R2 构建审计（`test_mci_config_build.py`） | M1 9 配置加载 ✓；M2 全模型构建 + 基链口径一致（`shared_stem=False`）✓；M3 消融单变量（组）隔离 ✓；M4 参数 **temporal +0.416M**（总量 58.35M vs MAI 57.93M）✓；M5 预训练键集除 43 个新 `temporal_fusion.*` 外与 MAI 完全一致（打包 ckpt 的 head 形状漂移是基链属性，MAI/MCI 相同）✓；M6 **主线 + 7 消融零未用参数** ✓ |
+| 运行期 DDP 佐证 | 冒烟与 24e 启动日志均出现 "did not find any unused parameters"（链上 `find_unused_parameters=True`） |
+
+过程中修复的真问题：MCI/冒烟配置 `_base_` 相对路径错误（会在任何训练启动
+时立刻失败）；耦合开关（`no_modality_obs` 须连带关 C1/C3、`no_innovation`
+须连带关 `innov_in_gain`）；打包预训练 ckpt 的 head 形状漂移（56/16 vs
+84/24，键集对比规避）。
+
+### 68.3 R3：450 iter 机制冒烟（work_dir `/data/lurui/work_dirs/mci_smoke_450iter`）
+
+运行事实：GPU 5/6/7、3 卡 DDP、seed 0、`--deterministic`、IterBasedRunner
+450 iter、配置 `me_rssm/sanity/mci_smoke_450iter.py`；显存 19.5 GiB/卡
+（稳态）、1.61–1.71 s/iter；`iter_450.pth` 落盘；EXIT=0，全程无 NaN/Inf。
+日志与全部探针输出均在 work_dir 内（`stdout.log`、`20261003_145320.log
+(.json)`、`probe_gated_*.log`、`z_util_gated_*.json`、
+`post_source_gated_stride700.json`）。
+
+逐 50 iter 门控与观测曲线（训练日志 9 个记录点）：
+
+| iter | g_mean(correct) | g_std | r_mean(readout) | r_std | obs_pred | innov² | recon |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 50 | 0.9778 | 0.00091 | 0.9769 | 0.00095 | 0.1126 | 0.9149 | 0.9531 |
+| 150 | 0.9433 | 0.00234 | 0.9333 | 0.00276 | 0.0513 | 0.7153 | — |
+| 250 | 0.9348 | 0.00269 | 0.9209 | 0.00327 | 0.0426 | 0.7109 | — |
+| 350 | 0.9327 | 0.00277 | 0.9180 | 0.00338 | 0.0334 | 0.7261 | — |
+| 450 | 0.9326 | 0.00278 | 0.9180 | 0.00338 | 0.0329 | 0.7235 | 0.1488 |
+
+读数：obs_prior 单调学习（−71%）；innovation² 有界不塌缩；两个门的均值从
+1.0 移到 0.92–0.93（filter 学会平均上略微收缩校正）、空间方差单调上升但
+在 iter≈300 后平台化——与 cosine 把 LR 退火到 4.7e-6（iter 400）的时间点
+重合。
+
+### 68.4 R4：机制门控判定（预登记四项，docs/12 §5.1）
+
+| 预登记检查 | 结果 | 判定 |
+|---|---|---|
+| ① 训练健康 | 无 NaN；obs_pred −71%；innovation² 有界；recon/KL 与主线同量级 | **PASS** |
+| ② correct 门动态范围 | G2 时间散布 PASS、G3 均值 0.933∈(0.5,1.5) PASS；**G1 空间方差 0.0028 < 0.005** | **G1 FAIL** |
+| ③ readout 门动态范围 | 同形态（0.0034 < 0.005） | **G1 FAIL** |
+| ④ 身份信号 ≥ MAI 同期 | 三窗 shuffle_z 3.35–3.67% vs MAI 450iter 0.369–0.580%（**6–10 倍**）；shuffle/zero 1.06–1.26（历史全部变体 0.03–0.13） | **PASS（大幅）** |
+
+三窗反事实（干预对象 = 门控之后的最终 z_t，`probe_z_utilization_gated.py`）：
+
+| 窗口 | shuffle_z head | zero_z head | shuffle/zero | prior_only |
+|---|---:|---:|---:|---:|
+| w3（近，idx3-6） | 3.667% | 2.920% | 1.256 | 1.260% |
+| w100（中，idx100-103） | 3.345% | 3.146% | 1.063 | 1.179% |
+| w1800（远，idx1800-1803） | 3.565% | 2.877% | 1.239 | 1.148% |
+
+source 探针（`probe_posterior_source_gated.py`，跨场景 stride=700）：
+`innovation` specific **37.5% > e_pooled 33.8%**（obs_prior 确实削掉公共
+成分）；`correction` specific 21.1%；`h/e` removal 比 1.627（450 iter 时
+posterior 仍偏 h 侧——MAI 同期 450 iter 也未反转、到 ep6 才降到 <1，属
+同形态早期状态）；门 conv 权重 RMS 0.0033/0.0040。
+
+**G1 的归因与处置（如实记录，不改线）**：G1 按预登记线未过。三条证据
+支持「发育不足」而非「机制死亡」：① 门均值显著移动（G2/G3 过，梯度通）；
+② 门 conv 权重已离开零点但仅达典型尺度的 ~4%；③ 方差平台化与 LR 退火到
+近零重合，不是梯度消失。按 docs/12 预登记的判定结构，450 iter 冒烟的
+职能是排除死机制与 NaN，GO/NO-GO 由 ep6 AP+机制联合门控承担——该门控
+复测门动态范围（此时 LR 已在真实日程下运行 6 epoch）。
+
+### 68.5 探针兼容性三修复（全部 me_rssm 侧，tools/ 零修改）
+
+1. **zero_z 逐位断言失效**：原工具经 prior/posterior 钩子使 `mu_q` 精确
+   等于期望值，对 MAI（`z_t==mu_q`）逐位成立；MCI 的门控在钩子之后重新
+   混入 `−dev·mu_p`，断言拦下（干预实际 ~93% 生效）。修复：类内新增
+   `_z_intervention` 挂点（在门控之后、decoder/readout/state 之前对最终
+   z_t 施加干预），`me_rssm/sanity/probe_z_utilization_gated.py` 复用原
+   工具全部数据管线与打分函数，仅替换干预机制；干预后 `out[4]` 逐位等于
+   期望值。
+2. **h_t 钩子失效**：原 source 探针在 `transition`（ConvGRUCell）上挂
+   forward hook，但 MCI 的动态门实现直接调用 cell 卷积、cell forward 不
+   被调用，`KeyError: 'h_t'`。修复：类内 eval 模式暂存 `_last_h_t`
+   （训练置 None，零开销），`probe_posterior_source_gated.py` 改读暂存。
+3. **观测重组失真**：原 source 探针重组 innovation 假设观测为
+   `encoder(feat)`，MCI 实际条件于 `e_obs=e_t+obs_proj(...)`。修复：类内
+   实现 `_posterior_observation(e_t)`（eval 前向暂存 detach 残差），
+   探针精确重组；shuffle/zero 干预改写 `posterior_mu` 输出、与本差异无关。
+   三项均有单测覆盖（37 条中新增 5 条）。
+
+### 68.6 R6+R7：24e seed0 ep6 门控（已启动，结果待 68.7）
+
+- **运行**：`fgfull_N4_no2d_igdr_mci_2x4_24e_seed0`，GPU 5/6/7、3 卡 DDP、
+  seed 0、`--deterministic`、2026-10-03 15:34 UTC 启动；配置
+  `me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_mci.py`
+  （主线 MCI：全开七开关、`state_init='zero'`）；stdout 与全部日志进
+  work_dir。tmux `mci_ep6` + 看门狗 `mci_ep6_watch`
+  （`me_rssm/sanity/watch_mci_ep6.sh`，日志/探针输出全部进 work_dir）。
+- **ep6 预登记判定规则**（沿用 MAI §62.9 口径，不因本轮结果修改）：
+  - AP：ep6 Overall 3D moderate vs no2d_igdr seed0 同 epoch **34.0243**；
+    差距 ≤1 → 续 ep12；1–2 → 记录后到 ep12 再判；>2 → 止损。
+  - 机制：三窗 `shuffle_z` ≥0.2%（继续门槛）；`innovation specific >
+    e_pooled`；`stat_gain_*/readout` 动态范围复测（G1 在真实日程下重判）；
+    **Ped/Cyc 黄旗**：ep1-6 逐类别 Ped loose 相对同窗基线 −2 以上即记
+    负向信号（review P9 预登记观察点）。
+  - 附注：同批 450 iter 冒烟的对照基线是 MAI 450 iter
+    （shuffle_z 0.369–0.580%）；ep6 的对照是 MAI ep6（0.73–1.09%）与
+    标准主线 ep6（3.30%/3.36% 近/中距）。
+
+### 68.7 ep6 门控结果（进行中，自动停训后补录）
+
+（占位：看门狗在 ep6 验证+`epoch_6.pth` 落盘后自动停训并执行三窗 +
+source 探针；结果与本节判定由下一次更新补齐。）
