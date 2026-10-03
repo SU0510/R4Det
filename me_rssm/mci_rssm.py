@@ -103,6 +103,12 @@ __all__ = ['MeasurementConditionedInnovationRSSMFusion']
 @FUSION_LAYERS.register_module()
 class MeasurementConditionedInnovationRSSMFusion(
         MotionAlignedInnovationRSSMFusion):
+    # Probe-only intervention hook (me_rssm/sanity/probe_z_utilization_gated.py):
+    # when not None, a callable z_t -> z_t' applied to the FINAL latent
+    # (after the correct gate, before decoder/readout/state write) so a
+    # counterfactual can replace exactly what the head consumes. None in
+    # training/eval -> a no-op branch, never a parameter.
+    _z_intervention = None
     """MAI backbone + Doppler-conditioned predict + reliability-gated
     correct and readout. See the module docstring for the full design.
 
@@ -653,6 +659,13 @@ class MeasurementConditionedInnovationRSSMFusion(
         else:
             x = z_aligned
         h_t = self._gru_with_dynamic_gate(x, h_aligned, dyn_map)
+        if not self.training:
+            # Probe stash (probe_posterior_source reads h_t for its
+            # decomposition); the dynamic-gated GRU calls the cell's convs
+            # directly, so a module hook on `transition` never fires.
+            self._last_h_t = h_t.detach()
+        else:
+            self._last_h_t = None
 
         # ---- 3. prior: p(z_t | h_t) -------------------------------------
         mu_p = self.prior_mu(h_t)
@@ -708,6 +721,12 @@ class MeasurementConditionedInnovationRSSMFusion(
             z_t = z_sel + g_c_dev * (z_sel - mu_p)
         else:
             z_t = z_sel
+
+        # Probe-only counterfactual point: everything below (KL inputs are
+        # mu_q/mu_p, unaffected; decoder, readout, state write) consumes the
+        # intervened latent, i.e. exactly what the head would see.
+        if self._z_intervention is not None:
+            z_t = self._z_intervention(z_t)
 
         # ---- 7. KL (inherited, incl. free-bits + stats) ------------------
         kl, stats = self.kl_loss(mu_q, logstd_q, mu_p, logstd_p)

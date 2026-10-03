@@ -723,6 +723,58 @@ class TestMCIStateSemantics(unittest.TestCase):
         self.assertTrue(torch.equal(reconstructed, expected))
         ModalityContext.clear()
 
+    def test_z_intervention_hook_is_exact_and_readout_follows(self):
+        """The probe counterfactual must replace the FINAL z_t exactly.
+
+        With _z_intervention set, out[4] is the intervened tensor bitwise
+        and the readout (out[0]) is recomputed from it; with it None the
+        forward is untouched.
+        """
+        torch.manual_seed(23)
+        mai = _build_small_mai()
+        torch.manual_seed(23)
+        mci = _build_small_mci(use_motion_offsets=False,
+                               use_dynamic_gate=False,
+                               use_reliability_gain=False)
+        copy_weights(mai, mci)
+        feat = torch.randn(1, 32, 8, 10)
+        set_bus(1, (8, 10), 32)
+        mai.reset_state()
+        mci.reset_state()
+        with torch.no_grad():
+            out_id = mci(feat, use_posterior=True, deterministic=True)
+        mci._z_intervention = lambda z: torch.zeros_like(z)
+        mci.reset_state()
+        with torch.no_grad():
+            out_zero = mci(feat, use_posterior=True, deterministic=True)
+        mci._z_intervention = None
+        self.assertTrue(torch.equal(
+            out_zero[4], torch.zeros_like(out_zero[4])))
+        self.assertFalse(torch.allclose(out_zero[0], out_id[0]))
+        mci.reset_state()
+        with torch.no_grad():  # hook removed -> back to identity start
+            out_again = mci(feat, use_posterior=True, deterministic=True)
+        self.assertTrue(torch.equal(out_again[0], out_id[0]))
+        ModalityContext.clear()
+
+    def test_eval_stashes_last_h_t_for_source_probe(self):
+        fusion = _build_small_mci(use_motion_offsets=False,
+                                  use_dynamic_gate=False,
+                                  use_reliability_gain=False,
+                                  use_gated_readout=False,
+                                  use_modality_obs=False)
+        feat = torch.randn(1, 32, 8, 10)
+        fusion.reset_state()
+        with torch.no_grad():
+            _, _, _, h_t, _, _ = fusion(feat, use_posterior=True,
+                                        deterministic=True)
+        self.assertIsNotNone(fusion._last_h_t)
+        self.assertTrue(torch.equal(fusion._last_h_t, h_t))
+        fusion.train()  # training forwards must not hold eval stashes
+        with torch.no_grad():
+            fusion(feat, use_posterior=True, deterministic=True)
+        self.assertIsNone(fusion._last_h_t)
+
     def test_use_prior_only_falls_back_to_prior_mean(self):
         fusion = _build_small_mci(use_motion_offsets=False,
                                   use_dynamic_gate=False,
