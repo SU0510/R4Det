@@ -31,6 +31,9 @@ me_rssm/
 ├── stash_fusion.py              # ConcatConvFusionStash（基线融合 + 发布输入）
 ├── motion_evidence_rssm.py      # MotionEvidenceRSSMFusion（核心模块）
 │                                #   含 state_init='obs'（P1 可学习初始状态，见 docs/07）
+├── mci_rssm.py                  # MeasurementConditionedInnovationRSSMFusion
+│                                #   合并模型（MAI innovation posterior × ME-RSSM 三机制
+│                                #   × 可靠性门控读出；docs/12，2026-10-02 备齐未训练）
 ├── queue_me_rssm_seed0.sh       # 训练队列：等 GPU 空闲后自动启动主线 seed0
 ├── configs/
 │   ├── TJ4D-R4Det_me_rssm_N4_24e_pretrained_v2_head.py   # 主线（继承 clean mainline）

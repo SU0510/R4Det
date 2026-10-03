@@ -20,6 +20,7 @@ from .radar_motion_chain import (MOTION_STAT_CHANNELS,
                                  RadarPillarFeatureNetMotion)
 from .stash_fusion import ConcatConvFusionStash
 from .motion_evidence_rssm import MotionEvidenceRSSMFusion
+from .mci_rssm import MeasurementConditionedInnovationRSSMFusion
 
 __all__ = [
     'ModalityContext',
@@ -28,4 +29,5 @@ __all__ = [
     'PointPillarsScatterMotion',
     'ConcatConvFusionStash',
     'MotionEvidenceRSSMFusion',
+    'MeasurementConditionedInnovationRSSMFusion',
 ]
