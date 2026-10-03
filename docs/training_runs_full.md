@@ -1422,6 +1422,62 @@ best 判定易错点及本次核对结果：
 - 已合规、无需处理的目录（仅 best saved + last）：`deterministic_latent_N4_2x4_24e_seed0`、`ped_centerhead_stage2_delta_3x2x2_3e_seed0`、`ped_centerhead_stage2_dim_3x2x2_6e_seed0`、`ped_highres_centerhead_3x2x2_3e_prior_smoke`、`ped_highres_centerhead_3x2x2_3e_seed0_smoke`、`ped_refine_N4_2x4_24e_seed0`、`pedrot4_N4_2x4_24e_seed0`、`posterior_only_learnable_std_N4_2x4_24e_seed0`、`rssm_N2_2x4_24e_pretrained_v2_head_bptt`、`rssm_N4_2x4_24e_pretrained_v2_head`、`rssm_N4_2x4_24e_pretrained_v2_head_bptt`、`rssm_N4_2x4_24e_pretrained_v2_head_dynmask`、`rssm_N4_2x4_24e_pretrained_v2_head_truck`、`rssm_N4_2x4_24e_pretrained_v2_head_truck_car2`、`rssm_N4_2x4_30e`、`rssm_N4_2x4_30e_lr2e4`、`rssm_N4_2x4_30e_pretrained`、`rssm_N4_fixednoise_posterior_seed0`、`seed1_ep15_restore`、`truck_tower_N4_2x4_24e_seed0`。
 - 非 checkpoint 的可回收项（未计入上表）：`diag_dumps/` 约 545 MB、各 run `figures_path/` 合计约 3.0 GB。这些是诊断/可视化中间产物，需按项目需要单独确认。
 
+#### 17.5.3 第二轮删除（2026-10-03，29 个 run，185 个文件，88.55 GB）
+
+触发原因：`/data` 已用 94%（剩 36 GB）。执行前逐 run 复核：best 判定按日志时间序合并
+（每 epoch 取最后一次 val，覆盖 MAI seed0 的三段重启日志）、在落盘权重集合内取 argmax
+独立复算两遍，并用四类构成项重算 `Overall_3D_moderate` 交叉验证；保留集合与 17.5.1
+待删行逐行比对一致，另覆盖 17.5.1 明确留给下一轮的 `no2d_igdr seed2` 与 2026-09-24
+之后完成的 run（MAI seed0/1/2、18e 主线、`lowdim_z_*` 五个 24e run）。全仓库
+`configs/ tools/ me_rssm/` 的 `load_from` / `resume_from` / `--checkpoint` 显式引用
+扫描确认无待删文件被引用。
+
+依赖保护（本轮新增一条，其余沿用 17.5 规则）：
+
+| 被引用的文件 | 引用方 | 处理 |
+|---|---|---|
+| `run10_headv2_multiseed/seed_1/epoch_14.pth` | `TJ4D-R4Det_ped_centerhead_stage1_3x2x2_12e_seed1.py`（load_from）、`..._seed1_restore_ep15.py`（resume_from） | 非 best 仍保留 |
+
+| run | 保留 best saved | 保留 last | 删除 epoch | 释放 |
+|---|---|---|---|---:|
+| `fgfull_N4_no2d_igdr_2x4_24e_seed2` | ep14 = 41.9586 | ep24 | 2-12, 16-22 | 6.40 GB |
+| `fgfull_N4_no2d_igdr_2x4_24e_seed1` | ep16 = 42.2904（全轮峰值 ep15 43.1449 无权重） | ep20 | 2-14, 18 | 5.12 GB |
+| `crossmodal_fusion_N4_2x4_24e_seed0` | ep16 = 39.2835（best+last） | — | 7-15 | 4.81 GB |
+| `run10_headv2_multiseed/seed_1` | ep12 = 39.0503 + ep14（依赖） | ep24 | 2-10, 16-22 | 4.81 GB |
+| `fgfull_N4_no2d_igdr_mai_2x4_24e_seed0` | ep16 = 41.4160（best+last） | — | 2-14 | 4.53 GB |
+| `fgfull_N4_no2d_igdr_2x4_18e_seed0` | ep16 = 40.3094 | ep18 | 2-14 | 4.48 GB |
+| `cyccls_branch_..._multiseed/seed_1` | ep15 = 39.7104 | ep22 | 13,14,16-21 | 4.34 GB |
+| `cyccls_branch_..._multiseed/seed_2` | ep14 = 40.1627 | ep18 | 9-13,15-17 | 4.34 GB |
+| `shared_stem_N4_2x4_24e_seed0` | ep14 = 40.3045 | ep16 | 7-13, 15 | 4.33 GB |
+| `fgfull_N4_temporal_baseline_seed0` | ep18 = 37.6587（峰值 ep11 39.5431 无权重） | ep20 | 2-16 | 4.33 GB |
+| `rssm_kl0_N4_2x4_24e_seed0` | ep22 = 40.3481 | ep24 | 15-21, 23 | 4.28 GB |
+| `rssm_kl0_N4_2x4_24e/seed_1` | ep20 = 41.0994 | ep24 | 15-19, 21-23 | 4.28 GB |
+| `rssm_kl0_N4_2x4_24e/seed_2` | ep17 = 36.7634 | ep24 | 15,16,18-23 | 4.28 GB |
+| `fgfull_N4_no2d_igdr_mai_2x4_24e_seed1` | ep6 = 42.7727 | ep16 | 2,4,8-14 | 3.88 GB |
+| `fgfull_N4_no2d_igdr_mai_2x4_24e_seed2` | ep12 = 41.3163 | ep16 | 2-10, 14 | 3.88 GB |
+| `no_temporal_N4_2x4_24e_seed0` | ep20 = 35.5903 | ep24 | 15-19, 21-23 | 3.33 GB |
+| `lowdim_z_recon_ht_3x2x2_24e_seed0` | ep12 = 33.6799（峰值 ep13 34.7784 无权重） | — | 2-10 | 2.65 GB |
+| `lowdim_z_innovation_rawnorm_oc_3x2x2_24e_seed0` | ep12 = 34.9091（峰值 ep7 35.9549 无权重） | — | 2-10 | 2.65 GB |
+| `lowdim_z_future_consistent_3x2x2_24e_seed0` | ep6 = 34.4123（峰值 ep9 35.6352 无权重） | ep12 | 2,4,8,10 | 2.11 GB |
+| `ped_centerhead_stage1_3x2x2_12e_seed0` | ep7 = 39.8520（依赖+best） | ep12 | 1-6, 8-11 | 1.83 GB |
+| `ped_centerhead_stage1_3x2x2_12e_seed2` | ep1 = 39.6863 | ep12 | 2-11 | 1.83 GB |
+| `ped_centerhead_stage1_3x2x2_12e_seed1` | ep6 = 38.1387 | ep10 | 1-5, 7-9 | 1.46 GB |
+| `lowdim_z_innovation_rawnorm_3x2x2_24e_seed0` | ep6 = 32.8980（峰值 ep5 33.8487 无权重） | — | 2,4 | 1.06 GB |
+| `lowdim_z_innovation_routeB_3x2x2_24e_seed0` | ep6 = 31.4895（峰值 ep5 34.8551 无权重） | — | 2,4 | 1.06 GB |
+| `ped_highres_centerhead_gradfix_3x2x2_6e_seed0` | ep6 = 39.7887（best+last） | — | 1-5 | 0.96 GB |
+| `ped_highres_centerhead_identity_3x2x2_6e_lr1e-4_seed0` | ep5 = 39.4565 | ep6 | 1-4 | 0.77 GB |
+| `ped_highres_centerhead_gradfix_3x2x2_3e_seed0` | ep3 = 39.6302（best+last） | — | 1,2 | 0.38 GB |
+| `ped_highres_centerhead_3x2x2_3e_seed0_raw` | ep2 = 32.7200 | ep3 | 1 | 0.19 GB |
+| `ped_centerhead_stage2_delta_ioufix_3x2x2_3e_seed0` | ep1 = 39.8566 | ep3 | 2 | 0.18 GB |
+
+删除后复验全部通过：29/29 目录只剩预定保留集合；全仓库 `latest.pth` 悬挂检查 0 个；
+5 个依赖权重（run10 三 seed 的 ep16/ep14/ep14、stage1 seed0 ep7、`fgfull_N4_2x4_24e_seed0`
+ep16）全部在位。`/data` 可用空间 36 GB -> 132 GB（已用 94% -> 77%）。
+
+范围说明：本轮只做中间 epoch 清理（17.5.1 待删行 + 其后完成的 run）。已停止分支的
+整目录删除（`rssm_N4_2x4_30e*`、`pretrained_v2_head*` 变体等，合计约 24 GB）与
+`diag_dumps/`、`figures_path/` 仍待后续单独确认；`mci_smoke_450iter` 为进行中的
+MCI 冒烟 run，未纳入。
 
 ---
 
@@ -11037,9 +11093,14 @@ python3 tools/summarize_run.py $WD --window 12-16
   ~4%）且方差平台化与冒烟日程把 LR 退火到 4.7e-6 的时间点重合，判读为
   「机制存活但发育不足 + 冒烟日程混淆」，**不据此止损**；GO/NO-GO 交给
   预登记的 ep6 AP+机制联合门控（68.6）。
-- **R6 已启动**：MCI seed0 完整 24e（GPU 5/6/7，3 卡 DDP，15:34 UTC），
-  R7 看门狗将在 ep6 验证+权重落盘后自动停训并跑门控版三窗 + source 探针
-  （输出进 work_dir）。ep6 判定规则预登记见 68.6，结果待 68.7 补录。
+- **R6 ep6 门控已完成（2026-10-03 21:57 UTC 自动停训+探针）→ 判定 GO**：
+  ep6 Overall 3D moderate **40.6612** vs no2d_igdr seed0 同 epoch 34.0243，
+  **Δ = +6.6369**（预登记 ≤1 即续训）；逐类 Car strict +11.19 / Truck
+  strict +11.26 / Cyc loose +7.01，Ped loose **−2.92** 触发预登记黄旗
+  （记录为负向信号，非止损项）。机制：三窗 shuffle_z 1.40–2.56%（继续
+  门槛 0.2% 大幅通过）、h/e 依赖比 **0.569**（观测主导）、innovation
+  specific 63.9%；门动态范围 G1 复测通过（空间方差 0.0213 > 0.005，确认
+  冒烟期 G1 失败为日程混淆）。已按预登记规则**续训至 ep12**（68.8）。
 
 ### 68.1 设计与实现（全部在 me_rssm/ 内，原项目零修改）
 
@@ -11169,7 +11230,58 @@ posterior 仍偏 h 侧——MAI 同期 450 iter 也未反转、到 ep6 才降到
     （shuffle_z 0.369–0.580%）；ep6 的对照是 MAI ep6（0.73–1.09%）与
     标准主线 ep6（3.30%/3.36% 近/中距）。
 
-### 68.7 ep6 门控结果（进行中，自动停训后补录）
+### 68.7 ep6 门控结果（2026-10-03 21:57 UTC 看门狗自动停训+探针，判定 GO）
 
-（占位：看门狗在 ep6 验证+`epoch_6.pth` 落盘后自动停训并执行三窗 +
-source 探针；结果与本节判定由下一次更新补齐。）
+**逐 epoch 曲线（ep1-6，Overall 3D moderate）**：
+
+| epoch | 1 | 2 | 3 | 4 | 5 | 6 |
+|---:|---:|---:|---:|---:|---:|---:|
+| MCI seed0 | 19.7734 | 29.3388 | 33.4914 | **40.4335** | 37.0786 | **40.6612** |
+| no2d_igdr seed0 | 15.2640 | 26.3716 | 31.6591 | 32.8506 | 34.0827 | 34.0243 |
+| MAI seed0 | — | — | — | — | — | 35.9289 |
+
+- **AP 门（预登记：Δ vs 34.0243，≤1 续 / 1–2 记录 / >2 止损）**：ep6
+  **Δ = +6.6369**，远超续训线；ep1-6 均值 33.4628 vs 基线 29.0420
+  （**+4.4208**）；BEV ep6 48.7393 vs 42.4084（+6.3309）。
+- **逐类 ep6（moderate，vs no2d_igdr seed0 同 epoch）**：Car strict
+  54.4681 vs 43.2792（**+11.1889**）；Truck strict 33.1899 vs 21.9299
+  （**+11.2600**）；Cyclist loose 50.7795 vs 43.7657（**+7.0138**）；
+  Pedestrian loose 24.2073 vs 27.1223（**−2.9150，黄旗触发**——review P9
+  预登记观察点：Ped 是 Doppler 证据最弱类（0.145），门控/预测通路对
+  Ped 的行为进 Analysis 章节，Ped 不进止损判据）。
+- **机制门（门控版探针，干预对象=门控后最终 z_t）**：三窗 `shuffle_z`
+  head **2.10% / 2.56% / 1.40%**——继续门槛 0.2% 大幅通过，近/中距越过
+  2% 论文线，远距 1.40% 未到；`shuffle/zero` = 0.080–0.094（zero_z
+  17.45–28.48%：公共偏置成分随训练回升，与 MAI 及全部前代在 ep6 阶段的
+  生命周期一致；冒烟期 1.06–1.26 的比值未保持，需在 Analysis 里按
+  「早期身份信号发育快、后期公共底色回归」如实描述）。
+- **source 探针**：`h/e` removal 比 **0.569**——posterior 首次在 ep6 深
+  度观测主导（MAI ep6 为 0.9996，标准主线 2.338 且随训练反向恶化）；
+  `innovation` specific **63.9% > e_pooled 45.5%**；`correction` specific
+  44.0%；`h_t` specific 8.0%、`mu_p` 6.1%。
+- **门动态范围复测（G1 在真实日程下重判）**：correct/readout 门 conv
+  权重 RMS **0.0339 / 0.0397**（冒烟期 0.0033/0.0040 的 ~10 倍）；
+  `stat_gain_std` 0.0213、`stat_readout_gain_std` 0.0220（> 0.005）——
+  **G1 复测通过**，68.4 的「日程混淆」归因被证实。另一重要读数：
+  `stat_gain_mean` 0.3758——correct 门学会**平均上强烈收缩校正**（更信
+  运动传播的预测），逐像素 std 0.0213 提供差异化调制，即设计目标的
+  Kalman 式行为已经出现。
+- **联合判定：GO（按预登记规则续 ep12）**。保留意见照旧：单 seed、单
+  epoch 对照，基线三 seed ep12-16 std 1.35；ep4 的 40.4335 与 ep6 的
+  40.6612 已高于 MAI 全轮峰值均值（41.83±1.38 量级需 ep12+ 复核）。
+
+### 68.8 续训 ep12（2026-10-03 22:02 UTC 启动）+ ep12 预登记规则
+
+- **运行**：`--resume-from epoch_6.pth`（优化器与 24e 日程状态保留），
+  tmux `mci_ep12` + 看门狗 `mci_ep12_watch`
+  （`me_rssm/sanity/watch_mci_ep12.sh`），stdout 进
+  `work_dir/stdout_ep12.log`，ep12 探针输出
+  `z_util_gated_ep12_*.json`、`post_source_gated_ep12_stride700.json`。
+- **ep12 预登记判定规则**（写于 ep7-12 任何 val 存在之前）：
+  - AP：ep8-12 五轮配对窗口均值 vs no2d_igdr seed0 同窗 **38.8906**：
+    ≥ **38.3906**（基线 −0.5）→ 续 ep16；< → 止损。参照线：MAI seed0
+    ep8-12 = 39.3392（MCI ≥ 该值即明确超过 MAI 同期）。
+  - 机制：三窗 `shuffle_z` ≥0.2% 维持；门空间方差 >0.005 维持；h/e <2
+    （不回到 h 主导极端）。
+  - Ped 黄旗升级条款：Ped loose ep8-12 相对基线差值 ≤−4 → 升级为红灯
+    记录（进 Analysis 专节），仍不改变 Overall 止损判据。
