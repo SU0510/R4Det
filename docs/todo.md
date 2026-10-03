@@ -136,6 +136,7 @@
    - ④ KL 口径改动**仍后置**：待结构有效性过 ep6 门控后再做 stop-gradient 拆分（`L_dyn=KL(sg(q)||p)`、`L_rep=KL(q||sg(p))`，建议 `beta_dyn=1.0`、`beta_rep=0.1`）与按 cell 聚合的 free-bits（沿 channel 求和后 ~1.0 nat/cell，先固定不退火）。**不要在缺重建项时单独调 free-bits。**
    - 低维 bottleneck 与排他未来任务这两个设计方向**尚未被证伪**；本轮证伪的是「在无重建锚定 + prior 脱离 `h_t` 的前提下使用它们」。标准 RSSM 的四条关键要素（prior 依赖 `h_t`、观测似然/重建项、KL balancing、输出吃 `(h_t,z_t)`）与逐条对照见第 50.6.7 节。
    - categorical/unimix 放在上述步骤之后验证，只在低维 z 仍表现出多峰/离散切换表达不足时再引入；不要直接把逐像素 256ch Gaussian 全量替换成 categorical。
+3. **框架级审查（2026-10-02，纯分析，无训练动作）**：遍历全部训练记录与代码后的 RSSM 机制级问题清单（P1 读出把 z 退化为公共偏置、P2 free-bits 短路 KL、P3 predict-correct 不闭环、P4 Doppler 未进动态、P7 机制-AP 解耦——含 seed1 ep16 探针新读数：机制读数良好但 AP −2.51）与改进路线（MAI×ME-RSSM 合并 + 可靠性门控读出 + state_init/差分重建）、实验序列建议（不打断当前 seed2/fgfull18 队列），见 `docs/rssm_review_20261002.md`。
 
 ## 已完成
 
