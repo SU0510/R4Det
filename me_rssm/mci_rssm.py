@@ -109,6 +109,7 @@ class MeasurementConditionedInnovationRSSMFusion(
     # counterfactual can replace exactly what the head consumes. None in
     # training/eval -> a no-op branch, never a parameter.
     _z_intervention = None
+
     """MAI backbone + Doppler-conditioned predict + reliability-gated
     correct and readout. See the module docstring for the full design.
 
@@ -764,6 +765,22 @@ class MeasurementConditionedInnovationRSSMFusion(
         if g_r is not None:
             stats['stat_readout_gain_mean'] = g_r.mean().detach()
             stats['stat_readout_gain_std'] = g_r.std().detach()
+        if not self.training and getattr(self, '_stash_gate_maps', False):
+            # Probe stash (probe_gate_spatial.py): per-pixel gate inputs and
+            # gate maps of the current frame, all detached. Enabled only by
+            # the probe; normal training/eval never touches this branch.
+            self._last_gate_maps = dict(
+                g_c=g_c.detach() if g_c is not None else None,
+                g_r=g_r.detach() if g_r is not None else None,
+                c_cam=ctx['c_cam'].detach() if have_ctx else None,
+                c_mot=ctx['c_mot'].detach() if have_ctx else None,
+                dyn=(ctx['dyn'].detach() if have_ctx
+                     and ctx['dyn'] is not None else None),
+                innov_mag=(self.innovation_mag_conv(
+                    innovation.detach().abs()).detach()
+                    if getattr(self, 'innovation_mag_conv', None) is not None
+                    and innovation is not None else None),
+            )
 
         # ---- 9. state storage (inherited detach semantics) ---------------
         if detach_state:

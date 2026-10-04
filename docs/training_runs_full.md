@@ -11347,6 +11347,51 @@ ep16 39.7467。
   基线三 seed 窗口 std 1.35；MCI 的 Ped 红灯与 Cyc −1.20 需要在多 seed
   下确认是否同样跨 seed 稳定。
 
+### 68.8e Ped 红灯的机制归因（2026-10-04，诊断中；判别探针待 GPU 窗口）
+
+**现象定性（已核实）**：
+1. Ped 回归是**检测级**（BEV loose 同步 −4.41，3D −4.07），不是高度/几何
+   估计问题；strict 双方恒 ≈0.2（§29-39 的锚点几何物理瓶颈未变化）。
+2. 回归**与 MAI 共享**：MAI seed0 ep12-16 Ped −3.40、ep13-16 走阔至
+   −2.49/−4.76/−0.79/−5.58；MCI ep13-16 为 −2.92/−3.19/−2.60/−8.65
+   （窗口 −4.34）。MCI 相对 MAI 只多 −0.67，**主嫌疑是两者共享的
+   innovation 后验，门控只叠加小项**。
+3. **统计性质**：基线 Ped ep13-16 四点 std≈2.5，窗口差 −4.07 ≈ 3.5σ，
+   是真实回归；但 ep16 单点两侧都最差（基线自身 28.02→34.25→28.02 的
+   大波动），绝对解读需多 seed。
+4. **时间线与门权重增长重合**（correct/readout conv RMS
+   0.034@ep6 → 0.041@ep12 → 0.050@ep16），且 MCI 早期 Ped 曾优于基线
+   （ep2 +7.33 / ep5 +6.16）——回归随门控增强而扩大。
+
+**机制链（按嫌疑排序）**：
+- H1（主嫌疑，MAI/MCI 共享）：`innovation = e_obs − sg(obs_prior(h_t))`
+  对 Ped 是大噪声——Ped 径向速度弱（docs/08：GT 点级动态分数 Ped
+  0.145 vs Car 0.315 / Cyc 0.488）、运动非刚性，obs_prior 预测不好，
+  innovation 偏大且不含可靠运动信息 → posterior delta 给 Ped BEV 注入
+  噪声。支持证据：MAI 无任何门控也回退 Ped −3.40。
+- H2（MCI 特有增量）：可靠性/读出门看到 Ped 区 c_mot/dyn 低 → 按设计
+  收缩校正与读出——但**基线的 Ped 收益恰恰来自无门控的完整时序融合**；
+  门的 fallback（μ_p 预测）对 Ped 没有运动信息可用，收缩 = 净损失。
+- H3（MCI 特有增量）：动态门以 Doppler 为证据，Ped 运动测不到 → 被判
+  「静态」→ 记忆更新放慢 → 运动 Ped 特征变陈旧。
+- 排除项：Cyc 是 Doppler 最强类（0.488）却只 −1.2/−1.4——「Doppler 弱
+  类必受伤」不成立；模式是**增益集中在 Doppler 强且刚性的 Car/Truck，
+  Ped 独特在于「是动态目标但测不到」**，与 §68.8d 红灯及预登记预测一致。
+
+**判别探针（已备齐，待 GPU 窗口执行）**：
+`me_rssm/sanity/probe_gate_spatial.py`（类内 `_stash_gate_maps` 挂点已
+落地并过单测）——在 Ped/Car/Cyc GT 中心与背景处采样 g_c/g_r/c_cam/c_mot/
+dyn/|innovation|，若 Ped 中心 c_mot/dyn/g_r 显著低于 Car 且 |innovation|
+偏高则坐实 H2/H3；若门值与 Car 无异则 H1 独大。seed1 训练占满 5/6/7
+（CPU 路线被 mmdet3d.ops 的 CUDA 导入断言封死），探针排入 seed1 停训
+后的同一 GPU 窗口。
+
+**候选缓解（用户决策，暂不动手）**：
+a. `modality_dropout>0` 训练压力，教 filter 在 Doppler 缺失时回退；
+b. 读出门非对称化（c_cam 高处不允许收缩到 1 以下）；
+c. 如实作为论文发现报告：测量条件化滤波以 Doppler 最弱类（Ped）为代价
+   换取强测量类的增益——与 docs/08 预注册的类别效应预测吻合。
+
 ### 68.8 续训 ep12（2026-10-03 22:02 UTC 启动）+ ep12 预登记规则
 
 - **运行**：`--resume-from epoch_6.pth`（优化器与 24e 日程状态保留），
