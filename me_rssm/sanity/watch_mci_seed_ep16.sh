@@ -13,7 +13,7 @@ cd /home/lurui/workspace/R4Det
 SEED="${SEED:-1}"
 SESSION="${SESSION:-mci_seed${SEED}}"
 LOG="${LOG:-/data/lurui/work_dirs/fgfull_N4_no2d_igdr_mci_2x4_24e_seed${SEED}/stdout.log}"
-WORK_DIR="/data/lurui/work_dirs/fgfull_N4_no2d_igdr_mci_2x4_24e_seed${SEED}"
+WORK_DIR="${WORK_DIR:-/data/lurui/work_dirs/fgfull_N4_no2d_igdr_mci_2x4_24e_seed${SEED}}"
 CFG=me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_mci.py
 CKPT="$WORK_DIR/epoch_16.pth"
 WATCH_LOG="$WORK_DIR/watch_seed${SEED}_ep16.log"
