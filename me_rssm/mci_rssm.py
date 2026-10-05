@@ -357,6 +357,18 @@ class MeasurementConditionedInnovationRSSMFusion(
         maps start moderately positive, the dynamic-evidence map starts
         'mostly static', dyn_beta is exactly 0. The gate convs get zero
         weight AND zero bias so 1 + tanh(0) = 1 exactly.
+
+        Deadlock note (2026-10-05, found by weight inspection after the
+        three-seed runs): ``innovation_mag_conv`` must NOT be zero-init.
+        Its output feeds the gate convs; if both it and the gate convs
+        start at zero, the innov channel's gradient is identically zero
+        forever (output == 0 -> downstream weight slice never grows ->
+        upstream never receives gradient) -- the section-38.10 dead-branch
+        pattern in its product-of-zeros form. Xavier-init breaks the
+        deadlock while the gate convs stay zero-init, so the identity-
+        start contract (dev == tanh(0) == 0) is unaffected. All MCI runs
+        before this fix trained with an inert innov channel (documented
+        in 68.8i); the fix lands with the pdrop10 follow-up generation.
         """
         zero_modules = [
             self.obs_proj if self.use_modality_obs else None,
@@ -364,10 +376,6 @@ class MeasurementConditionedInnovationRSSMFusion(
             self.motion_offset_z if self.use_motion_offsets else None,
             self.correct_gate_conv if self.use_reliability_gain else None,
             self.readout_gate_conv if self.use_gated_readout else None,
-            self.innovation_mag_conv if self.innov_in_gain
-            and self.posterior_mode == 'innovation'
-            and (self.use_reliability_gain or self.use_gated_readout)
-            else None,
             self.h_init_conv, self.z_init_conv,
         ]
         for m in zero_modules:
@@ -375,6 +383,12 @@ class MeasurementConditionedInnovationRSSMFusion(
                 continue
             nn.init.zeros_(m.weight)
             nn.init.zeros_(m.bias)
+        if getattr(self, 'innovation_mag_conv', None) is not None:
+            # Non-zero init: see the deadlock note above. The identity
+            # start is carried by the DOWNSTREAM gate convs (zero-init),
+            # not by this reduction.
+            nn.init.xavier_uniform_(self.innovation_mag_conv.weight)
+            nn.init.zeros_(self.innovation_mag_conv.bias)
         if self.use_modality_obs:
             nn.init.zeros_(self.conf_cam.weight)
             nn.init.zeros_(self.conf_mot.weight)

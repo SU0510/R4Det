@@ -362,6 +362,27 @@ class TestMCIGateSemantics(unittest.TestCase):
             fusion.readout_gate_conv.weight.grad.abs().sum().item(), 0.0)
         ModalityContext.clear()
 
+    def test_innovation_mag_conv_is_not_deadlocked(self):
+        """Regression for the 68.8i deadlock (product of two zero-inits).
+
+        innovation_mag_conv must start NON-zero: with the old zero-init,
+        its output was identically zero, the gate conv's innov-channel
+        slice received exactly zero gradient forever, and the reduction
+        never learned (found by weight inspection on the seed0-2 ep16
+        checkpoints: weight exactly 0 after 16 epochs). With Xavier init
+        the deadlock breaks one optimizer step after the gate conv moves;
+        the identity-start contract still holds because the GATE convs
+        remain zero-init (dev == tanh(0) == 0).
+        """
+        fusion = _build_small_mci()
+        self.assertGreater(
+            fusion.innovation_mag_conv.weight.abs().mean().item(), 0.0)
+        # E3 identity start unaffected: the gate map is still exactly 1.
+        gate_in = torch.randn(1, fusion.gate_in_channels, 8, 10)
+        self.assertTrue(torch.allclose(
+            fusion._correct_gain_map(gate_in), torch.ones_like(gate_in),
+            atol=1e-6))
+
     def test_innovation_magnitude_is_detached_for_gates(self):
         """The gate observes |innovation| but must not backprop into it.
 
