@@ -11347,6 +11347,32 @@ ep16 39.7467。
   基线三 seed 窗口 std 1.35；MCI 的 Ped 红灯与 Cyc −1.20 需要在多 seed
   下确认是否同样跨 seed 稳定。
 
+### 68.8g 主模型判定规则（预登记，写于 seed2 ep13-16 数据存在之前，2026-10-05）
+
+判定量：三 seed 配对窗口差 Δ = (Δ0, Δ1, Δ2)，均值 m，正项个数 k。
+当前 Δ0 = +0.8252、Δ1 = −0.7967、Δ2 待定（seed2 ep12 41.2289 已落，
+ep13 38.8122 在窗口内）。
+
+- **R-strong（m ≥ +0.5 且 k ≥ 2）**：MCI 定为主模型，论文同时主张
+  AP（per-seed paired Δ 口径）与机制；立即排 seed1/2 的 ep16 之上
+  无额外动作，主表直接成型。
+- **R-weak（0 ≤ m < +0.5）**：MCI 仍作主模型，但 AP 主张降级为
+  「on par with the strong baseline while adding measurement
+  conditioning」，论文重心放在机制贡献（identity signal 过 2% 线、
+  h/e 持续 <1、Kalman 门行为）+ Ped/类别效应的 Analysis 专节；
+  同时启动 Ped 缓解实验（modality_dropout>0 变体，单变量）作为
+  camera-ready 前迭代。
+- **R-neg（m < 0）**：MCI 不作主模型。两条子路：(a) 消融冒烟中若存在
+  单一开关关闭后机制与 AP 同优的简化配置（如 no_dynamic_gate），以
+  简化版重跑三 seed；(b) 否则论文改走机制级分析路线（预登记的负结果
+  框架），主模型决策推迟。
+- 附加条款（任何分支通用）：① 主表数字 = 逐 seed 配对窗口均值 +
+  全轮峰值 + best saved 三列并列，禁止单点 BEST；② 主模型定稿前对
+  三 seed 跑 checkpoint averaging（§45）复评一次作为稳健性附注；
+  ③ Ped 红灯无论哪个分支都必须带探针裁决结果写进 Analysis。
+- 本规则由三 seed 数据之外的信息（消融冒烟、空间探针）不触发改线；
+  它们的职能是解释与后续迭代，不参与本次主模型判定。
+
 ### 68.8f seed1 终判（2026-10-05 ~01:50 UTC ep16 自动停训+探针）与 seed2 接力
 
 - **AP**：ep12-16 = 41.1218（五轮 40.1829/41.8749/40.9726/41.7180/
