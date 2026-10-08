@@ -1,0 +1,26 @@
+{
+  "config": "me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_dcrssm1.py",
+  "num_frames": 300,
+  "cells_total": 64281600,
+  "cells_empty_frac": 0.9967861409796893,
+  "s_quantiles_q25_q50_q75": [
+    1.14540433883667,
+    1.4960383176803589,
+    2.248182535171509
+  ],
+  "d_quantiles_q25_q50_q75": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "c_mot_alpha1": 0.9068006633823289,
+  "c_mot_beta1": 1.3566085389179328,
+  "dyn_alpha2": 1000000.0,
+  "dyn_beta2": 0.0,
+  "operating_point": {
+    "measured_frac_above_knee_c_mot": 0.5005663336431226,
+    "measured_frac_above_knee_dyn": 0.211871708488228,
+    "empty_cell_c_mot": 0.2047920564826343,
+    "empty_cell_dyn": 0.5
+  }
+}

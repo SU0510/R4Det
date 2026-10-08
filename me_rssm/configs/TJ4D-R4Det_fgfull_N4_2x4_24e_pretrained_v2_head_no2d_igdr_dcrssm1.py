@@ -78,14 +78,20 @@ model = dict(
         # --- L3 physical evidence field (docs/13 step 1) -----------------
         use_physical_evidence=True,
         evidence_refine=True,
-        # Fixed calibration constants (sigmoid argument scale/shift).
-        # Defaults are the identity calibration (alpha=1, beta=0): the
-        # quantile-based one-shot calibration tool can overwrite them
-        # before launch; the gate compares whatever is written here.
-        c_mot_alpha1=1.0,
-        c_mot_beta1=0.0,
-        dyn_alpha2=1.0,
-        dyn_beta2=0.0,
+        # Fixed calibration constants (sigmoid argument scale/shift),
+        # one-shot calibrated from 300 val frames (300-frame stride
+        # sampling, ~64M cells; 99.68% empty). c_mot: dense IQR
+        # calibration (s = count*SNR, q25/q50/q75 = 1.145/1.496/2.248).
+        # dyn: SPARSE-POSITIVE calibration (d = v_std*count is 0 for
+        # 80.4% of measured cells; positive-only quantiles
+        # 0.0045/0.0097/0.0177) -- full-population IQR is 0, so the dense
+        # rule degenerates. static cells (d=0) map to sigma(-beta2)~0.32,
+        # median dynamic cell to 0.5: bimodal by construction. See
+        # me_rssm/sanity/evidence_field_calibration.json.
+        c_mot_alpha1=0.906801,
+        c_mot_beta1=1.356609,
+        dyn_alpha2=75.757576,
+        dyn_beta2=0.734849,
         cov_floor=0.0,
     ),
 )

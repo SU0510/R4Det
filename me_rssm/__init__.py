@@ -21,6 +21,7 @@ from .radar_motion_chain import (MOTION_STAT_CHANNELS,
 from .stash_fusion import ConcatConvFusionStash
 from .motion_evidence_rssm import MotionEvidenceRSSMFusion
 from .mci_rssm import MeasurementConditionedInnovationRSSMFusion
+from .evidence_field_rssm import EvidenceFieldInnovationRSSMFusion
 
 __all__ = [
     'ModalityContext',
@@ -30,4 +31,5 @@ __all__ = [
     'ConcatConvFusionStash',
     'MotionEvidenceRSSMFusion',
     'MeasurementConditionedInnovationRSSMFusion',
+    'EvidenceFieldInnovationRSSMFusion',
 ]
