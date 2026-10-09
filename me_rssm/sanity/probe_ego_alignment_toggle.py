@@ -327,14 +327,20 @@ def main():
         num = {t: 0.0 for t in passes}
         den = 0.0
         for t in range(1, n_frames):
+            # Pairing: the alignment call INSIDE forward t receives the
+            # state carried over from t-1 and warps it before the frame-t
+            # update, so its partner is forward t's output h_state -- both
+            # are frame-t quantities (carried-then-warped vs updated).
+            # Indexing the call at t-1 would compare the state carried out
+            # of t-2 against frame t (off by one frame).
             # calls are grouped per forward; call[0] is the h-state
-            # alignment (call[1] would be the z-state one)
-            call_off = passes['off'][t - 1]['calls']
-            call_lrn = passes['learned'][t - 1]['calls']
-            call_f1 = passes['forced1'][t - 1]['calls']
-            if not (call_off and call_lrn and call_f1):
+            # alignment (call[1] is the z-state one).
+            r_off, r_lrn = passes['off'][t], passes['learned'][t]
+            r_f1 = passes['forced1'][t]
+            if not (r_off['calls'] and r_lrn['calls'] and r_f1['calls']):
                 continue
-            call_off, call_lrn, call_f1 = call_off[0], call_lrn[0], call_f1[0]
+            call_off, call_lrn = r_off['calls'][0], r_lrn['calls'][0]
+            call_f1 = r_f1['calls'][0]
             canvas_t = call_off['canvas']
             if canvas_t is None:
                 continue
@@ -343,9 +349,9 @@ def main():
             if mask is None or int(mask.sum().item()) < 8:
                 continue
             m = mask.to(device)
-            h_curr_off = passes['off'][t]['h_state'].float()
-            h_curr_lrn = passes['learned'][t]['h_state'].float()
-            h_curr_f1 = passes['forced1'][t]['h_state'].float()
+            h_curr_off = r_off['h_state'].float()
+            h_curr_lrn = r_lrn['h_state'].float()
+            h_curr_f1 = r_f1['h_state'].float()
             warped_lrn = apply_module_warp(
                 call_lrn['state_in'].to(device).float(), call_lrn['grid'],
                 call_lrn['id_grid'])

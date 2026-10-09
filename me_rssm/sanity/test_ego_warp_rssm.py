@@ -692,15 +692,23 @@ class TestEgoWarpToggleHarness(unittest.TestCase):
         ModalityContext.clear()
 
     def test_align_calls_grouped_per_forward(self):
-        """One forward -> 2 calls (h then z); call[0] carries h_state."""
+        """One forward -> 2 calls (h then z); call[0] carries h_state.
+
+        Also pins the pairing the probe relies on: the state a forward
+        receives (call[0].state_in) is bitwise the PREVIOUS forward's
+        output h_state -- so pairing call(t) with h_state(t) compares the
+        carried-then-warped state against the same frame's update, which
+        is the pre-registered residual.
+        """
         ego = _build_ego()
         calls = []
+        h_after = []
 
         def pre_hook(module, inputs):
             calls.append([])
 
         def post_hook(module, inputs, output):
-            pass
+            h_after.append(module.h_state.detach().clone())
 
         orig = ego._align_with_motion
 
@@ -713,28 +721,33 @@ class TestEgoWarpToggleHarness(unittest.TestCase):
         h_pre = ego.register_forward_pre_hook(pre_hook)
         h_post = ego.register_forward_hook(post_hook)
         try:
-            feat = torch.randn(1, 32, H_FEAT, W_FEAT)
-            set_bus(flow_canvas((2.0, 0.0), B=1))
             ego.reset_state()
-            with torch.no_grad():
-                ego(feat, use_posterior=True, deterministic=True)
-            feat2 = torch.randn(1, 32, H_FEAT, W_FEAT)
+            for _ in range(2):
+                set_bus(flow_canvas((2.0, 0.0), B=1))
+                with torch.no_grad():
+                    ego(torch.randn(1, 32, H_FEAT, W_FEAT),
+                        use_posterior=True, deterministic=True)
+            # frame 3: mark the two states distinctly so the call order
+            # (h first, then z) is observable in the captured inputs
             set_bus(flow_canvas((2.0, 0.0), B=1))
-            # mark the two states distinctly: on frame 2 the states the
-            # module carries into the alignment are exactly these
             ego.h_state = torch.full_like(ego.h_state, 1.0)
             ego.z_state = torch.full_like(ego.z_state, -1.0)
             with torch.no_grad():
-                ego(feat2, use_posterior=True, deterministic=True)
+                ego(torch.randn(1, 32, H_FEAT, W_FEAT),
+                    use_posterior=True, deterministic=True)
         finally:
             ego._align_with_motion = orig
             h_pre.remove()
             h_post.remove()
-        self.assertEqual(len(calls), 2)
-        self.assertEqual([len(c) for c in calls], [2, 2])
-        first, second = calls[1]
-        self.assertAlmostEqual(float(first.mean()), 1.0, places=6)
-        self.assertAlmostEqual(float(second.mean()), -1.0, places=6)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual([len(c) for c in calls], [2, 2, 2])
+        # carried-over identity: frame 2 receives exactly frame 1's output
+        self.assertTrue(torch.equal(calls[1][0], h_after[0]))
+        # h and z calls carry different states
+        self.assertFalse(torch.allclose(calls[1][0], calls[1][1]))
+        # call[0] = h, call[1] = z
+        self.assertAlmostEqual(float(calls[2][0].mean()), 1.0, places=6)
+        self.assertAlmostEqual(float(calls[2][1].mean()), -1.0, places=6)
         ModalityContext.clear()
 
 
