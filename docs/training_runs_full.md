@@ -11830,6 +11830,21 @@ NMS 前后保留率。BN/验证状态审计作为 ep16 急跌的排除项。
   Overall_3D_moderate = 20.81（同一代际 DC-RSSM-1 的 ep1 = 21.76，
   差异在家族早轮噪声内；无过早崩塌迹象）。预计 ep16 gate 在 10-10
   05:00–08:00 UTC 命中（约 18–21 h），终判写入本节。
+- **终判工具已备（不代替判读）**：`me_rssm/sanity/dcrssm2_ep16_verdict.py`
+  （只读、CPU-only）读 val 曲线 + `ego_alignment_toggle_ep16.json`，一次输出
+  全轮曲线 / 峰值 / best saved（统一三口径）、ep12-16 窗口、四项 AP 判据、
+  机制三分类。已用 **DC-RSSM-1 的既有数据 dry-run 校验**：复现文档已记录的
+  窗口 39.2169、峰值 40.5929@ep10、Ped −3.8621、Cyc loose 43.9105，以及
+  §68.9h 引用的 Car loose 73.7487 / Truck loose 52.0163。
+- **口径钉死（写于 DC-RSSM-2 只有 ep1-2 时）**：Car/Truck 用 **strict**
+  （家族 canonical 逐类窗口表 §47.2 对照与 §68.8d 均用 Car strict / Truck
+  strict / Cyc loose / Ped loose；§68.9h 引的 73.75/52.02 是同一 run 的
+  **loose** 变体），Ped 用 loose 且阈 ≥ −1.5；Cyclist 仅作 context 报告、
+  **不加门**（MCI-v2 与 DC-RSSM-1 都在 Cyc loose 掉 4–5 分，值得记录，但
+  现在把它写进门控属于事后新增判据）。
+- 早轮读数（非判据，单轮不构成结论）：ep1 20.8122、ep2 32.1085；同代际
+  DC-RSSM-1 的 ep1 21.76 / ep2 28.64、主线 RSSM ep2 29.65。ep2 领先
+  ~2.5–3.5 分但仍在家族早轮波动带内，门控照旧只看 ep12-16 窗口。
 - **续训通道已预备（不自动执行）**：`me_rssm/sanity/continue_dcrssm2_ep16.sh`
   ——若 AP 门 PASS，从 `epoch_16.pth` **resume 到 ep24**（mmcv `--resume-from`
   恢复 epoch 计数，cosine 从 ep16 续接而非重启；新 epoch 追加进同一
