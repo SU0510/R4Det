@@ -64,7 +64,16 @@ while [ "$waited" -lt "$STOP_TIMEOUT_SEC" ]; do
   sleep 15
   waited=$((waited + 15))
 done
-echo "[watch] $(date -u '+%F %T') GPUs released after ${waited}s; running probes" >> "$WATCH_LOG"
+busy=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits \
+  -i 5,6,7 2>/dev/null | awk -F', ' '$2 > 2000 {n++} END {print n+0}')
+if [ "$busy" != "0" ]; then
+  # Same failure mode that cost the DC-RSSM-1 generation its probe pass:
+  # if the stop signal did not land, running the battery anyway only
+  # yields OOM garbage. Abort loudly; the operator reruns this script.
+  echo "[watch] $(date -u '+%F %T') ABORT: $busy of 3 GPUs still busy after ${waited}s (stop signal did not land?) -- no probes run, rerun this script" >> "$WATCH_LOG"
+  exit 1
+fi
+echo "[watch] $(date -u '+%F %T') GPUs 5/6/7 free after ${waited}s; running probes" >> "$WATCH_LOG"
 
 # shellcheck disable=SC1091
 source .envrc

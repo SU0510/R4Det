@@ -11815,6 +11815,11 @@ NMS 前后保留率。BN/验证状态审计作为 ep16 急跌的排除项。
   P1 z_utilization_gated(w3/w100/w1800)、P2 posterior_source_gated、
   P3 probe_ego_warp_sanity、P4 geometry dump+robust+robustfix、
   P5 alignment_toggle，日志 `watch_seed0_ep16.log`。
+  **加固（ep16 前，重臂一次）**：停训后先断言 GPUs 5/6/7 真的空闲，
+  不空闲则中止并留日志（不跑探针、不留 OOM 垃圾），避免重复 §68.9h
+  「stop 落空 → 探针 OOM」的时间损失；脚本改动后**重新臂了看门狗**
+  （运行中的 bash 会按字节偏移续读脚本，改文件不安全），watch log 记有
+  重臂原因；ep16 尚未到达，重臂不改变任何门控条件。
 - 训练现状（ep2 内）：warp_scale 6.5e-3@iter50（ep1）→ 峰值 4.16e-2，
   均值 2.96e-2；dt 0.107→0.140；stat_ego_speed 1.65–2.02（稳健带内）；
   static_frac 6.9e-3–7.9e-3、trim 0.756–0.787、solved ≈0.998。
