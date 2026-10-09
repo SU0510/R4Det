@@ -22,6 +22,7 @@ from .stash_fusion import ConcatConvFusionStash
 from .motion_evidence_rssm import MotionEvidenceRSSMFusion
 from .mci_rssm import MeasurementConditionedInnovationRSSMFusion
 from .evidence_field_rssm import EvidenceFieldInnovationRSSMFusion
+from .ego_warp_rssm import EgoWarpEvidenceFieldRSSMFusion
 
 __all__ = [
     'ModalityContext',
@@ -32,4 +33,5 @@ __all__ = [
     'MotionEvidenceRSSMFusion',
     'MeasurementConditionedInnovationRSSMFusion',
     'EvidenceFieldInnovationRSSMFusion',
+    'EgoWarpEvidenceFieldRSSMFusion',
 ]

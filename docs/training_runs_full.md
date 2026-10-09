@@ -11740,6 +11740,77 @@ NMS 前后保留率。BN/验证状态审计作为 ep16 急跌的排除项。
   `post_source_gated_ep16_stride700.json`、`probe_w*.log`、
   `watch_seed0_ep16.log`。
 
+### 68.9i DC-RSSM-2（+L1 解析 ego-warp）：预启动机制修正、冒烟门控与上线（2026-10-09，全部写于任何 24e 数据之前）
+
+- **背景**：§68.9h 判定 L3 单独上线被证伪，但 L1 针对的是**不同**根因
+  （对齐纯外观驱动；docs/08 静态点呈现 −v_ego 流场 → ego 运动可从 Doppler
+  解析自标定）。L1 是 DC-RSSM 方向最后一次尝试。
+- **根因定位（只读探针，先于任何训练）**：
+  - 几何先被证伪排除：`probe_ego_geometry_test.py` 对 canvas↔world 的
+    **8 种映射假设**逐一拟合，残差 RMS 全部落在假定映射的 10% 以内且假定
+    映射最优 → 布线/格尺寸/符号正确；LMedS 刚体场以 **0.013 m/s 中位残差**
+    解释 58–80% 的测量格。
+  - 真缺陷是**预登记的加权闭式解被运动格尾巴拉偏**：原规则 `w=count·SNR`
+    归一化后闭式解，实测被动目标强回波格权重可达静态格 ~100 倍，val 上
+    解算 inflation **+24%…+96%**（idx3 4.20–4.34 vs 真值 2.96–3.03；
+    idx703 3.19–3.62 vs 1.84–1.86；idx1403 1.73–1.87 vs 1.37–1.42）。
+  - IRLS-Huber 无效（inlier_frac@0.5 = 0.000，MAD 尺度自身被污染）→ 结论
+    是「稳健**集合**」而非「稳健权重」，落成四段流水线（分位预过滤 →
+    LMedS 播种 → MAD 裁剪 → 加权闭式解，docs/13 §2 L1）。
+    离线 12 帧验证误差 ≤0.2%。
+  - **两处反证据被证伪**：(i) 占用互相关位移（canvas 仅 0.3–1% 占用、
+    峰/背景比 1.9–2.1、被对向车流主导 → 8.8–16 m/s 垃圾值），仅作负对照
+    保留；(ii) docs/08 F1 的「7–13 m/s」是色标 **p98→max 尾统计**（正文
+    写明 98 分位自适应 ±2~±10），非均值——实测 p98 = 8.8–10.7、max 11.8–12.1
+    @idx3，与修正后的解算无矛盾。
+- **离线验证 + 单测**：W11 构造「静态场 + 8 个强回波同向运动格」
+  （w=8.4 vs 静态 0.3），断言朴素解误差 >0.15 m/s 而稳健解 <0.05 m/s，
+  且 trim_frac = 64/72（在预过滤集上归一化）；24/24 单测绿。
+- **冒烟 450 iter（v1 → v2）**：
+  - v1 用预登记加权解：stat_ego_speed 2.64–2.90（偏高）。
+  - v2 用稳健解：speed **1.74–1.99**（与稳健真值 1.40–3.03 一致）、
+    trim_frac≈0.78、τ_r≈0.21–0.23、static_frac 7.1e-3–7.7e-3、
+    solved 0.999；门控 **E1–E7 全 PASS**。
+  - E5 归一化修正：static_frac 是**整张 canvas** 的比例，TJ4D 测量格只占
+    0.3–1%，原草案 0.05 阈值放大约 100 倍，改为 5e-4（写在任何 AP 数据之前）。
+  - E8 修正（预登记改写，写于 ep16 前）：绝对线
+    `|warp_scale|·dt·|v_ego| > 1e-3 m` 在冒烟（450/10800 iter，cosine 已
+    衰减、AdamW 每步有效位移≈7% lr）实测 7.47e-4。改为 **E8a 冒烟判据 =
+    后 1/4 均值 ≥ 前 1/4 均值的 2 倍且斜率 >0**（实测 2.4×，
+    `dcrssm2_gate_report.py` PASS），**E8b 绝对线在 ep16 生效**并同时报告
+    「已施加/需求位移」占比（冒烟 0.38%，线性外推 iter 7200 = 4.7e-3 m）。
+    动机：把「机制从未被启用（UNEXERCISED）」与「机制被证伪（FAIL）」分开。
+- **预启动优化速率决定**：仅对 `temporal_fusion.dt` 与
+  `temporal_fusion.warp_scale` 设 lr_mult=5.0（实测 AdamW 有效步长≈7% lr；
+  单测确认 paramwise 命中这两个参数）。24e 上 warp_scale 6.5e-3@iter50 →
+  4.16e-2@iter1600；按此速率 ep16 落在解析最优量级（位移 = 需求的
+  10–100%），E8b 绝对线留有 60–200 倍余量。
+- **ep16 机制门（预登记，写于任何 24e 数据之前；探针
+  `probe_ego_alignment_toggle.py`，三趟 learned / 强制 1.0 / 0）**：
+  (a) 平均已施加位移 <1e-3 m → **UNEXERCISED**（AP 结论与机制无关，不写
+  「失败」）；(b) 非惰性时 learned vs 0 在 **≥8/10 clip** 降低静态格跨帧
+  残差（按 |h_curr| 归一化）→ **MECHANISM PASS**，否则 **MECHANISM FAIL**；
+  (c) 强制 1.0 为机制幅值对照（不依赖损失把标量落在哪里）。
+  探针镜像函数 + 逐前向调用分组假设由 **W12 单测**钉住（镜像解 == 模块
+  stash；镜像 warp == 解析位移 0.2 格；一次前向恰好 2 次对齐调用且
+  call[0]=h）——三趟 harness 因显存被训练占满无法端到端自检，故把
+  可离线部分全部前置验证。
+- **AP 门（预登记，承 §68.9h）**：ep12-16 配对窗口均值 ≥ 39.2809（基线）
+  且 ≥ 38.8786（v2−0.5），Ped 配对差 ≥ −1.5，Car/Truck 不回退。
+  **失败即停止 DC-RSSM 方向并记录**，不做超参扫描；论文转机制分析定位
+  （docs/rssm_paper_directions_20261008.md）。
+- **启动**：2026-10-09 10:54 UTC，`tmux dcrssm2`（GPUs 5/6/7，seed 0，
+  deterministic），work_dir `/data/lurui/work_dirs/fgfull_N4_no2d_igdr_dcrssm2_2x4_24e_seed0`；
+  ep16 看门狗 `tmux dcrssm2_watch`（`watch_dcrssm2_ep16.sh`，本代训练在
+  tmux 内启动，修掉 §68.9h 的 send-keys 落空事故）→ 停训后串行跑
+  P1 z_utilization_gated(w3/w100/w1800)、P2 posterior_source_gated、
+  P3 probe_ego_warp_sanity、P4 geometry dump+robust+robustfix、
+  P5 alignment_toggle，日志 `watch_seed0_ep16.log`。
+- 训练现状（ep1 内，iter 1900）：warp_scale 6.5e-3→4.2e-2 单调增长（无
+  零初值反弹）、dt 0.107→0.140、stat_ego_speed 1.65–2.01（稳健带内）、
+  static_frac 6.9e-3–7.9e-3、trim 0.756–0.787、solved ≈0.999。
+  预计 ep16 gate ~15 h 后命中（10-10 早间）。
+
 ### 68.10 结论汇总（截至 2026-10-05，覆盖 §62–68 全部训练与诊断）
 
 1. **AP 结论**：MCI 三 seed 配对差 +0.83 / −0.80 / −0.38（m=−0.12±0.69），

@@ -1,8 +1,12 @@
 # 13 · DC-RSSM：Doppler-Calibrated Recurrent State Space 设计文档
 
-> 状态（2026-10-07）：设计定稿，MCI-v2（第 0 步）已在训；L1/L2/L3/L4 待实现。
+> 状态（2026-10-09）：L3 证据场（DC-RSSM-1）已终判（AP 门 FAIL / 机制门
+> 3/4，§68.9h），作为 Ped 修复资产保留；**L1 解析 ego-warp 已实现并上线
+> DC-RSSM-2 24e seed0（tmux `dcrssm2` + ep16 看门狗）**，是 DC-RSSM 方向
+> 最后一次尝试。L2/L4 待 L1 判定。
 > 证据链：`docs/training_runs_full.md` §68.8i/68.9b（门控空间失明、Ped 死区
-> H1、innov 通道死锁）+ §68.10 结论汇总。原则沿用 me_rssm 全套纪律：
+> H1、innov 通道死锁）+ §68.9h（DC-RSSM-1 终判）+ §68.9i（L1 预启动修正与
+> 启动）+ §68.10 结论汇总。原则沿用 me_rssm 全套纪律：
 > 零初始化/恒等启动、单变量开关、450 iter 机制门 → ep6/ep16 AP 门、
 > 多 seed 配对终判。
 
@@ -40,18 +44,49 @@ L5 存量（MCI-v2）     innovation 后验 + [c_cam, c_mot, |inn|↓] 门控 co
 
 ## 2. 各层设计细节
 
-### L1 解析 ego-warp（新设计，旗舰）
+### L1 解析 ego-warp（新设计，旗舰；实现于 2026-10-08/09，规格见下）
 
-- 静态点集：`S = {cell: count≥1, v_std ≤ τ_s, |v̄_r| ≤ τ_v}`（τ 由分位数定，
-  无超参扫描）。
-- 闭式解：`v_ego* = argmin_{v∈R²} Σ_{p∈S} w_p (v̄_r(p) + v·û_r(p))²`，
-  w_p = count·SNR 归一化；2×2 正规方程，逐帧解算，**detached（测量）**。
-- 位移场：`Δp = v_ego·Δt`，Δt 为**可学标量**（TJ4D 无时间戳——诚实设计），
-  初始化取名义帧间隔；warp 施加于**慢通道 h_slow 与静态分量**（双线性，
-  grid_sample，detached），deformable 对齐只看残余。
-- 参数：+1（Δt）。novelty：pose-free 雷达-相机 BEV 的检测时自标定 ego 补偿
-  （CRT-Fusion 依赖 nuScenes 位姿；本设定下是必需而非选择——docs/09）。
-- 恒等启动：`warp_scale` 标量零初始化（乘在 Δp 上），训练中长出。
+- 静态点集（**稳健四段流水线**，实现 `me_rssm/ego_warp_rssm.py`，
+  2026-10-09 预启动修正后定稿）：
+  1. **分位预过滤**：`count≥1` 的测量格上取 τ_s=v_std 的 static_q 分位、
+     τ_v=speed 的 static_q 分位（static_q=0.9），`S⁰ = {v_std≤τ_s, speed≤τ_v}`；
+  2. **LMedS 播种**：粗网格 vx∈[−25,25] step 0.25 最小化**中位** |v̄_r+vx·û_x|，
+     再局部二维精化 vx±0.6 step 0.05、vy∈[−3,3] step 0.15；
+  3. **MAD 残差裁剪**：`τ_r = clamp(3·1.4826·MAD, 0.2, 1.0)` m/s，裁掉
+     `|resid|>τ_r`（保留集 < min_static_cells 时不裁剪）；
+  4. **加权闭式解**：`v_ego* = argmin Σ_{p∈S} w_p(v̄_r+v·û_r)²`，
+     w_p = count·SNR 归一化，2×2 正规方程逐帧解，**detached（测量）**。
+- **修正原因（预启动探针实测，非调参）**：原预登记的「加权闭式解」在 val 上
+  被强回波运动格拉偏 +24%…+96%（idx3 4.20–4.34 vs 真值 2.96–3.03；
+  idx703 3.19–3.62 vs 1.84–1.86）——运动格 count·SNR 可达静态格的 ~100 倍。
+  几何先被证伪排除：canvas↔world 8 种映射假设的残差 RMS 均在 10% 内且假定
+  的映射最优；LMedS 刚体场以 0.013 m/s 中位残差解释 58–80% 测量格。故改为
+  「稳健**集合**（而非稳健权重）」，离线 12 帧验证误差 ≤0.2%（IRLS-Huber
+  无效：MAD 尺度自身被污染）。
+- 位移场：`Δp = warp_scale·v_ego·Δt`，Δt 为**可学标量**（TJ4D 无时间戳——
+  诚实设计，init 0.1 s 名义帧间隔）；warp 施加于**携带的 h/z 状态**（在
+  deformable 之前），恒等锚定双线性 grid_sample：
+  `state + (sample(state, id+Δ) − sample(state, id))`；deformable 只看残余。
+- 参数：+2（Δt、warp_scale）。novelty：pose-free 雷达-相机 BEV 的检测时
+  自标定 ego 补偿（CRT-Fusion 依赖 nuScenes 位姿；本设定下是必需而非选择
+  ——docs/09）。
+- 恒等启动：`warp_scale` 零初始化（乘在 Δp 上），逐位恒等（单测 W2）。
+- **优化速率（预启动决定，写于任何 24e 数据之前）**：两个标量 lr_mult=5.0。
+  依据是实测的 AdamW 行为（每步有效位移 ≈7% lr）：warp_scale 1.4e-3@iter50
+  → 4.54e-3@iter450（冒烟，cosine 450 iter）；24e 上 6.5e-3@iter50 →
+  4.16e-2@iter1600。按此速率 ep16 落在解析最优量级（warp_scale≈0.1–1，
+  位移 = 需求的 10–100%），不再是毫米级；同时保留 E8 惰性判据把「未启用」
+  与「被证伪」分开（见 §4）。
+- **机制门（预登记，写于 ep16 数据之前；探针
+  `me_rssm/sanity/probe_ego_alignment_toggle.py`）**：三趟对照
+  learned / 强制 1.0 / 0，逐 clip 比较静态格跨帧残差
+  `|h_warped(prev) − h_curr|`（按 `|h_curr|` 归一化）。判据：
+  (a) INERTNESS：平均已施加位移 <1e-3 m → **UNEXERCISED**（机制未被启用，
+  AP 结论与机制无关）；(b) 非惰性时，learned 相对 0 在 ≥8/10 clip 降低残差
+  → **MECHANISM PASS**，否则 **MECHANISM FAIL**；强制 1.0 作为机制幅值对照
+  同时报告（不依赖损失把标量落在哪里）。探针的镜像函数与逐次前向调用分组
+  假设由单测 W12 钉住（镜像解 == 模块自身 stash；镜像 warp == 解析位移；
+  一次前向恰好 2 次对齐调用且 call[0] 为 h）。
 
 ### L2 双时间尺度状态
 
@@ -111,7 +146,7 @@ MCI-v2 全部保留（innovation 后验、门控 correct/readout、Doppler 对�
 |---|---|---|---|
 | 0 | **MCI-v2**（在训，09:25 UTC 起） | innov_mag 图非零且空间有结构；shuffle_z ≥2%；h/e <2 | ep12-16 ≥39.6061（主线 −0.5） |
 | 1 | **DC-RSSM-1** = v2 + L3 证据场 | c_mot/dyn 图空间 std/mean ≥0.1（对照学习版 ≈0.001）；GT 中心类间区分出现 | ≥ 基线 39.2809 且 ≥ v2 −0.5；**Ped 配对差 ≥ −1.5**（cov+细化的直接检验） |
-| 2 | **DC-RSSM-2** = +L1 ego-warp | 静态区跨帧对齐重叠率上升（探针量化） | 同上 + Car/Truck 不回退 |
+| 2 | **DC-RSSM-2** = +L1 ego-warp | 冒烟：解析速度落在稳健真值带（[0.5,20] m/s）、静态集不消失、warp 增长（E8a ≥2×）、无 NaN；ep16：三趟 toggle 判据（UNEXERCISED / PASS / FAIL，见 §2 L1） | 同上 + Car/Truck 不回退 |
 | 3 | **DC-RSSM-3** = +L2 双速率 + L4 一致性记忆 | 静态/动态区寿命分化（探针）；ρ_c 学到非平凡值 | 同上 |
 | 4 | 胜者三 seed → 主表 | — | §18 口径 |
 
