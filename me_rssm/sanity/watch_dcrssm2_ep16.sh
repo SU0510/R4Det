@@ -118,9 +118,13 @@ python me_rssm/sanity/probe_ego_geometry_test.py robustfix \
   --output "$WORK_DIR/robustfix_ep16.json" >> "$WATCH_LOG" 2>&1
 
 # --- P5 pre-registered mechanism gate (paired toggle + inertness) -------
+# --stride 200, not 300: the 2040-frame val set yields only 7 valid clips
+# at 300, which would make the pre-registered ">= 8/10" sign test
+# unsatisfiable by construction (found in a CPU-only selection audit on
+# 2026-10-09, before ep16). 200 yields ten clips over the same range.
 CUDA_VISIBLE_DEVICES=5 python me_rssm/sanity/probe_ego_alignment_toggle.py \
   --config "$CFG" --checkpoint "$CKPT" \
-  --start-index 3 --limit 10 --stride 300 \
+  --start-index 3 --limit 10 --stride 200 \
   --output "$WORK_DIR/ego_alignment_toggle_ep16.json" >> "$WATCH_LOG" 2>&1
 
 echo "[watch] $(date -u '+%F %T') probes done; gate decision is a manual step" >> "$WATCH_LOG"

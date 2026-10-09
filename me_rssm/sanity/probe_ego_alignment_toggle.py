@@ -30,6 +30,16 @@ Verdicts use the pre-registered "learned vs 0" test; the forced-1.0 test is
 reported alongside as the mechanism-magnitude control, and the exercised
 fraction (applied / needed displacement) is printed for each pass.
 
+AMENDMENT 2 (clip count, written 2026-10-09 before ep16 and before any AP
+data): the gate text says ">= 8 of 10 clips", but the 2040-frame val set
+holds only SEVEN clips that pass the history-validity filter at the
+originally intended --stride 300 (indices 3, 303, ... 1803), so the
+criterion was unsatisfiable by construction -- a deadlock independent of
+the mechanism. The stride is therefore 200 (default changed with it),
+which yields ten clips spanning the same range, 3..1803 (>= 20 s apart at
+10 Hz, so still independent episodes). The 8/10 threshold itself is
+unchanged.
+
 Implementation notes:
   - The warped previous state is reproduced with the module's own formula
     and its own cached grid (identity-anchored grid_sample, exactly as
@@ -47,7 +57,7 @@ Implementation notes:
 Usage:
   python me_rssm/sanity/probe_ego_alignment_toggle.py \
     --config <dcrssm2 cfg> --checkpoint <epoch_16.pth> \
-    --start-index 3 --limit 10 --stride 300 \
+    --start-index 3 --limit 10 --stride 200 \
     --output <work_dir>/ego_alignment_toggle_ep16.json
 """
 
@@ -263,7 +273,7 @@ def main():
     ap.add_argument('--checkpoint', required=True)
     ap.add_argument('--start-index', type=int, default=3)
     ap.add_argument('--limit', type=int, default=10)
-    ap.add_argument('--stride', type=int, default=300)
+    ap.add_argument('--stride', type=int, default=200)
     ap.add_argument('--min-valid-history', type=int, default=2)
     ap.add_argument('--output', required=True)
     a = ap.parse_args()
