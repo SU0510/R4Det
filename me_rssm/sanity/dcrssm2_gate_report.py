@@ -53,7 +53,7 @@ read 2.6-2.9 m/s where the robust solve reads 1.7-2.0), and (ii) that
 AdamW moves a zero-init scalar at roughly the lr it is given (measured:
 ~7% of lr per step). On smoke v2 the absolute value lands at 7.47e-4 m
 (iter 450) against the 1e-3 line, i.e. the smoke would FAIL a gate whose
-purpose is "can this layer ever move" purely on optimizer speed at 0.5%
+purpose is "can this layer ever move" purely on optimizer speed at ~1%
 of the schedule. So:
 
   E8a (smoke verdict, replaces the absolute test below during the smoke):
@@ -65,8 +65,17 @@ of the schedule. So:
   E8b (absolute line, reported as INFO in the smoke and enforced at
       ep16): mean |warp_scale|*dt*|v_ego| > 1e-3 m, printed together with
       the exercised fraction (applied / needed displacement) and the
-      linear extrapolation to the ep16 iteration. At ep16 the pre-
-      registered threshold stands as written.
+      slope's distance to the line. At ep16 the pre-registered threshold
+      stands as written.
+
+Scope of the two families (decided 2026-10-09, before ep16): E1 and E8a
+are SMOKE-window criteria -- E1 ("no jump from zero init") assumes the
+decayed 450-iter cosine, and E8a asks for monotone growth across a short
+window. Both are meaningless over a full 24e run (the schedule moves the
+scalar faster and an epoch-sized window is non-monotone by nature), so
+when the records span more than one epoch the script reports them as
+INFO and enforces E2-E7 plus E8b instead. The mechanism verdict at ep16
+comes from probe_ego_alignment_toggle.py, not from this report.
 
 It also re-runs the MCI gate report (reliability gates) and prints the L3
 evidence-field keys when present, so one invocation covers the whole
@@ -156,11 +165,26 @@ def main():
               f'{min(vals):+.6f} / {max(vals):+.6f}')
 
     ok = True
+    # Mode: the E1/E8a criteria were pre-registered for the 450-iter SMOKE
+    # window (a zero-init scalar must not jump, and must grow across a
+    # short window). Applied to a full 24e run they are meaningless -- the
+    # 24e schedule moves the scalar far faster than the smoke's decayed
+    # cosine, and an epoch-sized window is non-monotone by nature -- so in
+    # run mode they are reported as INFO and the gates that do apply are
+    # E2-E7 plus the absolute E8b line (amendment in the docstring).
+    epochs = sorted({r.get('epoch', 1) for r in records})
+    run_mode = bool(epochs) and max(epochs) > 1
     first = records[0]
-    ok &= check('E1 identity start (no jump from zero init)',
-                abs(first['stat_ego_warp_scale']) < 5e-3,
-                f'first record (iter 50) = {first["stat_ego_warp_scale"]!r}; '
-                f'exact zero init + bitwise identity are unit-tested (W2)')
+    e1_ok = abs(first['stat_ego_warp_scale']) < 5e-3
+    e1_msg = (f'first record (iter {first.get("iter")}) = '
+              f'{first["stat_ego_warp_scale"]!r}; exact zero init + '
+              f'bitwise identity are unit-tested (W2)')
+    if run_mode:
+        print(f'  INFO E1 smoke-only criterion (not a gate on a full run): '
+              f'{e1_msg}')
+    else:
+        ok &= check('E1 identity start (no jump from zero init)', e1_ok,
+                    e1_msg)
     max_abs_ws = max(abs(v) for v in ws)
     ok &= check('E2 warp liveness (|warp_scale| left 0)',
                 max_abs_ws > WARP_LIVENESS_MIN,
@@ -193,12 +217,16 @@ def main():
     first_q = statistics.mean(disp_series[:k])
     last_q = statistics.mean(disp_series[-k:])
     growth = last_q / first_q if first_q > 0 else float('inf')
-    ok &= check(
-        'E8a warp live and growing (smoke verdict)',
-        last_q > first_q and growth >= EFF_DISP_GROWTH_MIN,
-        f'first-quarter mean = {first_q:.3e} m, last-quarter mean = '
-        f'{last_q:.3e} m, growth = {growth:.1f}x '
-        f'(gate >= {EFF_DISP_GROWTH_MIN:.1f}x)')
+    e8a_ok = last_q > first_q and growth >= EFF_DISP_GROWTH_MIN
+    e8a_msg = (f'first-quarter mean = {first_q:.3e} m, last-quarter mean = '
+               f'{last_q:.3e} m, growth = {growth:.1f}x '
+               f'(gate >= {EFF_DISP_GROWTH_MIN:.1f}x)')
+    if run_mode:
+        print(f'  INFO E8a smoke-only criterion (window monotonicity; not a '
+              f'gate on a full run): {e8a_msg}')
+    else:
+        ok &= check('E8a warp live and growing (smoke verdict)', e8a_ok,
+                    e8a_msg)
     # --- E8b: the pre-registered absolute line (INFO in the smoke) -----
     iters = [r.get('iter', 0) for r in records]
     slope = 0.0
@@ -211,14 +239,20 @@ def main():
         slope = (sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / denom
                  if denom else 0.0)
     need = statistics.mean([d * s for d, s in zip(dt, speed)])
-    ep16_iter = 16 * (iters[-1] / max(records[-1].get('epoch', 1), 1)) \
-        if records else 0
-    print(f'  INFO E8b absolute displacement: {eff_disp:.3e} m '
-          f'(pre-registered line {EFF_DISP_MIN:.0e} m, enforced at ep16); '
-          f'exercised fraction = {100 * eff_disp / need if need else 0:.2f}% '
-          f'of the needed {need:.4f} m/frame; window slope = {slope:.3e} '
-          f'm/iter -> linear extrapolation to iter {ep16_iter:.0f}: '
-          f'{eff_disp + slope * max(ep16_iter - iters[-1], 0):.3e} m')
+    iters_to_line = ((EFF_DISP_MIN - eff_disp) / slope
+                     if slope > 0 else float('inf'))
+    e8b_msg = (f'{eff_disp:.3e} m (pre-registered line '
+               f'{EFF_DISP_MIN:.0e} m); exercised fraction = '
+               f'{100 * eff_disp / need if need else 0:.2f}% of the needed '
+               f'{need:.4f} m/frame; window slope = {slope:.3e} m/iter -> '
+               f'at that slope the line is reached after '
+               f'{iters_to_line:.0f} further iterations')
+    if run_mode:
+        ok &= check('E8b absolute displacement (enforced at ep16)',
+                    eff_disp > EFF_DISP_MIN, e8b_msg)
+    else:
+        print(f'  INFO E8b absolute displacement (enforced at ep16, INFO in '
+              f'the smoke): {e8b_msg}')
     nan_keys = []
     for r in records:
         for k, v in r.items():

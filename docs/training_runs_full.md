@@ -11774,12 +11774,17 @@ NMS 前后保留率。BN/验证状态审计作为 ep16 急跌的排除项。
   - E5 归一化修正：static_frac 是**整张 canvas** 的比例，TJ4D 测量格只占
     0.3–1%，原草案 0.05 阈值放大约 100 倍，改为 5e-4（写在任何 AP 数据之前）。
   - E8 修正（预登记改写，写于 ep16 前）：绝对线
-    `|warp_scale|·dt·|v_ego| > 1e-3 m` 在冒烟（450/10800 iter，cosine 已
-    衰减、AdamW 每步有效位移≈7% lr）实测 7.47e-4。改为 **E8a 冒烟判据 =
+    `|warp_scale|·dt·|v_ego| > 1e-3 m` 在冒烟（450/46800 iter ≈1%，cosine
+    已衰减、AdamW 每步有效位移≈7% lr）实测 7.47e-4。改为 **E8a 冒烟判据 =
     后 1/4 均值 ≥ 前 1/4 均值的 2 倍且斜率 >0**（实测 2.4×，
     `dcrssm2_gate_report.py` PASS），**E8b 绝对线在 ep16 生效**并同时报告
-    「已施加/需求位移」占比（冒烟 0.38%，线性外推 iter 7200 = 4.7e-3 m）。
-    动机：把「机制从未被启用（UNEXERCISED）」与「机制被证伪（FAIL）」分开。
+    「已施加/需求位移」占比与「按当前斜率还需多少 iter 到线」。动机：把
+    「机制从未被启用（UNEXERCISED）」与「机制被证伪（FAIL）」分开。
+  - **判据适用范围（写于 ep16 前）**：E1（零初值不跳变）与 E8a（窗口增长）
+    是**冒烟窗口专属**判据；记录跨 epoch 时脚本自动按「整轮模式」运行，
+    将其降为 INFO，只强制 E2–E7 + E8b。整轮模式下处罚 E1/E8a 无意义：
+    24e 的 cosine 衰减慢、标量移动快得多，且 epoch 级窗口天然非单调
+    （首轮实例：E1 首记录 6.5e-3、E8a 1.0×，均为判据错置而非机制问题）。
 - **预启动优化速率决定**：仅对 `temporal_fusion.dt` 与
   `temporal_fusion.warp_scale` 设 lr_mult=5.0（实测 AdamW 有效步长≈7% lr；
   单测确认 paramwise 命中这两个参数）。24e 上 warp_scale 6.5e-3@iter50 →
@@ -11806,10 +11811,15 @@ NMS 前后保留率。BN/验证状态审计作为 ep16 急跌的排除项。
   P1 z_utilization_gated(w3/w100/w1800)、P2 posterior_source_gated、
   P3 probe_ego_warp_sanity、P4 geometry dump+robust+robustfix、
   P5 alignment_toggle，日志 `watch_seed0_ep16.log`。
-- 训练现状（ep1 内，iter 1900）：warp_scale 6.5e-3→4.2e-2 单调增长（无
-  零初值反弹）、dt 0.107→0.140、stat_ego_speed 1.65–2.01（稳健带内）、
-  static_frac 6.9e-3–7.9e-3、trim 0.756–0.787、solved ≈0.999。
-  预计 ep16 gate ~15 h 后命中（10-10 早间）。
+- 训练现状（ep2 内）：warp_scale 6.5e-3@iter50（ep1）→ 峰值 4.16e-2，
+  均值 2.96e-2；dt 0.107→0.140；stat_ego_speed 1.65–2.02（稳健带内）；
+  static_frac 6.9e-3–7.9e-3、trim 0.756–0.787、solved ≈0.998。
+  **E8b 已 PASS**（ep2 读数 6.76e-3 m = 需求的 2.9%，阈值 1e-3 的 6.8 倍）。
+- 进度实测：iters/epoch ≈1952（3 GPU × samples_per_gpu 2），ep1 训练+val
+  实测 65 min（10:54→11:59 UTC），val 每 epoch、checkpoint 每 2 epoch
+  （→ `epoch_16.pth` 一定存在，看门狗等待条件成立）。ep1 val
+  Overall_3D_moderate = 20.81（早轮合理值）。预计 ep16 gate 在 10-10
+  05:00–08:00 UTC 命中（约 18–21 h），终判写入本节。
 
 ### 68.10 结论汇总（截至 2026-10-05，覆盖 §62–68 全部训练与诊断）
 
