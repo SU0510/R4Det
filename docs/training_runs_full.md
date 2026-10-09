@@ -11822,8 +11822,19 @@ NMS 前后保留率。BN/验证状态审计作为 ep16 急跌的排除项。
 - 进度实测：iters/epoch ≈1952（3 GPU × samples_per_gpu 2），ep1 训练+val
   实测 65 min（10:54→11:59 UTC），val 每 epoch、checkpoint 每 2 epoch
   （→ `epoch_16.pth` 一定存在，看门狗等待条件成立）。ep1 val
-  Overall_3D_moderate = 20.81（早轮合理值）。预计 ep16 gate 在 10-10
+  Overall_3D_moderate = 20.81（同一代际 DC-RSSM-1 的 ep1 = 21.76，
+  差异在家族早轮噪声内；无过早崩塌迹象）。预计 ep16 gate 在 10-10
   05:00–08:00 UTC 命中（约 18–21 h），终判写入本节。
+- **续训通道已预备（不自动执行）**：`me_rssm/sanity/continue_dcrssm2_ep16.sh`
+  ——若 AP 门 PASS，从 `epoch_16.pth` **resume 到 ep24**（mmcv `--resume-from`
+  恢复 epoch 计数，cosine 从 ep16 续接而非重启；新 epoch 追加进同一
+  work_dir，保持 ep1-24 统一记录）。三重守门：(1) 必须存在并含 `GO`
+  的 `$WORK_DIR/gate_decision.txt`（门控判读后由操作者写入，脚本自身
+  不做任何判定）；(2) 看门狗探针阶段已结束（不与探针抢显存）；(3)
+  GPUs 5/6/7 空闲。dry-run 已验证无 GO 文件时拒绝启动（exit 1）。
+  注：中途 resume 不恢复 dataloader 洗牌状态（mmcv 仅在 `--resume` +
+  latest meta 时恢复），故 ep17+ 与「未中断的 24e」并非逐位相同——
+  已记录，对窗口均值无影响。
 
 ### 68.10 结论汇总（截至 2026-10-05，覆盖 §62–68 全部训练与诊断）
 
