@@ -57,11 +57,39 @@
   另：草案原命令（`--stride 17 --require-classes 2`）只选到 **2 帧**——全 val
   满足「四类同时 ≥2 GT」的帧仅 35 个且集中在同一场景块，S=2 的地板恰是 50%，
   那一次产物已作废。
-- **待用户裁决（唯一阻塞项）**：见 `docs/rssm_target_reform_prereg_20261010.md`
-  **§3A**。选项 A：按排序**转候选 A**（检测 residual 读出），差分作为负结果归档；
-  选项 B：改成「差分 + 与 current 同特异能量的标定尺度」的**配对**设计
-  （需批准「目标内容+尺度」为一个配对处理，判据用对象对齐度与 z 条件增益，
-  不用特异占比）。**未启动任何训练，未改模型。**
+- **候选 A 已按排序落地（2026-10-10，见 §71）：代码 + 单测 + S0 只读探针 +
+  450 iter 机制冒烟全部完成，未做任何 AP 宣称。**
+  - 实现（commit `76d2721`）：`SemanticReadoutRSSMFusion`，只动两处 ——
+    z 专属 CentreNet 热力监督 `loss_rssm_sem` + 零初始化 `z_cls_logits`
+    加到 `conv_cls` 的分类残差；重建目标/KL/对齐/头几何/日程全部沿用标准
+    `no2d_igdr`。控制臂 `sem_supervision_weight=0`（C2）、`cls_residual=False`（C1）、
+    `sem_head_input='h'|'feat'`（C3）。
+  - S0 门（只读，GPU5）：**S0-b 身份 PASS**（分类/回归输出与基线逐位相同，
+    max|Δ|=0.0；额外缺失键恰为新模块 6 个）；**S0-d 压力 PASS**
+    （语义项占 z 上梯度 90.2%）；**S0-e 存活/分离 PASS**（`∂loss_cls/∂W_cls=0.871`，
+    `∂loss_rssm_sem/∂W_cls=0`）。
+  - 探针修正一处（commit `44cb425`）：首轮 S0-e 的 FAIL 是**判据选样错误**——
+    train split 第一个 batch 是历史帧无效的边界样本，残差被设计性置零
+    （只影响 0.75% 样本）；且零初始化下"前向残差恒为 0"本身就是 S0-b 的身份契约，
+    不能兼作存活证据。现已改为「选有效历史 batch + 用 `∂loss_cls/∂W_cls`
+    与扰动后残差两条独立读数」。
+  - 450 iter 冒烟（3 卡 GPU5/6/7、seed0、`iter_450.pth` 落盘、无 NaN/OOM、
+    17099 MiB、1.53–1.60 s/iter）：`loss_rssm_sem` 21.40 → 2.27（−89.4%，
+    末 5 点均值 2.398，占总损失 39.3%）；`stat_cls_res_rms` 0 → 0.184（读出被激活）；
+    **但 `hit@1` 仅 0.120、`thr50` 仅 0.0033**（450 iter ≈1% 日程内的早期读数，
+    不是机制判据，S1 判据在 ep6）。另记录一处口径差异：`KLScaleSchedulerHook`
+    只实现 `before_train_epoch`，`IterBasedRunner` 从不调用它 ⇒ 冒烟里
+    `kl_scale` 恒为 1.0，recon/KL 绝对量不可与 epoch 模式逐点比较。
+  - 回归：`test_rssm_fusion` 85 passed、`test_semantic_readout_rssm` 11 passed、
+    `test_grad_paths` / `test_config_build` / `test_fgfull_config` /
+    `test_mci_config_build` / `test_equivalence` 全绿。
+- **待用户裁决（唯一阻塞项，已换到候选 A 的数值门）**：见
+  `docs/rssm_candidate_A_prereg_20261010.md` **§5**。S1（ep6：`thr50 ≥ 0.30`、
+  `hit@1 ≥ 0.60`、z/h 排他、toggle、跨类 shuffle ≥ chance+20pt）、
+  S2（ep12-16 Overall ≥ 40.00；四类非劣界 Car ≥ 47.34 / Truck ≥ 29.22 /
+  Ped ≥ 29.93 / Cyc ≥ 47.63；硬失败 < 38.78）、S3（单 seed 过门才补三 seed）
+  的具体数值**尚未批准**。弃选项：目标內容+尺度的配对设计（原 §3A 选项 B，
+  §70.6 已否掉其承重前提）。**未启动任何正式训练。**
 
 
 1. 探索原 DreamerV3 的 BlockGRU scaling 方法和超参数使用方法。
