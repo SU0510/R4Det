@@ -443,6 +443,31 @@ class TestSemanticReadoutRSSM(unittest.TestCase):
             arm(torch.randn(1, 16, 8, 10), deterministic=True)
         self.assertIsNotNone(arm.last_sem_map)
 
+    def test_T13_runtime_arm_selection_is_exact(self):
+        """The M2 z-exclusivity gate compares exactly these three arms.
+
+        The probe flips ``sem_head_input`` at runtime, so the selector must map
+        each name to its own tensor and must NOT silently fall through to
+        ``feat`` for anything else: a typo would make the 'h' arm a duplicate
+        of the 'feat' arm, and M2 would report a two-way comparison of the same
+        tensor as if the h control had been measured.
+        """
+        arm = _build_arm(sem_supervision_weight=1.0)
+        h = torch.zeros(1, 8, 4, 4)
+        z = torch.ones(1, 8, 4, 4)
+        feat = torch.full((1, 8, 4, 4), 2.0)
+        arm.sem_head_input = 'z'
+        self.assertTrue(torch.equal(arm._sem_source(h, z, feat), z))
+        arm.sem_head_input = 'h'
+        self.assertTrue(torch.equal(arm._sem_source(h, z, feat), h))
+        arm.sem_head_input = 'feat'
+        self.assertTrue(torch.equal(arm._sem_source(h, z, feat), feat))
+        for bad in ('Z', 'H', 'FEAT', 'typo', '', 'feature'):
+            arm.sem_head_input = bad
+            with self.assertRaises(ValueError) as ctx:
+                arm._sem_source(h, z, feat)
+            self.assertIn('sem_head_input', str(ctx.exception))
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

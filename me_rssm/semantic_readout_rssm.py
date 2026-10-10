@@ -278,11 +278,25 @@ class SemanticReadoutRSSMFusion(MotionAlignedRSSMFusion):
     # semantic map + loss
     # ------------------------------------------------------------------
     def _sem_source(self, h_t, z_t, feat):
-        if self.sem_head_input == 'z':
+        """Pick the semantic head's input.
+
+        The three arms are experiment variables (the M2 z-exclusivity gate
+        compares them), so an unrecognised value must NOT silently fall through
+        to one of them: a typo would quietly turn the 'h' arm into a duplicate
+        of the 'feat' arm, and M2 would then report a two-way comparison of the
+        same tensor as if it were three. Validate loudly instead -- the
+        constructor already range-checks this argument, and this is the
+        runtime path the probes actually exercise.
+        """
+        arm = self.sem_head_input
+        if arm == 'z':
             return z_t
-        if self.sem_head_input == 'h':
+        if arm == 'h':
             return h_t
-        return feat
+        if arm == 'feat':
+            return feat
+        raise ValueError(
+            f"sem_head_input must be one of 'z'/'h'/'feat', got {arm!r}")
 
     def _semantic_heatmap_loss(self, sem_map, target):
         """CenterNet focal loss + objectness diagnostics.
