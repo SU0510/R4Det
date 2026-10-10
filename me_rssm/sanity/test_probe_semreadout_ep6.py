@@ -470,5 +470,81 @@ class TestInputFingerprints(unittest.TestCase):
 
 
 
+class _FakeSample(dict):
+    pass
+
+
+class _FakeDataset(list):
+    """Minimal stand-in exposing the sample dict by index."""
+
+    def __getitem__(self, index):
+        return list.__getitem__(self, index)
+
+
+class TestSampleCurrentGt(unittest.TestCase):
+    """M1/M3/M4 all rasterise GT, so the GT source itself is gate-critical.
+
+    The probe originally read GT out of ``img_metas[-1][0]``, which carries no
+    GT keys at all (``CustomCollect3D2.meta_keys``): every run died with
+    ``KeyError: 'gt_bboxes_3d'`` on the first clip, before the gate JSON was
+    written. These tests pin the sample-top-level contract.
+    """
+
+    class _Boxes:
+        def __init__(self, tensor):
+            self.tensor = tensor
+
+    def _dataset(self, boxes, labels):
+        return _FakeDataset([{'gt_bboxes_3d': boxes, 'gt_labels_3d': labels,
+                              'img_metas': [{'no_gt_here': True}]}])
+
+    def test_returns_the_current_frame_of_each_per_frame_list(self):
+        boxes = [self._Boxes(torch.zeros(2, 7)), self._Boxes(torch.ones(3, 7))]
+        labels = [torch.tensor([0, 0]), torch.tensor([2, 1, 3])]
+        ds = self._dataset(boxes, labels)
+        got_boxes, got_labels = probe.sample_current_gt(ds, 0)
+        self.assertIs(got_boxes, boxes[-1])
+        self.assertIs(got_labels, labels[-1])
+        self.assertEqual(got_labels.tolist(), [2, 1, 3])
+
+    def test_refuses_to_read_gt_from_img_metas(self):
+        """A sample whose only GT is in img_metas must be rejected loudly."""
+        ds = _FakeDataset([{'img_metas': [{'gt_bboxes_3d': 'wrong place',
+                                          'gt_labels_3d': 'wrong place'}]}])
+        with self.assertRaises(KeyError) as ctx:
+            probe.sample_current_gt(ds, 0)
+        self.assertIn('gt_bboxes_3d', str(ctx.exception))
+        self.assertIn('img_metas', str(ctx.exception))
+
+    def test_frame_count_mismatch_is_rejected(self):
+        ds = self._dataset([self._Boxes(torch.zeros(1, 7))],
+                           [torch.tensor([0]), torch.tensor([1])])
+        with self.assertRaises(ValueError) as ctx:
+            probe.sample_current_gt(ds, 0)
+        self.assertIn('frame count mismatch', str(ctx.exception))
+
+    def test_absent_gt_frames_are_rejected(self):
+        ds = self._dataset([], [])
+        with self.assertRaises(ValueError):
+            probe.sample_current_gt(ds, 0)
+
+    def test_labels_are_returned_as_a_tensor_not_a_list(self):
+        labels = [torch.tensor([1]), torch.tensor([3, 3])]
+        ds = self._dataset([self._Boxes(torch.zeros(1, 7)),
+                            self._Boxes(torch.zeros(2, 7))], labels)
+        _, got = probe.sample_current_gt(ds, 0)
+        self.assertIsInstance(got, torch.Tensor)
+        self.assertEqual(got.dtype, torch.long)
+
+    def test_rollout_no_longer_reads_img_metas_for_gt(self):
+        """The gate-critical access must not reappear in rollout."""
+        source = open(os.path.join(
+            _REPO, 'me_rssm', 'sanity', 'probe_semreadout_ep6.py'),
+            encoding='utf-8').read()
+        self.assertNotIn("meta['gt_bboxes_3d']", source)
+        self.assertNotIn("meta['gt_labels_3d']", source)
+        self.assertIn('sample_current_gt(dataset, index)', source)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

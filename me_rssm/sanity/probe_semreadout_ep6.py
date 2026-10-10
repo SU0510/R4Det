@@ -103,6 +103,41 @@ def select_clips(dataset, args):
     return selected
 
 
+def sample_current_gt(dataset, index):
+    """Current-frame (boxes, labels) for ``index``, as a single-sample pair.
+
+    GT lives at the SAMPLE top level: ``dataset[index]['gt_bboxes_3d']`` and
+    ``['gt_labels_3d']`` are per-frame lists ordered old -> new, so ``[-1]`` is
+    the current frame -- exactly what the training-time supervision uses
+    (``R4Det`` passes the current frame's GT into ``set_object_gt``).
+
+    The per-frame ``img_metas`` dicts carry only geometry/camera metadata
+    (``CustomCollect3D2.meta_keys``) and contain no GT keys at all. Reading GT
+    from ``img_metas[-1][0]`` therefore raised ``KeyError: 'gt_bboxes_3d'`` on
+    the first clip of every run, so the whole M1-M4 battery died before it
+    could write its JSON. This helper is the single place that resolves GT, so
+    the fix cannot be undone by a later edit to ``rollout``.
+
+    Validation uses ``is_train=False`` augmentations (deterministic), so the
+    second ``dataset[index]`` read inside ``rollout`` cannot desynchronise the
+    geometry from the GT.
+    """
+    sample = dataset[index]
+    if 'gt_bboxes_3d' not in sample or 'gt_labels_3d' not in sample:
+        raise KeyError(
+            'dataset sample has no gt_bboxes_3d/gt_labels_3d at the top '
+            f'level (keys: {sorted(sample.keys())}); GT must not be read out '
+            'of img_metas')
+    boxes = dz.unwrap(sample['gt_bboxes_3d'])
+    labels = dz.unwrap(sample['gt_labels_3d'])
+    if len(boxes) != len(labels):
+        raise ValueError(f'GT frame count mismatch for index {index}: '
+                         f'{len(boxes)} boxes vs {len(labels)} labels')
+    if len(boxes) == 0:
+        raise ValueError(f'index {index} has no GT frames')
+    return boxes[-1], labels[-1]
+
+
 @torch.no_grad()
 def rollout(model, dataset, index, sem_input=None, use_residual=True):
     """One val rollout of the current frame; returns everything M1-M4 need."""
@@ -110,6 +145,7 @@ def rollout(model, dataset, index, sem_input=None, use_residual=True):
     batch = dz.build_batch(dataset, [index], torch.cuda.current_device())
     points, img, metas, valid = dz.build_sequence_frames(batch)
     n = model.seq_len
+    gt_boxes, gt_labels = sample_current_gt(dataset, index)
 
     restore = None
     if sem_input is not None:
@@ -137,7 +173,6 @@ def rollout(model, dataset, index, sem_input=None, use_residual=True):
                 if use_residual
                 else model.pts_bbox_head(out['pts_feats'],
                                          cls_logit_residual=None))
-        meta = metas[n - 1][0]
         return {
             'sem_map': None if sem_map is None
             else sem_map.detach().float().cpu(),
@@ -146,8 +181,8 @@ def rollout(model, dataset, index, sem_input=None, use_residual=True):
             else residual.detach().float().cpu(),
             'cls_score': [t.detach().float().cpu() for t in outs[0]],
             'pts_feats': [t.detach().float().cpu() for t in out['pts_feats']],
-            'gt_boxes': meta['gt_bboxes_3d'],
-            'gt_labels': meta['gt_labels_3d'],
+            'gt_boxes': gt_boxes,
+            'gt_labels': gt_labels,
         }
     finally:
         if restore is not None:
