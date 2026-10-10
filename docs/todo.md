@@ -30,6 +30,14 @@
 
 ## 方法探索
 
+- **下一步决策更新（2026-10-10；检查完成，实施未开始）**：DC 停止续训。
+  先核对真实 fullres raw 重建目标、梯度与历史契约，补新 run 正式预登记，
+  再做标准 no2d_igdr 的有限 current/difference 配对验证；若任务收益不成立转 A，
+  C 按缺测类别证据单独验证，B/D 后置。详见 §69.11 与
+  `docs/rssm_next_step_audit_20261010.md`。95.5% pool16 是候选探针，不是现役目标；
+  区域 baseline 是标准 RSSM，不是 MAI。没有新训练、没有已完成性能修复。
+
+
 1. 探索原 DreamerV3 的 BlockGRU scaling 方法和超参数使用方法。
 2. 解决 `z_t` 失效：冻结 checkpoint 因果诊断已于 2026-09-25 完成，详见 `docs/training_runs_full.md` 第 49 节；继续调 Gaussian、KL/free_nats、fixed noise 或 learnable std 都不会解决。
    - **完整 18e 主模型对照（2026-10-02 排队 → 2026-10-03 完成）**：MAI seed2 ep16 完成停训和四个 probe 后，watcher 自动从零启动 `MotionAlignedRSSMFusion`（标准主线，非 MAI）seed0、完整 18 epoch。配置 `configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_18e_pretrained_v2_head_no2d_igdr.py`：`max_epochs=18`、完整 18e cosine（峰值 LR 仍 `1.5e-4`）、KL warmup `0->1.0` 缩到 ep0-8；架构、优化器、梯度累积、val_bs=4、checkpoint cadence 与 24e 基线一致。接力保护见 `me_rssm/sanity/watch_after_mai_seed2_run_fgfull18_seed0.sh`。
