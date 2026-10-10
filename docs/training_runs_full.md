@@ -12884,12 +12884,36 @@ GPU 5/6/7 上，`probe_posterior_source` 因显存不足 OOM。训练日志零 O
 进程 PID 未变。此后所有探针验证改为**静态或复用 450-iter 冒烟权重且不与
 训练争卡**；正式采集仍由看门狗在停训、GPU 释放后进行。
 
+#### 71.9.8 第七处缺陷：gate JSON 只在最后写一次（`7d13b19`）
+
+**缺陷**：`probe_semreadout_ep6` 把 `report` 在全部 M1→M4 走完后**一次性**
+落盘。M3 要对 10 个 clip 各跑一次额外 rollout，M4 还要做 donor 选择与
+head-swap 重算——中间任一环节崩掉（OOM / CUDA error / 被 kill），
+**已经算完的 M1/M2 读数会一起丢**，整包 S1 仍作废。
+
+**修复**：抽出 `write_report()`，用 `json.dump` 到 `*.tmp` 再
+`os.replace()` 原子改写（读者永远不会读到半截 JSON，也不会留下临时文件），
+并在 M1/M2 之后、M3 之后各 flush 一次。崩溃时磁盘上至少留下已完成的门。
+
+**判定侧同步**：`semA_ep6_verdict.py` 把「门键缺失」渲染为
+**`NOT MEASURED`** 而不是 `FAIL`——「没测到」与「测到且没过」是两种不同
+结论，只有后者构成机制否定。聚合行仍为 `NOT ALL PASS`，且证据包完整性
+检查会同时把该文件标成 `INCOMPLETE`。
+
+**验证**：新增 `TestWriteReport` 4 条（绝对路径返回、自动建父目录、覆盖写
+后无 `.tmp` 残留、源码级守卫断言 M1/M2 与 M3 之后各有一次 flush），
+`test_probe_semreadout_ep6` 增至 **36 passed**。另在 450-iter 冒烟权重上实跑
+一次：四门 + `input_fingerprints` 正常写出、无 `.tmp` 残留；并用手工构造的
+「M1/M2 有、M3/M4 缺」部分报告跑判定器，确认输出
+`M3 readout : NOT MEASURED`、`M4 class info : NOT MEASURED`、
+`INCOMPLETE BUNDLE`、`S1 AGGREGATE: NOT ALL PASS`。
+
 **边界**：门槛数值、探针的采样窗口（M1 `stride=200`/10 帧、z-util 三窗、
 source `stride=700` 对应 3 个索引——与 MAI ep12/ep16 逐字一致，故不改）、
 模型与训练日程全部未动；看门狗脚本本身**未改**（它正处等待循环，bash 按
 文件偏移读脚本，改动须重启会话，见 §71.9.2 附注）。训练持续产出，无
-NaN/OOM/重启。§71.9.7 的 GT 修复同样只动探针侧：不改模型、不改数据管线、
-不写权重。
+NaN/OOM/重启。§71.9.7 的 GT 修复与 §71.9.8 的增量落盘同样只动探针/判定侧：
+不改模型、不改数据管线、不写权重。
 
 * 下一步：等 ep6 val + `epoch_6.pth`，看门狗自动采集 M1–M4 与三窗读数；
   **S1 判定是人工步骤**，且即便 S1 全过，也须先取得用户对 §5 S2 数值门的
