@@ -292,5 +292,58 @@ class TestClipSelection(unittest.TestCase):
             probe.dz.history_validity = original
 
 
+class TestGateBoundaries(unittest.TestCase):
+    """The S1 gate numbers decide whether candidate A continues to ep16.
+
+    Each boundary is pinned EXACTLY (>= vs >, and the strict-AND reading of
+    M2 that the prereg clarified on 2026-10-10) so a later refactor cannot
+    quietly move a threshold while the ep6 evidence is being read.
+    """
+
+    def test_m1_thresholds(self):
+        self.assertTrue(probe.gate_m1(0.30, 0.60))        # boundary is >=
+        self.assertFalse(probe.gate_m1(0.30, 0.5999))
+        self.assertFalse(probe.gate_m1(0.2999, 0.60))
+        self.assertFalse(probe.gate_m1(None, 0.60))
+        self.assertFalse(probe.gate_m1(0.30, None))
+
+    def test_m2_requires_BOTH_arms_to_be_worse(self):
+        # both arms >=30% worse -> pass
+        self.assertTrue(probe.gate_m2(-0.30, -0.30))      # boundary is <=
+        self.assertTrue(probe.gate_m2(-0.80, -0.45))
+        # one arm substitutable for z -> the probe may NOT pass:
+        # "either arm" would have accepted these two
+        self.assertFalse(probe.gate_m2(-0.30, -0.10))
+        self.assertFalse(probe.gate_m2(-0.05, -0.75))
+        self.assertFalse(probe.gate_m2(-0.2999, -0.30))
+        self.assertFalse(probe.gate_m2(None, -0.75))
+        self.assertFalse(probe.gate_m2(-0.75, None))
+
+    def test_m2_relative_reading_sign(self):
+        # a control arm that is BETTER than z gives rel > 0 -> never passes
+        self.assertEqual(probe.relative_thr50(0.40, 0.20), -0.5)
+        self.assertAlmostEqual(probe.relative_thr50(0.40, 0.52), 0.3)
+        self.assertIsNone(probe.relative_thr50(0.0, 0.2))
+        self.assertIsNone(probe.relative_thr50(None, 0.2))
+
+    def test_m3_sign_test(self):
+        def rows(deltas):
+            return [{'delta_off_minus_on': d} for d in deltas]
+        self.assertTrue(probe.gate_m3(rows([0.1] * 8)))
+        self.assertFalse(probe.gate_m3(rows([0.1] * 7)))          # <8 clips
+        self.assertFalse(probe.gate_m3(rows([0.1] * 7 + [-0.1])))  # 7/8 wins
+        self.assertFalse(probe.gate_m3(rows([0.1] * 7 + [0.0])),
+                         'a tie is not a win')
+        self.assertTrue(probe.gate_m3(rows([0.1] * 10)))
+
+    def test_m4_chance_plus_20pt(self):
+        self.assertTrue(probe.gate_m4(0.45, 0.45, 4))     # boundary is >=
+        self.assertFalse(probe.gate_m4(0.4499, 0.45, 4))
+        self.assertFalse(probe.gate_m4(0.45, 0.4499, 4))
+        self.assertTrue(probe.gate_m4(0.40, 0.40, 5))     # 5 classes -> 0.40
+        self.assertFalse(probe.gate_m4(None, 0.9, 4))
+        self.assertFalse(probe.gate_m4(0.9, None, 4))
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

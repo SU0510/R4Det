@@ -8,8 +8,11 @@ Pre-registration: docs/rssm_candidate_A_prereg_20261010.md §5 S1.
         identical formulas (prob > 0.5 on positive cells, and per-occupied-
         class-channel argmax hit).
     M2  z-exclusivity: with the SAME weights, feeding sem_head with h_t or the
-        raw feat instead of z_t must be >= 30% WORSE in thr50, otherwise the
-        semantics came from h/observation and z is just a passthrough.
+        raw feat instead of z_t must be >= 30% WORSE in thr50 -- BOTH arms
+        separately (prereg §5 M2 clarification of 2026-10-10: the section is
+        titled z-exclusivity, so neither h nor the observation may substitute
+        for z), otherwise the semantics came from h/observation and z is just a
+        passthrough.
     M3  the readout is not decorative: paired toggle of the residual on the
         trained weights (residual ON vs forced 0) must worsen the positive-
         cell class CE on >= 8/10 clips (sign test).
@@ -249,6 +252,50 @@ def head_scores_with_residual(model, run, residual):
     return [t.detach().float().cpu() for t in outs[0]]
 
 
+def mean_of(rows, key):
+    vals = [r[key] for r in rows]
+    return float(sum(vals)) / len(vals) if vals else None
+
+
+def relative_thr50(z_thr, control_thr):
+    """(control - z) / z; negative == the control is WORSE than z."""
+    if z_thr is None or control_thr is None or not z_thr:
+        return None
+    return (control_thr - z_thr) / z_thr
+
+
+def gate_m1(mean_thr50, mean_hit1):
+    """Pre-registered S1/M1: val head quality at GT centres."""
+    return bool(mean_thr50 is not None and mean_hit1 is not None
+                and mean_thr50 >= 0.30 and mean_hit1 >= 0.60)
+
+
+def gate_m2(rel_h, rel_f):
+    """Pre-registered S1/M2: z-exclusivity, STRICT reading.
+
+    Both control arms must be >= 30% worse than z. The prereg text used to
+    read "``h_t`` (或 ``feat``)", which can be read as "either arm suffices";
+    the section is titled z-exclusivity, so the strict reading (neither h nor
+    the observation may substitute for z) was pinned in the prereg on
+    2026-10-10 while ep6 was still unread, and this function is that reading.
+    """
+    return bool(rel_h is not None and rel_f is not None
+                and rel_h <= -0.30 and rel_f <= -0.30)
+
+
+def gate_m3(rows, min_clips=8, min_wins=8):
+    """Pre-registered S1/M3: residual toggle worsens positive-cell CE."""
+    wins = sum(1 for r in rows if r['delta_off_minus_on'] > 0)
+    return bool(len(rows) >= min_clips and wins >= min_wins)
+
+
+def gate_m4(own_hit, transfer, num_classes):
+    """Pre-registered S1/M4: class-correct information, not amplitude."""
+    bar = 1.0 / num_classes + 0.20
+    return bool(own_hit is not None and transfer is not None
+                and own_hit >= bar and transfer >= bar)
+
+
 def main():
     from mmcv import Config
     from mmcv.runner import load_checkpoint
@@ -311,14 +358,10 @@ def main():
     m2_h = [q for q in (head_quality(r, num_classes, pcr) for r in h_runs) if q]
     m2_f = [q for q in (head_quality(r, num_classes, pcr) for r in feat_runs) if q]
 
-    def _mean(rows, key):
-        vals = [r[key] for r in rows]
-        return float(sum(vals)) / len(vals) if vals else None
-
-    m1_thr, m1_hit = _mean(m1, 'thr50'), _mean(m1, 'hit1')
-    h_thr, f_thr = _mean(m2_h, 'thr50'), _mean(m2_f, 'thr50')
-    rel_h = None if m1_thr is None or h_thr is None else (h_thr - m1_thr) / m1_thr
-    rel_f = None if m1_thr is None or f_thr is None else (f_thr - m1_thr) / m1_thr
+    m1_thr, m1_hit = mean_of(m1, 'thr50'), mean_of(m1, 'hit1')
+    h_thr, f_thr = mean_of(m2_h, 'thr50'), mean_of(m2_f, 'thr50')
+    rel_h = relative_thr50(m1_thr, h_thr)
+    rel_f = relative_thr50(m1_thr, f_thr)
     report['M1_sem_head'] = {'per_clip': m1, 'mean_thr50': m1_thr,
                              'mean_hit1': m1_hit}
     report['M2_exclusivity'] = {
@@ -326,12 +369,8 @@ def main():
         'h_relative': rel_h, 'feat_relative': rel_f,
         'per_clip_h': m2_h, 'per_clip_feat': m2_f,
     }
-    report['gates']['M1'] = bool(
-        m1_thr is not None and m1_hit is not None
-        and m1_thr >= 0.30 and m1_hit >= 0.60)
-    report['gates']['M2'] = bool(
-        rel_h is not None and rel_f is not None
-        and rel_h <= -0.30 and rel_f <= -0.30)
+    report['gates']['M1'] = gate_m1(m1_thr, m1_hit)
+    report['gates']['M2'] = gate_m2(rel_h, rel_f)
 
     # ---------------------------- M3 -------------------------------------
     # Paired toggle on the TRAINED weights: residual ON vs forced 0, class CE
@@ -356,7 +395,7 @@ def main():
     wins = sum(1 for r in m3 if r['delta_off_minus_on'] > 0)
     report['M3_readout_toggle'] = {'per_clip': m3, 'wins': wins,
                                    'n': len(m3)}
-    report['gates']['M3'] = bool(len(m3) >= 8 and wins >= 8)
+    report['gates']['M3'] = gate_m3(m3)
 
     # ---------------------------- M4 -------------------------------------
     # Does the class evidence in z actually reach the head's decision, and is
@@ -462,9 +501,7 @@ def main():
                  'that describe z (own_hit / donor_transfer); head_swap is '
                  'reported with the same bar.'),
     }
-    report['gates']['M4'] = bool(
-        own_hit is not None and transfer is not None
-        and own_hit >= chance + 0.20 and transfer >= chance + 0.20)
+    report['gates']['M4'] = gate_m4(own_hit, transfer, num_classes)
 
     output = os.path.abspath(args.output)
     os.makedirs(os.path.dirname(output) or '.', exist_ok=True)
