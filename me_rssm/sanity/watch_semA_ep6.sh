@@ -129,4 +129,17 @@ CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py \
 # nothing, launches nothing: the verdict stays a manual step.
 python me_rssm/sanity/semA_ep6_verdict.py --run "$WORK_DIR" >> "$WATCH_LOG" 2>&1
 
+# Render the rule-5/rule-6 section-72 draft from the evidence bundle so the
+# training record is never hand-transcribed. Also read-only; the generated file
+# is a DRAFT -- a human pastes it into docs/training_runs_full.md after filling
+# the FILL markers. A failure here must not be silent, so it is reported.
+python me_rssm/sanity/semA_ep6_record.py --run "$WORK_DIR" \
+  --output "$WORK_DIR/section72_draft.md" >> "$WATCH_LOG" 2>&1
+RECORD_RC=$?
+if [ "$RECORD_RC" -eq 0 ]; then
+  echo "[watch] $(date -u '+%F %T') section-72 draft written to $WORK_DIR/section72_draft.md" >> "$WATCH_LOG"
+else
+  echo "[watch] $(date -u '+%F %T') WARNING: section-72 draft generation failed (rc=$RECORD_RC); the evidence bundle is unaffected" >> "$WATCH_LOG"
+fi
+
 echo "[watch] $(date -u '+%F %T') probes done; gate decision is a manual step" >> "$WATCH_LOG"

@@ -464,12 +464,19 @@ def main():
     h_runs = [rollout(model, dataset, i, sem_input='h') for i in indices]
     feat_runs = [rollout(model, dataset, i, sem_input='feat') for i in indices]
 
-    m1 = [q for q in (head_quality(r, num_classes, pcr, min_radius)
-                      for r in z_runs) if q]
-    m2_h = [q for q in (head_quality(r, num_classes, pcr, min_radius)
-                        for r in h_runs) if q]
-    m2_f = [q for q in (head_quality(r, num_classes, pcr, min_radius)
-                        for r in feat_runs) if q]
+    # `index` is attached so a reader can join the z / h / feat arms and the
+    # M3/M4 tables clip by clip. Without it the three M1/M2 lists are only
+    # positionally aligned, and any silent reordering (or a dropped clip)
+    # would compare different clips against each other.
+    m1 = [dict(q, index=int(idx))
+          for idx, q in ((idx, head_quality(r, num_classes, pcr, min_radius))
+                         for idx, r in zip(indices, z_runs)) if q]
+    m2_h = [dict(q, index=int(idx))
+            for idx, q in ((idx, head_quality(r, num_classes, pcr, min_radius))
+                           for idx, r in zip(indices, h_runs)) if q]
+    m2_f = [dict(q, index=int(idx))
+            for idx, q in ((idx, head_quality(r, num_classes, pcr, min_radius))
+                           for idx, r in zip(indices, feat_runs)) if q]
 
     m1_thr, m1_hit = mean_of(m1, 'thr50'), mean_of(m1, 'hit1')
     h_thr, f_thr = mean_of(m2_h, 'thr50'), mean_of(m2_f, 'thr50')

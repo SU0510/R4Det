@@ -31,6 +31,13 @@ PROBES = {
     'tools/probe_posterior_source.py': 'probe_posterior_source',
 }
 
+# Read-only renderers that run after the probes. They take --run/--output
+# rather than --config/--checkpoint, so they are tracked separately.
+RENDERERS = {
+    'me_rssm/sanity/semA_ep6_verdict.py': ('--run',),
+    'me_rssm/sanity/semA_ep6_record.py': ('--run', '--output'),
+}
+
 # Flags each probe is REQUIRED to be called with, so a window cannot silently
 # disappear from the battery.
 REQUIRED_FLAGS = {
@@ -166,6 +173,40 @@ class TestWatchdogCliContract(unittest.TestCase):
         for out in outs:
             self.assertTrue(out.endswith('.json'), out)
 
+    def test_renderers_are_invoked_with_their_own_flags(self):
+        """The post-probe renderers must not silently drop out of the battery.
+
+        They use --run/--output instead of --config/--checkpoint, so the probe
+        flag loop above does not cover them. A renamed flag would make the
+        step exit at argument parsing while the log still ends with
+        "probes done" -- the same silent-omission class as a dead probe.
+        """
+        called = {}
+        for argv in self.cmds:
+            if argv[1] in RENDERERS:
+                called[argv[1]] = argv
+        for rel, required in RENDERERS.items():
+            self.assertIn(rel, called, f'the watchdog no longer runs {rel}')
+            argv = called[rel]
+            allowed = accepted_flags(rel)
+            for flag in required:
+                self.assertIn(flag, argv,
+                              f'{rel} is called without {flag}')
+                self.assertIn(flag, allowed,
+                              f'{rel} does not define {flag}')
+
+    def test_section72_draft_is_written_but_never_auto_pasted(self):
+        """The draft is generated for a human; the record is not edited."""
+        text = _read(os.path.join('me_rssm', 'sanity', 'watch_semA_ep6.sh'))
+        self.assertIn('semA_ep6_record.py', text)
+        self.assertIn('section72_draft.md', text)
+        # Never WRITE into the canonical training record. Naming it in a
+        # comment is fine (the script says where the draft should be pasted),
+        # so only redirection targets count.
+        for target in re.findall(r'>>?\s*([^\s;]+)', text):
+            self.assertNotIn('training_runs_full', target,
+                             f'the watchdog writes into the record: {target}')
+
     def test_verdict_runs_after_the_probes_and_decides_nothing(self):
         text = _read(os.path.join('me_rssm', 'sanity', 'watch_semA_ep6.sh'))
         self.assertIn('semA_ep6_verdict.py', text)
@@ -176,6 +217,9 @@ class TestWatchdogCliContract(unittest.TestCase):
         # and must not launch a follow-up training run
         for forbidden in ('dist_train', 'train_vod', 'resume_from'):
             self.assertNotIn(forbidden, text)
+        # the section-72 renderer must come after the verdict
+        self.assertLess(joined.index('semA_ep6_verdict.py'),
+                        joined.index('semA_ep6_record.py'))
 
     def test_watchdog_does_not_auto_resume_training(self):
         """The pre-registration makes the ep6 decision a manual step."""
