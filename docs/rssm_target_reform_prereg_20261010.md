@@ -5,6 +5,13 @@
 > 先钉住真实目标/梯度/历史契约，再给出唯一变量与判据。
 > **数值门（§4 的阈值）是建议值，须由用户确认后才构成预登记**；在确认前
 > 不得据此启动任何训练。DC-RSSM 方向已按 §68.9i 止损，本文与它无关。
+>
+> **2026-10-10 复核修正（commit `bda2564` 后）**：§1.1 原稿把 burn-in 写成
+> 「无」，错误——`rssm_bptt_steps` 未在 config 覆盖，取类签名默认 `1`
+> （`R4Det.py:188`）⇒ `burn_in=2`、实际只有最后 1 帧历史 + 当前帧计 recon、
+> 等权平均（前 2 帧仅 burn-in、无 loss）。§2 落地规则与 S1 已同步该事实。
+> 预登记命令的 checkpoint 路径也已从 `epoch_12.pth`（不存在）改为
+> `epoch_14.pth`（基线 best-saved）。§1.2/§1.3/§1.4 日志与源码证据经复核成立。
 
 ## 1. 真实目标契约审计（阶段 0.1，全部为源码+日志实测）
 
@@ -21,8 +28,8 @@
 | 标准化 | **无任何标准化**；本家族没有 `_normalized_recon_target`（它只存在于 `LowDimFutureConsistentLatentFusion`，`rssm_fusion.py:1438-1443`） | 全类族 grep |
 | detach | **没有 detach**：`F.mse_loss(rssm_recon, bev_feats_cache)` 的第二个参数在计算图内 | `R4Det.py:930`（当前帧）、`R4Det.py:909`（历史帧） |
 | 损失权重 | **1.0**（`losses['loss_rssm_recon']` 直接登记，R4Det 无 `loss_weights` 机制） | `R4Det.py:1504` |
-| 历史帧 | 窗口内**每一帧**都算 recon，最后与当前帧**等权平均** | `R4Det.py:1417-1428`（收集）→ `1493-1504`（平均） |
-| burn-in | **无**：未设 `rssm_bptt_steps` ⇒ `grad_steps = history_steps` ⇒ `burn_in = 0`，三帧历史全部带梯度监督 | `R4Det.py:1403-1407` |
+| 历史帧 | 窗口内**最后 1 帧历史 + 当前帧**计 recon、等权平均；前 2 帧仅 burn-in、无梯度、无 loss（`rssm_bptt_steps` 默认 `1`、config 未覆盖 ⇒ `burn_in=2`） | `R4Det.py:188`（默认 `1`）→ `1403-1407`（`burn_in=2`）→ `1417-1428`（收集）→ `1493-1504`（平均）；见 `training_runs_full.md` §47 BPTT 表 |
+| burn-in | **2 帧**：`rssm_bptt_steps` 未在 config 覆盖，取类签名默认 `1` ⇒ `grad_steps=min(1,3)=1`、`burn_in=2`；只有 t=2（第 3 帧）带 `rssm_detach_state=False` + recon loss，t=0/1 仅前向、不写入 loss | `R4Det.py:188, 1403-1407, 1417-1428` |
 | 状态重置 | 无效历史帧的样本 `reset_for_samples(~valid_t)`；基类实现只清 `h_state`/`z_state` | `R4Det.py:1415,1430`；`rssm_fusion.py:299-312` |
 | decoder 输入 | `cat([h_t, z_t])`（h 旁路存在）；输出 `output_proj(z_t) + feat` | `rssm_fusion.py:479-481`、`493-495` |
 | 配置 | `latent_dim=256, hidden_dim=128, in/out=256, kl_scale=1.0, free_nats=1.0, min_std=0.1, init_std=0.2, seq_len=4` | 运行目录 config 第 211-228 行 |
@@ -100,9 +107,11 @@ T_del_t  = F_t - F_{t-1}             # 本次唯一变量
 
 1. **帧序与配对**：`F_{t-1}` 取**同一模块实例上一帧 forward 的同一个张量**
    （即上一帧的 `bev_feats`），与 RSSM 的 `h/z` 状态同生命周期，不重新前向。
-2. **有效位**：`t=0`（窗口首帧）无 `F_{t-1}` ⇒ 该帧不计差分损失（其余帧照算）；
-   历史帧无效的样本按 `reset_for_samples` 语义**清除配对有效位**，对齐
-   `rssm_fusion.py:1418-1433` 已有的 `prev_recon_valid` 模板。
+2. **计损失帧**：`rssm_bptt_steps` 默认 `1` ⇒ `burn_in=2`，实际只有 t=2
+   （第 3 帧/最后一个历史帧）与 t=3（当前帧）计 recon，等权平均；
+   t=0/1 仅 burn-in、不计差分损失。t=2 无有效 `F_{t-1}`（窗口首帧）的样本
+   不计差分损失；历史帧无效的样本按 `reset_for_samples` 语义**清除配对有效位**，
+   对齐 `rssm_fusion.py:1418-1433` 已有的 `prev_recon_valid` 模板。
    **禁止**在无有效前缀时强迫拟合「全零差分」。
 3. **不改 detach 规则**：目标保持原始梯度契约（不引入 stop-gradient）。
    ⇒ 已知并接受的后果：差分目标的梯度会经由 `F_{t-1}` 回流到**上一帧**的
@@ -135,7 +144,7 @@ specific 92.91% ≈ 解析极限 (S−1)/S = 93.75%、**常数差分 specific �
 ```
 CUDA_VISIBLE_DEVICES=5 python tools/probe_recon_target.py \
   --config configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr.py \
-  --checkpoint /data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_seed0/epoch_12.pth \
+  --checkpoint /data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_seed0/epoch_14.pth \
   --start-index 3 --limit 24 --stride 17 --require-classes 2 \
   --output /data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_seed0/recon_target_raw_ep12_w3_24.json
 ```
@@ -164,7 +173,8 @@ Ped loose **30.9277**、Cyc loose **48.6313**。
 **分阶段判据**：
 
 - **S1 接线冒烟（450 iter，不构成 AP 结论）**：目标张量形状/有效位正确、
-  首帧不计、梯度有限、`stat_recon_mse` 与 `stat_recon_valid_frac` 合理、
+  只有 t=2/t=3 计差分损失（`burn_in=2`）、t=2 无有效前帧的样本不计、
+  梯度有限、`stat_recon_mse` 与 `stat_recon_valid_frac` 合理、
   decoder 确实在学习（recon 有下降）、无 OOM/NaN、显存与基线同量级。
   **不做** AP 裁决、**不**用单样本 shuffle 或方差增大当成功。
 - **S2 ep6 检查（决定是否继续）**：

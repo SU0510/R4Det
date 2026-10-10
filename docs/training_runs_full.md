@@ -12400,8 +12400,8 @@ solved 1.000、τ_r 0.220，均在预登记带内。）
 | 分辨率 / 标准化 | 全分辨率（248,216），**不 pool、不标准化**；本家族无 `_normalized_recon_target`（该函数只在 `LowDimFutureConsistentLatentFusion`，`rssm_fusion.py:1438-1443`） | 全类族 grep |
 | detach | **目标在计算图内**（无 detach） | `R4Det.py:930`（当前帧）、`909`（历史帧） |
 | 权重 | **1.0**（`losses['loss_rssm_recon']` 直接登记；R4Det 无 `loss_weights`） | `R4Det.py:1504` |
-| 历史监督 | 窗口内**每帧**都算 recon，末尾与当前帧**等权平均** | `R4Det.py:1417-1428` → `1493-1504` |
-| burn-in | **无**：未设 `rssm_bptt_steps` ⇒ `burn_in=0`，3 帧历史全部带梯度 | `R4Det.py:1403-1407` |
+| 历史监督 | 窗口内**最后 1 帧历史 + 当前帧**计 recon、等权平均（`rssm_bptt_steps` 默认 `1`、config 未覆盖 ⇒ `burn_in=2`）；前 2 帧仅 burn-in、无 loss | `R4Det.py:188, 1403-1407, 1417-1428` → `1493-1504`（另见 §47 BPTT 表） |
+| burn-in | **2 帧**：`rssm_bptt_steps` 未在 config 覆盖，取类签名默认 `1` ⇒ `grad_steps=1`、`burn_in=2`；只有 t=2（第 3 帧）带 recon loss，t=0/1 仅前向、无 loss | `R4Det.py:188, 1403-1407, 1417-1428`（另见 §47 BPTT 表） |
 | decoder 输入 | `cat([h_t,z_t])`（h 旁路存在）；输出 `output_proj(z_t)+feat` | `rssm_fusion.py:479-481`、`493-495` |
 | 状态重置 | 无效历史帧 `reset_for_samples(~valid_t)`；基类只清 `h/z` | `R4Det.py:1415,1430`；`rssm_fusion.py:299-312` |
 | 配置 | `latent_dim=256, hidden_dim=128, in/out=256, kl_scale=1.0, free_nats=1.0, min_std=0.1, init_std=0.2, seq_len=4` | 运行目录 config 211-228 行 |
