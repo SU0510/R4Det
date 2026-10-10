@@ -146,6 +146,11 @@
     + **M1 为唯一未过的门**；命中时输出 `INSUFFICIENT EVIDENCE`，不记为
     机制否定。新增 8 条互斥性测试，三份 probe 测试合跑 64 passed。
     详见 §71.9.9。
+  - ep6 证据链预防性加固（`30333b0`）：看门狗加环境预检
+    （`command -v python` + `python -c 'import torch, mmcv, mmdet3d'`），
+    任一失败即 `ABORT` 退出而不是让每个探针静默失败、日志仍写
+    `probes done`。本机现行 `.envrc` 实测可正常激活（该风险当前未触发）。
+    正/负向路径均已实跑验证；改脚本后已重启看门狗会话。详见 §71.9.10。
 - **待用户裁决（唯一阻塞项，已换到候选 A 的数值门）**：见
   `docs/rssm_candidate_A_prereg_20261010.md` **§5**。S1（ep6：`thr50 ≥ 0.30`、
   `hit@1 ≥ 0.60`、z/h 排他、toggle、跨类 shuffle ≥ chance+20pt）、

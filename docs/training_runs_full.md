@@ -12942,6 +12942,29 @@ M1 本来就过线时不适用、任一读数缺失一律不算例外、阈值�
 `thr50=0.29`（也掉线）→ 计为失败；`excess=0.02` → 计为失败。
 三份 probe 测试合跑 **64 passed**。
 
+#### 71.9.10 看门狗环境预检（`30333b0`）
+
+**缺陷**：`watch_semA_ep6.sh` 的每个探针都通过 `python` 启动。若
+`source .envrc` 没生效（conda 未激活 / shell 非交互差异），`python` 不存在，
+**所有探针都会立刻失败且不写任何 JSON**，而脚本仍会走到 `probes done`。
+§71.9.6 的完整性检查能发现产物缺失，但无法区分「环境坏了」与「探针崩了」，
+事后排查要靠猜。
+
+**实测**：`bash -c 'source .envrc; python -c "import torch..."'` 在本机
+现行环境**可以**正常激活（`python` →
+`/home/lurui/envs/miniforge3/envs/r4det/bin/python`，torch 2.0.1+cu118、
+CUDA 可用）。即该风险当前**未触发**，属预防性加固。
+
+**修复**：在探针序列之前加两步预检，任一失败即写 `ABORT` 到看门狗日志并
+`exit 1`（不进入采集）：
+1. `command -v python` —— 环境根本没激活；
+2. `python -c 'import torch, mmcv, mmdet3d'` —— 激活到了别的环境。
+
+**验证**：正向路径实跑确认 `PREFLIGHT PASSED`；
+负向对照（`PATH=/nonexistent`）确认按设计 `ABORT` 并 `exit 1`。
+改脚本后按 §71.9.2 的约定**重启看门狗会话**（新起点 17:52:22 UTC），
+确保 bash 从偏移 0 读取。
+
 **边界**：门槛数值、探针的采样窗口（M1 `stride=200`/10 帧、z-util 三窗、
 source `stride=700` 对应 3 个索引——与 MAI ep12/ep16 逐字一致，故不改）、
 模型与训练日程全部未动；看门狗脚本本身**未改**（它正处等待循环，bash 按
