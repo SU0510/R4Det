@@ -139,8 +139,14 @@ def static_mask_from_canvas(canvas, pc_range, static_q, min_cells,
     x_min, y_min, _, x_max, y_max, _ = pc_range
     cell_x = (x_max - x_min) / H
     cell_y = (y_max - y_min) / W
-    xs = x_min + (torch.arange(H) + 0.5) * cell_x
-    ys = y_min + (torch.arange(W) + 0.5) * cell_y
+    # Cell-center grids and the 1-D search ranges are built on the canvas's
+    # device/dtype, exactly as EgoWarpEvidenceFieldRSSMFusion._solve_ego does:
+    # the probe runs on CUDA with a CUDA canvas, and CPU aranges cannot be
+    # indexed by the CUDA selection mask.
+    xs = x_min + (torch.arange(H, device=vel.device,
+                               dtype=torch.float32) + 0.5) * cell_x
+    ys = y_min + (torch.arange(W, device=vel.device,
+                               dtype=torch.float32) + 0.5) * cell_y
     X = xs[:, None].expand(H, W)
     Y = ys[None, :].expand(H, W)
     r = torch.sqrt(X * X + Y * Y).clamp(min=1e-6)
@@ -161,11 +167,14 @@ def static_mask_from_canvas(canvas, pc_range, static_q, min_cells,
     u_x, u_y = ux[sel0], uy[sel0]
     b_r = v_mean[sel0]
     w = (count * snr)[sel0]
-    seed = torch.arange(-vx_max, vx_max + 1e-6, vx_step)
+    seed = torch.arange(-vx_max, vx_max + 1e-6, vx_step, device=vel.device,
+                        dtype=torch.float32)
     r1 = (b_r[:, None] + seed[None, :] * u_x[:, None]).abs()
     vx_seed = float(seed[r1.median(dim=0).values.argmin()])
-    lvx = torch.arange(vx_seed - rvx_half, vx_seed + rvx_half + 1e-6, rvx_step)
-    lvy = torch.arange(-rvy_max, rvy_max + 1e-6, rvy_step)
+    lvx = torch.arange(vx_seed - rvx_half, vx_seed + rvx_half + 1e-6,
+                       rvx_step, device=vel.device, dtype=torch.float32)
+    lvy = torch.arange(-rvy_max, rvy_max + 1e-6, rvy_step, device=vel.device,
+                       dtype=torch.float32)
     r2 = (b_r[None, None, :] + lvx[:, None, None] * u_x[None, None, :]
           + lvy[None, :, None] * u_y[None, None, :]).abs()
     med2 = r2.median(dim=-1).values
