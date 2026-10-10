@@ -357,6 +357,72 @@ class TestThreeWindowGuard(unittest.TestCase):
         self.assertNotIn('同一组 clip', text)
 
 
+class TestPosteriorSourceSection(unittest.TestCase):
+    """Section 72.8 must not render a truncated source file as a reading."""
+
+    def setUp(self):
+        self.fx = _Fixture()
+
+    def tearDown(self):
+        self.fx.close()
+
+    def _rich_source(self):
+        # Shape of a real tools/probe_posterior_source.py output.
+        return {
+            'indices': [3, 703, 1403],
+            'fusion_class': 'SemanticReadoutRSSMFusion',
+            'latent_resolution': [216, 248],
+            'readout_mode': 'film',
+            'mu_q': {'rms': 0.4583, 'batch_common_rms': 0.4030,
+                     'sample_specific_rms': 0.2181,
+                     'sample_specific_energy_frac': 0.2265},
+            'h_t': {'rms': 0.1061, 'batch_common_rms': 0.0956,
+                    'sample_specific_rms': 0.0460,
+                    'sample_specific_energy_frac': 0.1879},
+            'e_pooled': {'rms': 1.0451, 'batch_common_rms': 0.6246,
+                         'sample_specific_rms': 0.8379,
+                         'sample_specific_energy_frac': 0.6428},
+            'mu_q_removal_of_h_rel_l2': 0.2795,
+            'mu_q_removal_of_e_rel_l2': 0.3320,
+            'posterior_obs_mode': 'l2',
+        }
+
+    def test_full_source_file_renders_every_diagnostic(self):
+        self.fx.dump(record.POST_SOURCE, self._rich_source())
+        text = self.fx.render()
+        section = text.split('### 72.8')[1].split('### 72.9')[0]
+        self.assertIn('样本特异能量占比', section)
+        self.assertIn('64.28%', section)         # e_pooled specific
+        self.assertIn('**0.842**', section)       # h/e removal ratio
+        self.assertNotIn('不是完整读数', section)
+
+    def test_rms_only_source_file_is_flagged_not_reported(self):
+        """A hand-made stencil must not masquerade as the mechanism reading."""
+        self.fx.dump(record.POST_SOURCE, {
+            'indices': [3, 703, 1403],
+            'fusion_class': 'SemanticReadoutRSSMFusion',
+            'latent_resolution': [216, 248],
+            'readout_mode': 'film',
+            'mu_q': {'rms': 0.5}, 'h_t': {'rms': 0.4},
+            'e_pooled': {'rms': 0.8}})
+        text = self.fx.render()
+        section = text.split('### 72.8')[1].split('### 72.9')[0]
+        self.assertIn('不是完整读数', section)
+        self.assertIn('不得当作「特异占比为 0」', section)
+        # The h/e ratio must not be invented from missing inputs.
+        self.assertNotIn('h/e 依赖比** | **0', section)
+
+    def test_source_field_names_match_the_real_tool(self):
+        with open(os.path.join(_REPO, 'tools', 'probe_posterior_source.py'),
+                  encoding='utf-8') as handle:
+            source = handle.read()
+        for key in ('sample_specific_energy_frac', 'batch_common_rms',
+                    'sample_specific_rms', 'mu_q_removal_of_h_rel_l2',
+                    'mu_q_removal_of_e_rel_l2'):
+            self.assertIn(key, source,
+                          f'probe_posterior_source no longer writes {key}')
+
+
 class TestProducerConsumerContract(unittest.TestCase):
     """The generator reads keys the real probes must actually write."""
 

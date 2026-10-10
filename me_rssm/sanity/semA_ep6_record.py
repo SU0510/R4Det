@@ -508,10 +508,41 @@ def render(run_dir, date_str):
         add('')
     else:
         post = load_json(post_path)
-        add('| 量 | RMS |')
-        add('|---|---:|')
+        # The real tool reports a four-field block per tensor. A file carrying
+        # only ``rms`` is not a truncated reading to be papered over -- it is a
+        # different (usually hand-made) artifact, so say so instead of
+        # rendering a half-filled table as if it were the measurement.
+        rich = [k for k in ('mu_q', 'h_t', 'e_pooled')
+                if isinstance(post.get(k), dict)
+                and 'sample_specific_energy_frac' in post[k]]
+        add('| 量 | RMS | batch-common RMS | 样本特异 RMS | 样本特异能量占比 |')
+        add('|---|---:|---:|---:|---:|')
         for key in ('mu_q', 'h_t', 'e_pooled'):
-            add(f'| `{key}` | {num((post.get(key) or {}).get("rms"))} |')
+            block = post.get(key) or {}
+            add(f'| `{key}` | {num(block.get("rms"))} | '
+                f'{num(block.get("batch_common_rms"))} | '
+                f'{num(block.get("sample_specific_rms"))} | '
+                f'{pct(block.get("sample_specific_energy_frac"), 2)} |')
+        add('')
+        if len(rich) < 3:
+            add('> **警告：该 source JSON 不是完整读数**——缺少')
+            add('> `sample_specific_energy_frac`（真实工具必写）。上面的空列')
+            add('> 不得当作「特异占比为 0」，整个归因表也不得引用。')
+            add('')
+        removal_h = post.get('mu_q_removal_of_h_rel_l2')
+        removal_e = post.get('mu_q_removal_of_e_rel_l2')
+        add('| 读出/依赖读数 | 值 |')
+        add('|---|---:|')
+        add(f'| `mu_q_removal_of_h_rel_l2` | {num(removal_h)} |')
+        add(f'| `mu_q_removal_of_e_rel_l2` | {num(removal_e)} |')
+        if removal_h is not None and removal_e:
+            add(f'| **h/e 依赖比** | **{num(removal_h / removal_e, 3)}** |')
+        add(f'| `posterior_obs_mode` | `{post.get("posterior_obs_mode")}` |')
+        add(f'| `z_proj_init` | `{post.get("z_proj_init")}` |')
+        add('')
+        add('> h/e 依赖比是各代通用的机制对照量（标准主线 ep12 为 2.338、'
+            'MAI ep12 为 0.842、MCI ep12 为 0.605）；越低表示 posterior')
+        add('> 越依赖观测而非 GRU 状态。')
         add('')
         add(f'fusion 类：`{post.get("fusion_class")}`、latent '
             f'{post.get("latent_resolution")}、readout '
