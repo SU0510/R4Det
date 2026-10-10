@@ -12773,6 +12773,53 @@ ep2 0.6764/0.4274、ep6 0.8107/0.6585。A 的同 epoch 值明显更低，但如�
   `hit1_chance`/`hit1_excess_over_chance` 补充读数、给出带真实跨度与 n 的
   早期 AP 窗口、并原样列出 §7 分叉；看门狗已在采集结束后自动调用它。
   它只收集与打印，**不做判定**。
+#### 71.9.6 证据包完整性检查与产物指纹（训练在飞期间，`0b4e0cc`）
+
+**动机（两个缺陷，均会作废 S1 判定）**：
+
+1. **看门狗没有失败传播**。`watch_semA_ep6.sh` 是一串不打 `&&` 的探针调用；
+   任一探针死掉（OOM / CUDA error / 融合族不匹配）**不写 JSON**，而日志仍会
+   走到 `probes done`。此时 `semreadout_ep6_gate.json` 缺失或过期，读者很容易
+   把"探针没跑成"误读成"门没过"——正是预登记最忌讳的判定污染。
+2. **读数与产物不可回溯**。gate JSON 只记录 checkpoint **路径**，不记录
+   内容。`epoch_6.pth` 若被后续写入覆盖、或读的是旧文件，判定无法事后发现。
+
+**修复（都在判定/探针侧，仍不触碰被训练模型）**：
+
+* `semA_ep6_verdict.py` 新增 `check_evidence()`：逐一检查五份产物的存在性与
+  schema（gate 的四门键、`input_fingerprints`、非空 `indices`；三窗 z-util 的
+  `per_sample` ≥2 且每项带 `variants`；source 探针的
+  `fusion_class`/`mu_q`/`h_t`/`e_pooled`），任一不满足即 `ok=False`。
+  输出新增 `[MISSING/UNREADABLE/MALFORMED/INCOMPLETE]` 明细行，且
+  **即使四门全过、只要证据包不完整也报 `NOT EVALUABLE`**，不再输出
+  `ALL PASS`。同时打印 checkpoint 的 sha256 前缀 / size / mtime 与 config 的
+  sha256 前缀，供人工核对"读的是不是刚落的 ep6"。
+* `probe_semreadout_ep6.py` 新增 `input_fingerprints()`，把 config 与
+  checkpoint 的 sha256/size/mtime 写进 gate JSON（缺失产物记为 `None` 而非
+  崩溃，由判定侧统一报 INCOMPLETE）。
+* 新增 `me_rssm/sanity/test_semA_ep6_verdict.py`（**16 条**，CPU）：完整包
+  为 OK；八种残缺形态（缺文件 / 非法 JSON / 顶层非对象 / 缺 schema 键 /
+  缺指纹 / 缺门 / 空 indices / 单样本 / 无 variants）各自必须 `ok=False`；
+  以及**生产者—消费者契约测试**——`check_evidence` 要求的键必须是探针实际
+  写出的键（含 `report['gates']['Mx']`、三窗 `variants`、source 的五个键），
+  且 `EVIDENCE` 覆盖的每份 JSON 看门狗都确实会写。任一侧改名会让测试红，
+  而不是让未来每次判定静默变成 INCOMPLETE。
+  `test_probe_semreadout_ep6.py` 追加 3 条指纹测试（哈希 64 位、内容不同则
+  哈希不同、产物缺失不抛异常）。
+
+**回归**：`test_probe_semreadout_ep6`+`test_probe_z_utilization_standard`+
+`test_semA_ep6_verdict`+`test_semantic_readout_rssm` = **57 passed**；
+`test_grad_paths` / `test_mci_rssm` 全绿；`test_rssm_fusion` **85 passed**。
+另用手工构造的完整/残缺 bundle 各跑一次真实判定器，确认完整包打印
+`ALL PASS`、删掉 source 产物后改报 `INCOMPLETE BUNDLE` +
+`NOT EVALUABLE`。
+
+**边界**：门槛数值、探针的采样窗口（M1 `stride=200`/10 帧、z-util 三窗、
+source `stride=700` 对应 3 个索引——与 MAI ep12/ep16 逐字一致，故不改）、
+模型与训练日程全部未动；看门狗脚本本身**未改**（它正处等待循环，bash 按
+文件偏移读脚本，改动须重启会话，见 §71.9.2 附注）。训练持续产出，无
+NaN/OOM/重启。
+
 * 下一步：等 ep6 val + `epoch_6.pth`，看门狗自动采集 M1–M4 与三窗读数；
   **S1 判定是人工步骤**，且即便 S1 全过，也须先取得用户对 §5 S2 数值门的
   批准才能续训到 ep16。

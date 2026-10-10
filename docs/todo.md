@@ -110,6 +110,18 @@
     full-res 同口径对照，不直接当机制否定。
     A 侧训练期同口径（train split）ep1/ep2：`hit@1` 0.159/0.241、
     `thr50` 0.073/0.232。
+  - ep6 证据链第四处预检修复（`0b4e0cc`，ep6 未产出时完成）：
+    **看门狗没有失败传播**——它是一串不打 `&&` 的探针调用，任一探针死掉
+    （OOM / CUDA error / 融合族不匹配）都不写 JSON，而日志仍走到
+    `probes done`，缺产物会被误读成"门没过"。现由判定器
+    `semA_ep6_verdict.py` 的 `check_evidence()` 逐一校验五份产物的存在性与
+    schema，证据包不完整时**即使四门全过也报 `NOT EVALUABLE`**，绝不输出
+    `ALL PASS`；同时 gate JSON 新增 config/checkpoint 的
+    sha256/size/mtime 指纹，防止读到被覆盖的旧权重。新增
+    `test_semA_ep6_verdict.py`（16 条，含生产者—消费者契约测试：判定器要求的
+    键必须是探针实际写出的键，任一侧改名会让测试红而非静默 INCOMPLETE）。
+    门槛数值、采样窗口、模型与日程均未动；看门狗脚本本身未改（正处等待
+    循环，改它须重启会话）。详见 §71.9.6。
 - **待用户裁决（唯一阻塞项，已换到候选 A 的数值门）**：见
   `docs/rssm_candidate_A_prereg_20261010.md` **§5**。S1（ep6：`thr50 ≥ 0.30`、
   `hit@1 ≥ 0.60`、z/h 排他、toggle、跨类 shuffle ≥ chance+20pt）、
