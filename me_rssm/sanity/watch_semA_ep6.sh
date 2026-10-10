@@ -76,6 +76,20 @@ echo "[watch] $(date -u '+%F %T') GPUs free after ${waited}s; running probes" >>
 # shellcheck disable=SC1091
 source .envrc
 
+# Preflight: every probe below runs through `python`, and a probe that cannot
+# start writes NO JSON while this script still reaches "probes done". Fail
+# here, loudly, instead of leaving a silently empty evidence bundle. The
+# verdict assembler also checks the artifacts, but it cannot tell the
+# difference between "the environment was broken" and "the probe crashed".
+if ! command -v python >/dev/null 2>&1; then
+  echo "[watch] $(date -u '+%F %T') ABORT: 'python' not on PATH after sourcing .envrc -- rerun this script in a shell where the r4det env activates" >> "$WATCH_LOG"
+  exit 1
+fi
+if ! python -c 'import torch, mmcv, mmdet3d' >/dev/null 2>&1; then
+  echo "[watch] $(date -u '+%F %T') ABORT: python cannot import torch/mmcv/mmdet3d -- environment is not the r4det env; rerun this script" >> "$WATCH_LOG"
+  exit 1
+fi
+
 # --- the pre-registered S1 gate -----------------------------------------
 CUDA_VISIBLE_DEVICES=5 python me_rssm/sanity/probe_semreadout_ep6.py \
   --config "$CFG" --checkpoint "$CKPT" \
