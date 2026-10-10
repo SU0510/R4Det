@@ -224,13 +224,21 @@ def main():
               'the battery; S1 NOT EVALUABLE')
     else:
         gates = gate.get('gates', {})
+        # A gate key that is absent (partial report) must not be rendered as a
+        # plain FAIL: "not measured" and "measured and failed" are different
+        # findings, and only one of them is a mechanism refutation.
+        def verdict_of(name):
+            if name not in gates:
+                return 'NOT MEASURED'
+            return 'PASS' if gates.get(name) else 'FAIL'
+
         m1 = gate.get('M1_sem_head', {})
         m2 = gate.get('M2_exclusivity', {})
         m3 = gate.get('M3_readout_toggle', {})
         m4 = gate.get('M4_class_information', {})
 
         # --- M1 ---------------------------------------------------------
-        print(f"M1 semantic head : {'PASS' if gates.get('M1') else 'FAIL'}"
+        print(f"M1 semantic head : {verdict_of('M1')}"
               f"  thr50={m1.get('mean_thr50')} (bar >=0.30)"
               f"  hit@1={m1.get('mean_hit1')} (bar >=0.60)")
         clips = m1.get('per_clip') or []
@@ -250,7 +258,7 @@ def main():
                       'mechanism refutation -- add a full-res matched control.')
 
         # --- M2 ---------------------------------------------------------
-        print(f"M2 z-exclusivity: {'PASS' if gates.get('M2') else 'FAIL'}"
+        print(f"M2 z-exclusivity: {verdict_of('M2')}"
               f"  h_relative={m2.get('h_relative')}"
               f"  feat_relative={m2.get('feat_relative')}  (both must be <=-0.30)")
         print(f'   z thr50={m2.get("z_mean_thr50")} '
@@ -260,11 +268,11 @@ def main():
                   'void (the semantics came from h/observation), per section 7.')
 
         # --- M3 ---------------------------------------------------------
-        print(f"M3 readout      : {'PASS' if gates.get('M3') else 'FAIL'}"
+        print(f"M3 readout      : {verdict_of('M3')}"
               f"  wins={m3.get('wins')}/{m3.get('n')} (need >=8/10)")
 
         # --- M4 ---------------------------------------------------------
-        print(f"M4 class info   : {'PASS' if gates.get('M4') else 'FAIL'}"
+        print(f"M4 class info   : {verdict_of('M4')}"
               f"  own_hit={m4.get('mean_own_hit')} "
               f"donor_transfer={m4.get('mean_donor_transfer')} "
               f"(bar {m4.get('bar')})")

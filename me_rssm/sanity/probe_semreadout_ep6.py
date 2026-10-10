@@ -389,6 +389,23 @@ def input_fingerprints(config_path, checkpoint_path):
     return out
 
 
+def write_report(report, output):
+    """Write the report atomically, so a partial file is never left behind.
+
+    The probe is the ONLY record of the S1 gate numbers, and the M1->M4
+    sequence is long enough that a late crash (or a kill) would otherwise lose
+    readings that were already computed. The caller flushes after each gate;
+    the temp-file rename keeps a reader from parsing a half-written JSON.
+    """
+    output = os.path.abspath(output)
+    os.makedirs(os.path.dirname(output) or '.', exist_ok=True)
+    tmp = output + '.tmp'
+    with open(tmp, 'w') as handle:
+        json.dump(report, handle, indent=2, sort_keys=True)
+    os.replace(tmp, output)
+    return output
+
+
 def main():
     from mmcv import Config
     from mmcv.runner import load_checkpoint
@@ -467,6 +484,7 @@ def main():
     }
     report['gates']['M1'] = gate_m1(m1_thr, m1_hit)
     report['gates']['M2'] = gate_m2(rel_h, rel_f)
+    write_report(report, args.output)  # flush M1/M2 before the long M3 pass
 
     # ---------------------------- M3 -------------------------------------
     # Paired toggle on the TRAINED weights: residual ON vs forced 0, class CE
@@ -492,6 +510,7 @@ def main():
     report['M3_readout_toggle'] = {'per_clip': m3, 'wins': wins,
                                    'n': len(m3)}
     report['gates']['M3'] = gate_m3(m3)
+    write_report(report, args.output)  # flush M3 before M4's donor swaps
 
     # ---------------------------- M4 -------------------------------------
     # Does the class evidence in z actually reach the head's decision, and is
@@ -601,10 +620,7 @@ def main():
 
     report['input_fingerprints'] = input_fingerprints(args.config,
                                                       args.checkpoint)
-    output = os.path.abspath(args.output)
-    os.makedirs(os.path.dirname(output) or '.', exist_ok=True)
-    with open(output, 'w') as handle:
-        json.dump(report, handle, indent=2, sort_keys=True)
+    output = write_report(report, args.output)
     print(json.dumps(report, indent=2, sort_keys=True))
     print('[json]', output)
     if not all(v is True for v in report['gates'].values()):

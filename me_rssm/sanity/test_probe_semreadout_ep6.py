@@ -10,6 +10,7 @@ Run: python3 me_rssm/sanity/test_probe_semreadout_ep6.py
 """
 
 import importlib.util
+import json
 import os
 import sys
 import unittest
@@ -30,6 +31,11 @@ PC_RANGE = [0.0, -39.68, -4.0, 69.12, 39.68, 2.0]
 H, W, C = 8, 10, 4
 # Mirrors the config's object_min_radius; threaded explicitly, never defaulted.
 MIN_RADIUS = 2
+
+
+def _read(rel):
+    with open(os.path.join(_REPO, rel), encoding='utf-8') as handle:
+        return handle.read()
 
 
 class _MockBoxes:
@@ -479,6 +485,55 @@ class _FakeDataset(list):
 
     def __getitem__(self, index):
         return list.__getitem__(self, index)
+
+
+class TestWriteReport(unittest.TestCase):
+    """The gate JSON is the only record of the S1 numbers.
+
+    M1->M4 is a long pass, so the probe flushes after each gate group. A
+    late crash must still leave the completed readings on disk, and a reader
+    must never see a half-written file.
+    """
+
+    def test_writes_and_returns_absolute_path(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, 'gate.json')
+            got = probe.write_report({'a': 1}, out)
+            self.assertEqual(got, os.path.abspath(out))
+            with open(out) as handle:
+                self.assertEqual(json.load(handle), {'a': 1})
+
+    def test_creates_missing_parent_directories(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, 'nested', 'deeper', 'gate.json')
+            probe.write_report({'a': 1}, out)
+            self.assertTrue(os.path.exists(out))
+
+    def test_overwrite_is_atomic_and_leaves_no_temp_file(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, 'gate.json')
+            probe.write_report({'gates': {'M1': True}}, out)
+            probe.write_report({'gates': {'M1': True, 'M2': False}}, out)
+            with open(out) as handle:
+                payload = json.load(handle)
+            self.assertEqual(payload['gates'], {'M1': True, 'M2': False})
+            self.assertFalse(os.path.exists(out + '.tmp'),
+                             'the temp file must be renamed away, not left')
+
+    def test_flushes_after_each_gate_group(self):
+        """Source guard: M1/M2 and M3 each flush before the next long pass."""
+        source = _read('me_rssm/sanity/probe_semreadout_ep6.py')
+        self.assertIn("report['gates']['M2'] = gate_m2(rel_h, rel_f)",
+                      source)
+        after_m2 = source.split("report['gates']['M2'] = gate_m2(rel_h, rel_f)",
+                                1)[1]
+        self.assertIn('write_report(', after_m2.split('# ------')[0])
+        self.assertIn("report['gates']['M3'] = gate_m3(m3)", source)
+        after_m3 = source.split("report['gates']['M3'] = gate_m3(m3)", 1)[1]
+        self.assertIn('write_report(', after_m3.split('# ------')[0])
 
 
 class TestSampleCurrentGt(unittest.TestCase):
