@@ -76,24 +76,32 @@ CUDA_VISIBLE_DEVICES=5 python me_rssm/sanity/probe_semreadout_ep6.py \
   --output "$WORK_DIR/semreadout_ep6_gate.json" >> "$WATCH_LOG" 2>&1
 
 # --- family-standard counterfactual readout (three windows) -------------
-CUDA_VISIBLE_DEVICES=6 python me_rssm/sanity/probe_z_utilization_gated.py \
+# Candidate A runs the STANDARD family (MotionAlignedRSSMFusion): it has no
+# `_z_intervention` hook point, so probe_z_utilization_gated.py aborts with
+# "target model is not a gated variant" (verified 2026-10-10 on the 450-iter
+# smoke). Use the standard-family probe instead; it performs the same
+# posterior-head intervention and the same scoring (dz's own code), and
+# additionally forwards the deployed class residual to the head.
+CUDA_VISIBLE_DEVICES=6 python me_rssm/sanity/probe_z_utilization_standard.py \
   --config "$CFG" --checkpoint "$CKPT" \
   --start-index 3 --limit 4 --batch-size 4 --shuffle-offset 2 \
-  --output "$WORK_DIR/z_util_gated_ep6_w3.json" >> "$WATCH_LOG" 2>&1
+  --output "$WORK_DIR/z_util_std_ep6_w3.json" >> "$WATCH_LOG" 2>&1
 
-CUDA_VISIBLE_DEVICES=7 python me_rssm/sanity/probe_z_utilization_gated.py \
+CUDA_VISIBLE_DEVICES=7 python me_rssm/sanity/probe_z_utilization_standard.py \
   --config "$CFG" --checkpoint "$CKPT" \
   --start-index 100 --limit 4 --batch-size 4 --shuffle-offset 2 \
-  --output "$WORK_DIR/z_util_gated_ep6_w100.json" >> "$WATCH_LOG" 2>&1
+  --output "$WORK_DIR/z_util_std_ep6_w100.json" >> "$WATCH_LOG" 2>&1
 
-CUDA_VISIBLE_DEVICES=5 python me_rssm/sanity/probe_z_utilization_gated.py \
+CUDA_VISIBLE_DEVICES=5 python me_rssm/sanity/probe_z_utilization_standard.py \
   --config "$CFG" --checkpoint "$CKPT" \
   --start-index 1800 --limit 4 --batch-size 4 --shuffle-offset -1 \
-  --output "$WORK_DIR/z_util_gated_ep6_w1800.json" >> "$WATCH_LOG" 2>&1
+  --output "$WORK_DIR/z_util_std_ep6_w1800.json" >> "$WATCH_LOG" 2>&1
 
-CUDA_VISIBLE_DEVICES=5 python me_rssm/sanity/probe_posterior_source_gated.py \
+# Source attribution: the standard-family tool (transition hook), NOT the
+# MCI variant that reads the eval-mode `_last_h_t` stash.
+CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py \
   --config "$CFG" --checkpoint "$CKPT" \
   --start-index 3 --limit 4 --stride 700 \
-  --output "$WORK_DIR/post_source_gated_ep6_stride700.json" >> "$WATCH_LOG" 2>&1
+  --output "$WORK_DIR/post_source_std_ep6_stride700.json" >> "$WATCH_LOG" 2>&1
 
 echo "[watch] $(date -u '+%F %T') probes done; gate decision is a manual step" >> "$WATCH_LOG"

@@ -172,7 +172,15 @@ def run_pass(model, batch, mode, intervention_cls, replacement_z=None):
                 frame_points[current_t], frame_img[current_t],
                 frame_img_metas[current_t], is_valid_mask=last_hist_valid,
                 feat_or_dict=1)
-            outs = model.pts_bbox_head(feature_dict['pts_feats'])
+            # Pass the deployed class residual exactly like ``simple_test_pts``
+            # does. It is None on every legacy config (so §69's numbers stay
+            # reproducible), but candidate A's readout lives in this term: a
+            # residual-free head is not the detector this probe claims to score.
+            residual = feature_dict.get('rssm_cls_logit_residual')
+            outs = model.pts_bbox_head(
+                feature_dict['pts_feats'], cls_logit_residual=residual) \
+                if residual is not None else model.pts_bbox_head(
+                    feature_dict['pts_feats'])
         return feature_dict, outs
 
     with context if context is not None else _null_context():
