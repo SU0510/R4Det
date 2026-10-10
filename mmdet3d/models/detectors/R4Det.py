@@ -965,6 +965,23 @@ class R4Det(MVXFasterRCNN):
             bev_mask_logit_latter = None
         bev_mask_logit = {'former': bev_mask_logit_former, 'latter': bev_mask_logit_latter}
         bev_feats_refined = bev_feats_refined.permute(0, 1, 3, 2).contiguous()
+        # Candidate A hooks (docs/rssm_candidate_A_prereg_20261010.md §4). Both
+        # stay None for every existing config: the fusion only answers
+        # `pending_semantic_loss` / `detection_cls_logit_residual` when the
+        # semantic supervision and the class-logit readout are switched on.
+        rssm_cls_logit_residual = None
+        rssm_semantic_loss = None
+        if feat_or_dict == 1 and self.temporal_fusion is not None:
+            rssm_semantic_loss = getattr(
+                self.temporal_fusion, 'pending_semantic_loss', None)
+            prepare = getattr(
+                self.temporal_fusion, 'detection_cls_logit_residual', None)
+            if prepare is not None:
+                # The fusion owns the latent-grid convention and applies the
+                # same transposition that `pts_feats` got above; the validity
+                # mask mirrors the `bev_feats` fallback above so an unreliable
+                # sample also gets an all-zero class residual.
+                rssm_cls_logit_residual = prepare(is_valid_mask)
         if feat_or_dict != 1:
             self._highres_radar_scatter = None
         step_all_time = step1_time + step2_time + step3_time + step4_time + step5_time + step6_time
@@ -987,7 +1004,9 @@ class R4Det(MVXFasterRCNN):
                     rssm_kl=rssm_kl,
                     rssm_recon_loss=rssm_recon_loss,
                     rssm_latent_loss=rssm_latent_loss,
-                    rssm_stats=rssm_stats)
+                    rssm_stats=rssm_stats,
+                    rssm_cls_logit_residual=rssm_cls_logit_residual,
+                    rssm_semantic_loss=rssm_semantic_loss)
 
     def voxelpainting_depth_aware(self, context, pv_logits, depth_logits, points, lidar2img, temperature=1.0):
         B, _, H, W = pv_logits.shape
@@ -1213,6 +1232,11 @@ class R4Det(MVXFasterRCNN):
                                            is_valid_mask=last_hist_valid, feat_or_dict=1)
         img_feats = feature_dict['img_feats']
         pts_feats = feature_dict['pts_feats']
+        # Candidate A: the class-logit readout must be applied at inference too
+        # (the validation path uses the posterior mean, exactly like the
+        # baseline). Set fresh on every step, so no stale residual can leak.
+        self._rssm_cls_logit_residual = feature_dict.get(
+            'rssm_cls_logit_residual')
         precise_depth = feature_dict.get('precise_depth')
         instance_features_test = None
         instance_rois_test = None
@@ -1455,6 +1479,17 @@ class R4Det(MVXFasterRCNN):
                     min_radius=self.temporal_fusion.object_min_radius,
                     device=frame_img[N - 1].device,
                 ))
+        # Candidate A: the z-semantic head is supervised on the CURRENT frame
+        # only (docs/rssm_candidate_A_prereg_20261010.md §4). Same discipline as
+        # the route-C block above: attach the GT immediately before the forward
+        # that consumes it, and rely on reset_state() to clear it again.
+        if (self.training and self.temporal_fusion is not None
+                and getattr(self.temporal_fusion, 'sem_supervision_weight',
+                            0.0) > 0
+                and hasattr(self.temporal_fusion, 'set_object_gt')
+                and gt_bboxes_3d is not None and gt_labels_3d is not None):
+            self.temporal_fusion.set_object_gt(
+                gt_bboxes_3d, gt_labels_3d, self.point_cloud_range)
         feature_dict = self.extract_feat(frame_points[N - 1], img=frame_img[N - 1], img_metas=frame_img_metas[N - 1],
                                                is_valid_mask=last_hist_valid, feat_or_dict=1)
         # feature_dict = torch.load(load_path)
@@ -1473,6 +1508,11 @@ class R4Det(MVXFasterRCNN):
         rssm_recon_loss = feature_dict.get('rssm_recon_loss')
         rssm_latent_loss = feature_dict.get('rssm_latent_loss')
         rssm_stats = feature_dict.get('rssm_stats')
+        # Candidate A: additive z->class-logit evidence for the detection head
+        # + the auxiliary z-semantic loss (both None on every legacy config).
+        rssm_semantic_loss = feature_dict.get('rssm_semantic_loss')
+        self._rssm_cls_logit_residual = feature_dict.get(
+            'rssm_cls_logit_residual')
 
         # compute all losses
         losses = dict()
@@ -1505,6 +1545,11 @@ class R4Det(MVXFasterRCNN):
             if rssm_stats is not None:
                 # stat_* keys: logged by logger but not summed into total loss
                 losses.update(rssm_stats)
+        # Candidate A: the z-semantic supervision term. Unlike the stat_*
+        # diagnostics this is a real gradient term, hence the `loss_` prefix so
+        # the runner sums it (docs/rssm_candidate_A_prereg_20261010.md §4).
+        if rssm_semantic_loss is not None:
+            losses['loss_rssm_sem'] = rssm_semantic_loss
         # img_feats = feature_dict.get('img_feats')
         instance_features = None
 
@@ -1664,7 +1709,10 @@ class R4Det(MVXFasterRCNN):
 
 
         if self.ped_center_head is None:
-            outs = self.pts_bbox_head(pts_feats)
+            outs = self.pts_bbox_head(
+                pts_feats,
+                cls_logit_residual=getattr(
+                    self, '_rssm_cls_logit_residual', None))
             loss_inputs = outs + (gt_bboxes_3d, gt_labels_3d, img_metas)
             losses = self.pts_bbox_head.loss(
                 *loss_inputs,
@@ -1675,7 +1723,10 @@ class R4Det(MVXFasterRCNN):
             # Stage-1 isolation: the Anchor3DHead is frozen, so run it (for
             # output bookkeeping) without gradient and skip its loss.
             with torch.no_grad():
-                outs = self.pts_bbox_head(pts_feats)
+                outs = self.pts_bbox_head(
+                    pts_feats,
+                    cls_logit_residual=getattr(
+                        self, '_rssm_cls_logit_residual', None))
             losses = dict()
 
         if self.ped_center_head is not None:
@@ -1698,7 +1749,9 @@ class R4Det(MVXFasterRCNN):
     def simple_test_pts(self, x, img_metas, rescale=False):
         """Test function of the point-cloud branch."""
         if self.ped_center_head is None:
-            outs = self.pts_bbox_head(x)
+            outs = self.pts_bbox_head(
+                x, cls_logit_residual=getattr(
+                    self, '_rssm_cls_logit_residual', None))
             bbox_list = self.pts_bbox_head.get_bboxes(
                 *outs, img_metas, rescale=rescale)
             bbox_results = [
@@ -1717,6 +1770,11 @@ class R4Det(MVXFasterRCNN):
           3. Keep Anchor3DHead Cyclist/Car/Truck untouched.
           4. Concatenate; no cross-class NMS.
         """
+        if getattr(self, '_rssm_cls_logit_residual', None) is not None:
+            raise NotImplementedError(
+                'the RSSM class-logit readout is not wired into the dual '
+                'Anchor3DHead + PedCenterHead inference path; combining them '
+                'would train with the readout and evaluate without it')
         a_outs = self.pts_bbox_head(x)
         anchor_list = self.pts_bbox_head.get_bboxes(
             *a_outs, img_metas, rescale=rescale)

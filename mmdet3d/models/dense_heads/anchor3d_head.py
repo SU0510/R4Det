@@ -180,6 +180,72 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                 build_assigner(res) for res in self.train_cfg.assigner
             ]
 
+    def _cls_residual_channel_map(self, device):
+        """(dst, src) channel indices that broadcast a per-class residual.
+
+        ``conv_cls`` uses the ``[anchor * num_classes + class]`` layout with
+        flat anchors in ``[size, rot]`` order (size-major, rot-inner), and
+        ``anchor_class_mapping`` gives the class of each *size* slot. A
+        per-class residual emitted by the RSSM readout therefore lands on
+        ``a * num_classes + anchor_class_mapping[a // num_rot]``.
+        Cached per device; see unit test T5 for the layout contract.
+        """
+        cache = self.__dict__.setdefault('_cls_residual_map_cache', {})
+        key = (device.type, device.index)
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+        if self.anchor_class_mapping is None:
+            raise ValueError(
+                'a per-class cls_logit_residual needs anchor_class_mapping '
+                'to be configured')
+        num_rot = len(self.anchor_generator.rotations)
+        dst, src = [], []
+        for a in range(self.num_anchors):
+            cls_token = int(self.anchor_class_mapping[a // num_rot])
+            dst.append(a * self.num_classes + cls_token)
+            src.append(cls_token)
+        dst = torch.as_tensor(dst, device=device, dtype=torch.long)
+        src = torch.as_tensor(src, device=device, dtype=torch.long)
+        cache[key] = (dst, src)
+        return dst, src
+
+    def _expand_cls_logit_residual(self, residual, ref):
+        """Broadcast / validate a z->class-logit residual onto ``conv_cls``.
+
+        Accepts either one logit per class (broadcast over the anchor slots of
+        that class) or one per ``conv_cls`` channel. Always returns
+        ``(B, cls_out_channels, H, W)`` in ``ref``'s dtype.
+        """
+        if residual.dim() != 4:
+            raise ValueError(
+                'cls_logit_residual must be (B, C, H, W), got shape '
+                f'{tuple(residual.shape)}')
+        if residual.shape[-2:] != ref.shape[-2:]:
+            raise ValueError(
+                'cls_logit_residual grid mismatch: feature '
+                f'{tuple(ref.shape[-2:])}, residual {tuple(residual.shape[-2:])}')
+        if residual.shape[0] != ref.shape[0]:
+            raise ValueError(
+                'cls_logit_residual batch mismatch: feature '
+                f'{ref.shape[0]}, residual {residual.shape[0]}')
+        channels = residual.shape[1]
+        if channels == self.cls_out_channels:
+            expanded = residual
+        elif channels == self.num_classes:
+            dst, src = self._cls_residual_channel_map(ref.device)
+            expanded = ref.new_zeros(
+                (ref.shape[0], self.cls_out_channels) + tuple(ref.shape[-2:]))
+            expanded[:, dst] = residual.index_select(1, src).to(expanded.dtype)
+        else:
+            raise ValueError(
+                'cls_logit_residual channel count must be num_classes '
+                f'({self.num_classes}) or cls_out_channels '
+                f'({self.cls_out_channels}), got {channels}')
+        self._cls_residual_rms = residual.detach().float().pow(
+            2).mean().sqrt()
+        return expanded
+
     def _anchor_class_channel_inds(self, dims, class_token):
         """Resolve conv_reg channel indices for one class's anchor slots.
 
@@ -377,11 +443,17 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
             nn.init.constant_(self.cyc_cls_branch_conv[-1].weight, 0.0)
             nn.init.constant_(self.cyc_cls_branch_conv[-1].bias, 0.0)
 
-    def forward_single(self, x):
+    def forward_single(self, x, cls_logit_residual=None):
         """Forward function on a single-scale feature map.
 
         Args:
             x (torch.Tensor): Input features.
+            cls_logit_residual (torch.Tensor, optional):
+                ``(B, num_classes | cls_out_channels, H, W)`` additive
+                class-logit evidence produced outside the head (candidate A's
+                z->classification readout). ``None`` (the default, and the
+                only behaviour of every existing config) leaves the head
+                bit-identical.
 
         Returns:
             tuple[torch.Tensor]: Contain score of each class, bbox
@@ -401,6 +473,15 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
                                 dtype=torch.long)
             cls_score = cls_score.clone()
             cls_score.index_add_(1, inds, cyc_res)
+
+        if cls_logit_residual is not None:
+            # Candidate A readout: additive class evidence from the stochastic
+            # state. Applied AFTER conv_cls/cyc_cls_branch and only to the
+            # class logits — conv_reg / conv_dir_cls never see it, so the
+            # geometric residual stays separate. A zero-initialised producer
+            # makes this term exactly 0 (bit-identity at step 0).
+            cls_score = cls_score + self._expand_cls_logit_residual(
+                cls_logit_residual, cls_score)
 
         if self.truck_tower:
             tower = self.truck_tower_conv(x)  # [B, n_out, H, W]
@@ -431,12 +512,17 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
 
         return cls_score, bbox_pred, dir_cls_preds
 
-    def forward(self, feats):
+    def forward(self, feats, cls_logit_residual=None):
         """Forward pass.
 
         Args:
             feats (list[torch.Tensor]): Multi-level features, e.g.,
                 features produced by FPN.
+            cls_logit_residual (torch.Tensor | list[torch.Tensor] | None):
+                additive class-logit evidence, either a single
+                ``(B, C, H, W)`` map (single-level heads — the mainline) or one
+                map per level. ``None`` keeps the behaviour of every existing
+                config bit-identical.
 
         Returns:
             tuple[list[torch.Tensor]]: Multi-level class score, bbox
@@ -449,7 +535,22 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         if self.use_iou_branch:
             self._iou_preds = [self.conv_iou(f).sigmoid() for f in feats]
 
-        return multi_apply(self.forward_single, feats)
+        if cls_logit_residual is None:
+            residuals = [None] * len(feats)
+        elif isinstance(cls_logit_residual, (list, tuple)):
+            if len(cls_logit_residual) != len(feats):
+                raise ValueError(
+                    'cls_logit_residual level count mismatch: features '
+                    f'{len(feats)}, residual {len(cls_logit_residual)}')
+            residuals = list(cls_logit_residual)
+        else:
+            if len(feats) != 1:
+                raise ValueError(
+                    'a single cls_logit_residual needs exactly one feature '
+                    f'level, got {len(feats)}')
+            residuals = [cls_logit_residual]
+
+        return multi_apply(self.forward_single, feats, residuals)
 
     def get_anchors(self, featmap_sizes, input_metas, device='cuda'):
         """Get anchors according to feature map sizes.

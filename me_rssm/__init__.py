@@ -23,6 +23,7 @@ from .motion_evidence_rssm import MotionEvidenceRSSMFusion
 from .mci_rssm import MeasurementConditionedInnovationRSSMFusion
 from .evidence_field_rssm import EvidenceFieldInnovationRSSMFusion
 from .ego_warp_rssm import EgoWarpEvidenceFieldRSSMFusion
+from .semantic_readout_rssm import SemanticReadoutRSSMFusion
 
 __all__ = [
     'ModalityContext',
@@ -34,4 +35,5 @@ __all__ = [
     'MeasurementConditionedInnovationRSSMFusion',
     'EvidenceFieldInnovationRSSMFusion',
     'EgoWarpEvidenceFieldRSSMFusion',
+    'SemanticReadoutRSSMFusion',
 ]
