@@ -83,13 +83,41 @@
   - 回归：`test_rssm_fusion` 85 passed、`test_semantic_readout_rssm` 11 passed、
     `test_grad_paths` / `test_config_build` / `test_fgfull_config` /
     `test_mci_config_build` / `test_equivalence` 全绿。
+  - 正式 S1 训练已启动（2026-10-10，3 卡 GPU5/6/7、seed0、deterministic、
+    24e 完整日程，`--work-dir ..._semA_seed0`），ep6 看门狗 `semA_watch`
+    在 `Epoch(val) [6]` + 新鲜 `epoch_6.pth` 同时出现后中断训练并跑
+    M1–M4 门 + 三窗反事实 + source 探针；**判定仍是人工步骤**，脚本从不自动
+    启动后续训练。
+  - ep6 证据链三次预检修复（ep6 未产出时完成，全部有单测；这些若留到
+    ep6 后才暴露，会让 6 小时训练的整包证据作废）：
+    1. `52fc69d`：M4 donor residual 未随 `pts_feats` 一起搬到 CUDA，
+       `_expand_cls_logit_residual` 的 `index_select` 会 device mismatch 抛错。
+    2. `6c26bc3`：看门狗 P1/P2 探针是 MCI/DC 专用，semA 上直接
+       `AssertionError: target model is not a gated variant`。新增
+       `probe_z_utilization_standard.py`（`dz.ZIntervention` 后验重写 +
+       **转发部署态 class residual**），`probe_z_util_region_split.py` 同样
+       转发（旧配置下为 `None`，§69 读数不受影响）。
+    3. `bc0bd9d`：`object_min_radius` 从 config 读出后被丢弃，四个
+       `make_target` 调用全部落到硬编码默认值 2（当前 config 恰好也是 2，
+       所以只是"碰巧正确"）；现改为必填参数并加拦截测试。
+  - 判据口径两处写定（均在 ep6 读数未知时，避免事后调门，门槛数值一律不动）：
+    `fdbded2` M2 的「`h_t`（或 `feat`）」按 **z 排他性**严格读法固定为
+    **两臂各自** ≤ −30%（与探针既有实现一致）；`f287057` 记录 M1 的
+    `hit@1 ≥ 0.60` 是**跨网格外推**（先例 route-C 在 16×16 池化网格、
+    `min_radius=1`；A 在 full-res 216×248、`min_radius=2`，随机基线
+    1.6e-2 vs 7.5e-5），故新增 `hit1_chance` / `hit1_excess_over_chance`
+    作为**不进门的补充读数**；若 M1 因口径擦线，按「证据不足」处理并补
+    full-res 同口径对照，不直接当机制否定。
+    A 侧训练期同口径（train split）ep1/ep2：`hit@1` 0.159/0.241、
+    `thr50` 0.073/0.232。
 - **待用户裁决（唯一阻塞项，已换到候选 A 的数值门）**：见
   `docs/rssm_candidate_A_prereg_20261010.md` **§5**。S1（ep6：`thr50 ≥ 0.30`、
   `hit@1 ≥ 0.60`、z/h 排他、toggle、跨类 shuffle ≥ chance+20pt）、
   S2（ep12-16 Overall ≥ 40.00；四类非劣界 Car ≥ 47.34 / Truck ≥ 29.22 /
   Ped ≥ 29.93 / Cyc ≥ 47.63；硬失败 < 38.78）、S3（单 seed 过门才补三 seed）
-  的具体数值**尚未批准**。弃选项：目标內容+尺度的配对设计（原 §3A 选项 B，
-  §70.6 已否掉其承重前提）。**未启动任何正式训练。**
+  的具体数值**尚未批准**：ep6 只收证据，S1 全过也**必须**先获 S2 数值批准
+  才允许 ep6→ep16 续训。弃选项：目标內容+尺度的配对设计（原 §3A 选项 B，
+  §70.6 已否掉其承重前提）。
 
 
 1. 探索原 DreamerV3 的 BlockGRU scaling 方法和超参数使用方法。

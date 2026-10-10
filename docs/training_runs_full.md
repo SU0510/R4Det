@@ -12685,3 +12685,89 @@ T6/T7 钉住网格转置与无效样本置零，T9 钉住 `cls_residual_gate` �
 * 消融臂（C1 只监督 / C2 只读出 / C3 `sem_head_input='h'|'feat'`）沿用同一
   10 行改动，不需要新代码。
 * 未做也不做：不改重建目标、不动 KL/权重、不做超参扫描、不做 ep24 续训抢救。
+
+### 71.9 ep6 证据链预检与判据口径写定（训练在飞期间，2026-10-10）
+
+> **状态：in-flight。** 本节记录的是 ep6 对照跑**在飞期间**对"读数链"的
+> 预检与两处口径写定，**不是结果**。截至本节写入：ep1/ep2 val 已产出
+> （ep1 Overall_3D_moderate 26.8637），ep3 在训；M1–M4 与三窗反事实
+> **尚未产出**，S1 判定未做。
+
+#### 71.9.1 为什么要先查读数链
+
+ep6 是候选 A 的止损点：`semA_ep6` 训练到 ep6 val + 落盘 `epoch_6.pth`
+后，`semA_watch` 看门狗会中断训练并在 GPU5/6/7 上跑 M1–M4 门 + 三窗
+反事实 + source 探针。这批探针此前只在 CPU 单测里验证过**打分函数**，
+从未在真实 checkpoint 上跑通过一次；而任何一处抛错都会让**整包证据**
+（含 6 小时训练的 M1/M2/M3/M4 四个读数）一次性作废。因此在训练仍在
+ep2–ep3 时做了静态审查 + 可执行验证。
+
+#### 71.9.2 三个会作废证据包的接线缺陷（均已修，均有单测）
+
+| # | commit | 缺陷 | 后果 |
+|---|---|---|---|
+| 1 | `52fc69d` | M4 head-swap 把 `pts_feats` 搬到 CUDA，却把 donor residual 留在 CPU；`Anchor3DHead._expand_cls_logit_residual` 用 `ref.device` 造索引再 `residual.index_select(1, src)` | `RuntimeError: Expected all tensors to be on the same device`，M4 及整份 gate JSON 全丢 |
+| 2 | `6c26bc3` | 看门狗 P1/P2 用的是 MCI/DC 专用探针；`probe_z_utilization_gated.py` 对非门控变体直接 `AssertionError: target model is not a gated variant` | 三窗反事实与 source 读数全丢（已在 450 iter smoke checkpoint 上实测复现） |
+| 3 | `bc0bd9d` | `object_min_radius` 从 config 读出后未传入任何 `make_target`，四个调用点全部落到硬编码默认值 2 | 当前 config 恰好也是 2，所以**只是碰巧正确**；一旦该键改变，M1–M4 会静默地按训练从未用过的目标打分 |
+
+缺陷 1 的既有单测抓不到它，原因值得记下：假 head 在 CPU 上 clone logits，
+从不触碰索引映射；修复后假 head 改为跟随 features 设备，并新增一条复刻
+真实算子（`index_select` + device-local index）的用例。缺陷 2 的处理是
+新增 `me_rssm/sanity/probe_z_utilization_standard.py`：走 `dz.ZIntervention`
+的后验重写（标准族在 eval 下 `z_t == mu_q`，逐位断言成立），并**转发部署态
+`rssm_cls_logit_residual`**——旧工具 `pts_bbox_head(features)` 不带该残差，
+会去打分一个现实中从不运行的检测器，系统性低估 z 对分类决策的作用；
+`probe_z_util_region_split.py` 同步转发（旧配置下残差为 `None`，§69 读数
+不受影响）。三个缺陷都以"就地回退修复 → 测试失败；恢复 → 测试通过"验证过
+测试确有牙齿。
+
+另：看门狗脚本被修改时它正处在等待循环里。bash 按文件偏移增量读取脚本，
+从偏移中途继续执行新字节会损坏后续命令，故 `semA_watch` 已在 ep6 之前
+整体重启（等待起点 16:23:16 UTC），确保从偏移 0 读起。
+
+#### 71.9.3 两处判据口径写定（门槛数值一律不动）
+
+两处都在 **ep6 读数未知**时写定，以避免"按结果挑解释"。
+
+1. **M2 严格读法**（`fdbded2`）。预登记原文写「`h_t`（或 `feat`）」，
+   可读成"任一臂即可"，而探针自始即要求**两臂各自** ≤ −30%。小节标题是
+   **z 排他性**：h 与观测都不允许替代 z，故取严格读法并在预登记中显式写明。
+   措辞对齐既有实现，**不改任何数值**。
+2. **M1 的 `hit@1 ≥ 0.60` 是跨网格外推**（`f287057`）。最接近的先例是
+   §59 route-C（同一 CenterNet focal 公式），但网格不同：route-C 光栅化到
+   `latent_size=(16,16)`、`object_min_radius=1`；候选 A 光栅化到 full-res
+   `216×248`、`min_radius=2`（`R4Det.py` 用 `z_t.shape[-2:]`）。`hit@1`
+   问"唯一 argmax 格是否落在 GT 标记格上"，其随机基线约 `num_pos/cells`：
+   16×16 上 ≈1.6e-2，full-res 上 ≈7.5e-5（本 run `stat_sem_pos_per_img`
+   实测每图约 4.0 个 GT 峰格）。**门槛数值保持不动**（在跑期间调门正是
+   预登记禁止的事后调参），改为探针额外记录 `hit1_chance` 与
+   `hit1_excess_over_chance` 两个**跨网格可比**的补充读数（不进门；
+   `gate_m1` 仍只吃 `(mean_thr50, mean_hit1)`，有测试固定）。
+   判定规则预先写明：若 M1 因 full-res 口径擦线而 `thr50` /
+   `hit1_excess_over_chance` 达标，该结果记为**证据不足**——既不算机制
+   否定也不算通过，须补一个 full-res 同口径对照再判。
+
+#### 71.9.4 A 侧训练期同口径读数（train split，`stat_sem_*`）
+
+逐 epoch 末值（口径：训练统计，z 为采样值，train split）：
+
+| ep | `stat_sem_hit1` | `stat_sem_thr50` | `loss_rssm_sem` | `stat_cls_res_rms` | `stat_mu_diff_sq` |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 0.1587 | 0.0733 | 1.2632 | 0.9707 | 3.6267 |
+| 2 | 0.2409 | 0.2317 | 1.0536 | 0.9616 | 0.2650 |
+
+对照 §59.5 route-C（同公式，**16×16 网格**）：ep1 0.4933/0.1935、
+ep2 0.6764/0.4274、ep6 0.8107/0.6585。A 的同 epoch 值明显更低，但如上
+所述两者网格差 209 倍，**不能据此判定 A 的语义头更差**；这正是
+§71.9.3(2) 要把门槛口径单独记下来的原因。
+
+#### 71.9.5 本节边界
+
+* 无 AP 宣称；ep1/ep2 的 val 数字只是训练健康度的旁证，S2 窗口
+  （ep12–16）尚未开始。
+* 未改模型、未改判据数值、未动重建目标/KL/权重/日程，未启动任何新训练。
+* 缺陷 1–3 的修复都在**探针/看门狗侧**，不触碰被训练模型的任何张量；
+  正在跑的训练进程不受影响（改动后训练持续产出，无 NaN/OOM/重启）。
+* 下一步：等 ep6 val + `epoch_6.pth`，看门狗自动采集 M1–M4 与三窗读数；
+  **S1 判定是人工步骤**，且即便 S1 全过，也须先取得用户对 §5 S2 数值门的
+  批准才能续训到 ep16。
