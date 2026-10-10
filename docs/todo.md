@@ -157,6 +157,12 @@
     测量当作两个控制臂。现改为非法值 `raise ValueError`；新增 T13
     （三合法臂 + 7 个非法值），回退即红，`test_semantic_readout_rssm`
     12 passed。详见 §71.9.11。
+  - ep6 证据链预防性加固（`f691561`）：看门狗**不能在这里执行**，故参数名
+    漂移/窗口缺失只会在 ep6 当场炸成「探针 argparse 退出、不写 JSON」。
+    新增 `test_watch_semA_ep6_cli.py`（10 条纯静态测试）：解析看门狗真实
+    调用，断言每个 flag 都被目标探针接受、必需 flag 齐全、三窗口与 gate
+    clip 计划未变、`--output` 互不重复、判定器仍在最后且脚本不含任何续训
+    路径。改坏 flag 即在测试里被发现。五份测试合跑 86 passed。详见 §71.9.12。
 - **待用户裁决（唯一阻塞项，已换到候选 A 的数值门）**：见
   `docs/rssm_candidate_A_prereg_20261010.md` **§5**。S1（ep6：`thr50 ≥ 0.30`、
   `hit@1 ≥ 0.60`、z/h 排他、toggle、跨类 shuffle ≥ chance+20pt）、

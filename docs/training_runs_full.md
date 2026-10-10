@@ -12997,6 +12997,36 @@ h 臂与 feat 臂：若该属性被写成 `'H'` / `'FEAT'` / 其它拼写，**h 
 当前 config 写的是 `sem_head_input='z'`，看门狗三段控制臂也各自写死
 `'z'/'h'/'feat'`，故本 run 读数不受影响；这是防止未来改配置时静默失效。
 
+#### 71.9.12 看门狗↔探针的 CLI 契约测试（`f691561`）
+
+**动机**：看门狗本身**不能在这里执行**（它要打断正在跑的训练），所以
+「改了探针参数名」或「少传一个窗口」这类漂移，只会在 **ep6 当场**暴露——
+表现为探针在 argparse 阶段就退出、不写 JSON、留下残缺证据包。§71.9.2 的
+第 2 处缺陷（看门狗指到 MCI 专用探针）就是同一类问题，当时靠人工复核才发现。
+
+**新增** `me_rssm/sanity/test_watch_semA_ep6_cli.py`（**10 条**，纯静态、
+不碰 GPU/训练）：从看门狗脚本里**解析出真实调用**（处理行尾续行、
+`CUDA_VISIBLE_DEVICES=` 前缀与输出重定向），再逐个断言——
+
+* 三个探针**都还在被调用**，且脚本文件存在；
+* 传的**每个** flag 都在目标探针自己的 `add_argument` 里（逐协议文件解析）；
+* 每个探针的**必需 flag 齐全**（窗口/输出不会被悄悄删掉）；
+* z-util 的三个窗口仍是预登记的 `start-index = 3/100/1800`，且
+  `--limit`/`--shuffle-offset` **不自映射**（自映射会让
+  `resolve_shuffle_sources` 直接抛错，即 §71.9.7 复核过的那条保护）；
+* gate 探针仍是 `limit=10 / stride=200 / start-index=3`；
+* 各探针 `--output` **互不重复**且都是 `.json`；
+* 判定器仍在**最后一个探针之后**运行，且脚本内**不含**任何续训路径
+  （`dist_train` / `train_vod` / `resume_from` / `--resume-from` /
+  `--load-from`），并仍打印 `gate decision is a manual step`。
+
+**验证有牙齿**：把看门狗文本里的 `--shuffle-offset` 改成
+`--shuffle-offset-typo`（在内存中改，不碰仓库文件），
+`test_every_flag_is_accepted_by_its_probe` 与
+`test_required_flags_are_all_present` 立即失败。
+
+**回归**：五份测试合跑 **86 passed**。
+
 **边界**：门槛数值、探针的采样窗口（M1 `stride=200`/10 帧、z-util 三窗、
 source `stride=700` 对应 3 个索引——与 MAI ep12/ep16 逐字一致，故不改）、
 模型与训练日程全部未动；看门狗脚本本身**未改**（它正处等待循环，bash 按
