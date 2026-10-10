@@ -133,6 +133,12 @@
     等价性：10/10 clip 标签与 `get_ann_info` 一致，热图与训练同款光栅化器
     逐位相同。同批静态核验其余三件（z-util 三窗索引 4/4、source 探针
     正确选 `transition`、看门狗 offset 无自映射）**均无需改动**。详见 §71.9.7。
+  - ep6 证据链**第七处**预检修复（`7d13b19`）：gate JSON 原先只在 M1–M4
+    全部走完后一次性落盘，M3/M4 中途崩溃会把算完的 M1/M2 一起丢。现改为
+    `write_report()` 原子写（temp + rename），并在 M1/M2 后、M3 后各 flush；
+    判定侧同步把「门键缺失」渲染为 **`NOT MEASURED`** 而非 `FAIL`（没测到
+    ≠ 测到没过）。新增 4 条测试，`test_probe_semreadout_ep6` 增至 36 条；
+    450-iter 冒烟实跑确认四门正常写出且无 `.tmp` 残留。详见 §71.9.8。
 - **待用户裁决（唯一阻塞项，已换到候选 A 的数值门）**：见
   `docs/rssm_candidate_A_prereg_20261010.md` **§5**。S1（ep6：`thr50 ≥ 0.30`、
   `hit@1 ≥ 0.60`、z/h 排他、toggle、跨类 shuffle ≥ chance+20pt）、
