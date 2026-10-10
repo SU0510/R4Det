@@ -139,6 +139,13 @@
     判定侧同步把「门键缺失」渲染为 **`NOT MEASURED`** 而非 `FAIL`（没测到
     ≠ 测到没过）。新增 4 条测试，`test_probe_semreadout_ep6` 增至 36 条；
     450-iter 冒烟实跑确认四门正常写出且无 `.tmp` 残留。详见 §71.9.8。
+  - ep6 证据链**第八处**修复（`e7fbb77`）：§71.9.3(2) 的 M1 例外原先只是
+    一句 `NOTE`，聚合行仍报 `NOT ALL PASS`，**预登记的例外从未生效**。
+    现写成可执行分支 `m1_grid_limited()`（阈值全部由预登记值导出：
+    `excess >= 0.60 − 0.016`），触发需 thr50 过线 + hit@1 掉线 + 超额健康
+    + **M1 为唯一未过的门**；命中时输出 `INSUFFICIENT EVIDENCE`，不记为
+    机制否定。新增 8 条互斥性测试，三份 probe 测试合跑 64 passed。
+    详见 §71.9.9。
 - **待用户裁决（唯一阻塞项，已换到候选 A 的数值门）**：见
   `docs/rssm_candidate_A_prereg_20261010.md` **§5**。S1（ep6：`thr50 ≥ 0.30`、
   `hit@1 ≥ 0.60`、z/h 排他、toggle、跨类 shuffle ≥ chance+20pt）、

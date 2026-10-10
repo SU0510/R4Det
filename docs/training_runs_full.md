@@ -12908,6 +12908,40 @@ head-swap 重算——中间任一环节崩掉（OOM / CUDA error / 被 kill）�
 `M3 readout : NOT MEASURED`、`M4 class info : NOT MEASURED`、
 `INCOMPLETE BUNDLE`、`S1 AGGREGATE: NOT ALL PASS`。
 
+#### 71.9.9 把 §71.9.3(2) 的 M1 例外写成可执行分支（`e7fbb77`）
+
+**缺陷（口径已写定但没接线）**：§71.9.3(2) 预先写明——M1 若只在
+**full-res 原始 hit@1** 上擦线、而 `thr50` 与 `hit1_excess_over_chance`
+健康，则结论是**证据不足**（须补 full-res 同口径对照），**不得**记为机制
+否定。但判定器当时只把这句话当作一段 `NOTE` 打印，聚合行仍照旧输出
+`NOT ALL PASS`，等于**预登记的例外从未生效**；若 ep6 恰好落在这个区间，
+会把「口径不可比」误归档成「机制被否」。
+
+**修复**：把规则写成显式函数 `m1_grid_limited(thr50, hit1, excess)` 与
+聚合分支。阈值全部由既有预登记数值导出，不新增门槛：
+
+* `M1_BAR_THR50 = 0.30`、`M1_BAR_HIT1 = 0.60`（§5 原值，不动）；
+* `M1_CALIBRATION_CHANCE = 1.6e-2`（route-C 16×16 网格的随机基线）；
+* `M1_EXCESS_BAR = 0.60 − 0.016 = 0.584`——即「在原校准网格上，
+  0.60 这条线相对该网格随机基线所隐含的超额量」。预登记未给超额门的
+  数值，故此条**由既有线导出并显式打印**，不另立新数。
+
+**触发条件（三者同时成立，且 M1 必须是唯一未过的门）**：
+`thr50 >= 0.30`、`hit1 < 0.60`、`excess >= 0.584`、其余 M2/M3/M4 全过。
+命中时聚合行输出
+`M1 failed on the full-res raw rate only ... -> INSUFFICIENT EVIDENCE
+(pre-registered section 71.9.3(2)), NOT a mechanism refutation`，并在 §7
+分叉清单里单列该例外；**不**输出 `NOT ALL PASS`。
+
+**验证**：新增 `TestM1GridLimitedRule` 8 条，把各臂钉成互斥——
+thr50 也掉线不算例外（miss 不能归因于网格）、excess 偏低不算例外、
+M1 本来就过线时不适用、任一读数缺失一律不算例外、阈值必须由预登记值
+导出、以及源码级守卫断言聚合分支要求 `gates.get('M1') is False` 且
+`k != 'M1'`。另用四组手工 gate JSON 跑真实判定器确认分支：
+`thr50=0.41/hit1=0.071/excess=0.60` → **EXCUSED**；
+`thr50=0.29`（也掉线）→ 计为失败；`excess=0.02` → 计为失败。
+三份 probe 测试合跑 **64 passed**。
+
 **边界**：门槛数值、探针的采样窗口（M1 `stride=200`/10 帧、z-util 三窗、
 source `stride=700` 对应 3 个索引——与 MAI ep12/ep16 逐字一致，故不改）、
 模型与训练日程全部未动；看门狗脚本本身**未改**（它正处等待循环，bash 按
