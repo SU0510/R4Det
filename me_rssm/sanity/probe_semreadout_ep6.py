@@ -141,6 +141,7 @@ def rollout(model, dataset, index, sem_input=None, use_residual=True):
             'residual': None if residual is None
             else residual.detach().float().cpu(),
             'cls_score': [t.detach().float().cpu() for t in outs[0]],
+            'pts_feats': [t.detach().float().cpu() for t in out['pts_feats']],
             'gt_boxes': meta['gt_bboxes_3d'],
             'gt_labels': meta['gt_labels_3d'],
         }
@@ -223,6 +224,23 @@ def residual_class_map(run, num_classes):
         return None
     r = r[None] if r.dim() == 3 else r
     return _to_sem_grid(r[0]).reshape(num_classes, -1).permute(1, 0)
+
+
+def head_scores_with_residual(model, run, residual):
+    """Re-run ONLY the detection head with a substituted class residual.
+
+    The M4 swap must change exactly one thing: the class evidence produced
+    from z. Features, weights, anchors and the GT are held fixed, so any
+    movement in the head's class argmax is attributable to the swapped z.
+
+    ``residual`` is on the head grid (the same convention the detector uses);
+    pass ``None`` for the no-readout control.
+    """
+    feats = [t.cuda() if torch.cuda.is_available() else t
+             for t in run['pts_feats']]
+    with torch.no_grad():
+        outs = model.pts_bbox_head(feats, cls_logit_residual=residual)
+    return [t.detach().float().cpu() for t in outs[0]]
 
 
 def main():
@@ -335,56 +353,108 @@ def main():
     report['gates']['M3'] = bool(len(m3) >= 8 and wins >= 8)
 
     # ---------------------------- M4 -------------------------------------
-    # Own reading: does z's residual point at the right class where objects
-    # are? Donor reading: does swapping z make the argmax follow the donor's
-    # dominant class? Chance for 4 classes = 25%; the pre-registered bar is
-    # chance + 20 pt = 45%.
+    # Does the class evidence in z actually reach the head's decision, and is
+    # it CLASS-specific rather than a global bias? Three readings, all on GT
+    # foreground cells:
+    #   own_hit          residual argmax vs the cell's GT class
+    #   donor_transfer   residual argmax vs the DONOR clip's dominant class
+    #                    after z is replaced  (donor chosen to be a different
+    #                    dominant class where possible)
+    #   head_swap        the head's own class argmax after re-running ONLY the
+    #                    head with the donor's residual: does the decision
+    #                    follow the donor's class?
+    # The residual-only readings say what z carries; head_swap says whether the
+    # detection path consumes it. Chance is 1/num_classes = 25%; the
+    # pre-registered bar is chance + 20 pt.
+
+    def dominant_class(run):
+        labels = run['gt_labels']
+        if labels.numel() == 0:
+            return None
+        return int(torch.bincount(labels.long().cpu(),
+                                  minlength=num_classes).argmax())
+
     donor_of = {}
     for pos, idx in enumerate(indices):
-        donor_pos = (pos + args.shuffle_offset) % len(indices)
+        own_dom = dominant_class(z_runs[pos])
+        donor_pos = None
+        for step in range(1, len(indices)):
+            candidate = (pos + step) % len(indices)
+            if candidate == pos:
+                continue
+            cand_dom = dominant_class(z_runs[candidate])
+            if cand_dom is not None and cand_dom != own_dom:
+                donor_pos = candidate
+                break
+        if donor_pos is None:
+            donor_pos = (pos + args.shuffle_offset) % len(indices)
         if donor_pos == pos:
-            raise ValueError('shuffle offset maps a clip onto itself')
+            raise ValueError('donor selection mapped a clip onto itself')
         donor_of[pos] = donor_pos
 
     m4 = []
     for pos, idx in enumerate(indices):
         run = z_runs[pos]
+        donor_pos = donor_of[pos]
+        donor_run = z_runs[donor_pos]
         tgt = make_target(run, num_classes, pcr)
         fg = tgt[0].eq(1.0).any(dim=0).flatten()
         sel = torch.nonzero(fg, as_tuple=False).flatten()
-        if sel.numel() == 0:
+        if sel.numel() == 0 or run['residual'] is None:
             continue
         labels = tgt[0].reshape(num_classes, -1).permute(1, 0)[sel].argmax(dim=1)
         own = residual_class_map(run, num_classes)[sel].argmax(dim=1)
-        donor_run = z_runs[donor_of[pos]]
         donor_res = residual_class_map(donor_run, num_classes)
-        donor_gt = donor_run['gt_labels']
-        donor_dominant = int(torch.bincount(
-            donor_gt.long().cpu(), minlength=num_classes).argmax())
+        donor_dom = dominant_class(donor_run)
         donor_pred = donor_res[sel].argmax(dim=1)
+
+        # Head-level swap: same features, same weights, only the residual
+        # changes. The donor residual must be resized/masked onto this clip's
+        # grid the same way the detector does.
+        donor_res_head = donor_run['residual']
+        if donor_res_head is not None:
+            swapped = head_scores_with_residual(model, run, donor_res_head)
+            head_map = class_scores_from_head({'cls_score': swapped},
+                                             num_classes)
+            head_arg = head_map[sel].argmax(dim=1)
+            head_swap = float((head_arg == donor_dom).float().mean())
+        else:
+            head_swap = None
+
         m4.append({
             'index': int(idx),
-            'donor_index': int(indices[donor_of[pos]]),
-            'donor_dominant_class': donor_dominant,
+            'donor_index': int(indices[donor_pos]),
+            'own_dominant_class': dominant_class(run),
+            'donor_dominant_class': donor_dom,
             'cells': int(sel.numel()),
             'own_hit': float((own == labels).float().mean()),
-            'donor_transfer': float((donor_pred == donor_dominant).float().mean()),
+            'donor_transfer': float((donor_pred == donor_dom).float().mean()),
+            'head_swap_to_donor': head_swap,
             'changed_frac': float((donor_pred != own).float().mean()),
         })
 
     def _m(rows, key):
-        vals = [r[key] for r in rows]
+        vals = [r[key] for r in rows if r.get(key) is not None]
         return float(sum(vals)) / len(vals) if vals else None
 
-    own_hit, transfer = _m(m4, 'own_hit'), _m(m4, 'donor_transfer')
     chance = 1.0 / num_classes
+    own_hit = _m(m4, 'own_hit')
+    transfer = _m(m4, 'donor_transfer')
+    head_swap = _m(m4, 'head_swap_to_donor')
     report['M4_class_information'] = {
         'per_clip': m4, 'chance': chance, 'bar': chance + 0.20,
         'mean_own_hit': own_hit, 'mean_donor_transfer': transfer,
+        'mean_head_swap_to_donor': head_swap,
         'mean_changed_frac': _m(m4, 'changed_frac'),
+        'donor_rule': ('first clip (cyclically) whose dominant GT class differs '
+                       'from this clip\'s; falls back to --shuffle-offset'),
         'note': ('own_hit = z residual argmax vs the cell GT class; '
-                 'donor_transfer = argmax vs the donor clip dominant class '
-                 'after swapping z; both must clear chance + 20 pt.'),
+                 'donor_transfer = residual argmax vs the donor clip dominant '
+                 'class after swapping z; head_swap_to_donor = the HEAD class '
+                 'argmax after re-running only the head with the donor '
+                 'residual. Pre-registered bar: chance + 20 pt on the readings '
+                 'that describe z (own_hit / donor_transfer); head_swap is '
+                 'reported with the same bar.'),
     }
     report['gates']['M4'] = bool(
         own_hit is not None and transfer is not None

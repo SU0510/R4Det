@@ -167,6 +167,50 @@ class TestResidualClassMap(unittest.TestCase):
         self.assertIsNone(probe.residual_class_map({'residual': None}, C))
 
 
+class TestHeadSwap(unittest.TestCase):
+    """M4's head-level swap must change ONLY the class residual."""
+
+    class _Head:
+        def __init__(self, base_logits, gain=1.0):
+            self.base_logits = base_logits
+            self.gain = gain
+            self.calls = []
+
+        def __call__(self, feats, cls_logit_residual=None):
+            self.calls.append(cls_logit_residual)
+            out = self.base_logits.clone()
+            if cls_logit_residual is not None:
+                n_anchor = out.shape[1] // C
+                out = out + cls_logit_residual.repeat(1, n_anchor, 1, 1) * self.gain
+            return [out], None, None
+
+    class _Model:
+        def __init__(self, head):
+            self.pts_bbox_head = head
+
+    def test_swap_moves_head_argmax_towards_the_donor(self):
+        base = torch.zeros(1, 2 * C, W, H)      # 2 anchor slots, flat scores
+        head = self._Head(base)
+        model = self._Model(head)
+        run = {'pts_feats': [torch.zeros(1, 4, W, H)]}
+        donor_res = torch.zeros(1, C, W, H)     # head grid
+        donor_res[0, 3, 2, 5] = 4.0             # head (w=2, h=5), class 3
+        out = probe.head_scores_with_residual(model, run, donor_res)
+        scores = probe.class_scores_from_head({'cls_score': out}, C)
+        row = 5 * W + 2                         # sem (h=5, w=2)
+        self.assertEqual(int(scores[row].argmax()), 3)
+        self.assertEqual(len(head.calls), 1)
+        self.assertIs(head.calls[0], donor_res,
+                      'the donor residual must reach the head unchanged')
+
+    def test_none_residual_is_the_no_readout_control(self):
+        head = self._Head(torch.zeros(1, 2 * C, W, H))
+        model = self._Model(head)
+        probe.head_scores_with_residual(
+            model, {'pts_feats': [torch.zeros(1, 4, W, H)]}, None)
+        self.assertIsNone(head.calls[0])
+
+
 class TestClipSelection(unittest.TestCase):
     def test_stride_selection_requires_two(self):
         class _DS:
