@@ -12814,11 +12814,82 @@ ep2 0.6764/0.4274、ep6 0.8107/0.6585。A 的同 epoch 值明显更低，但如�
 `ALL PASS`、删掉 source 产物后改报 `INCOMPLETE BUNDLE` +
 `NOT EVALUABLE`。
 
+#### 71.9.7 第六处缺陷：M1–M4 的 GT 读错位置（会导致整包证据作废，`118fa2a`）
+
+**缺陷**：`probe_semreadout_ep6.rollout()` 从 `img_metas[-1][0]` 取
+`gt_bboxes_3d` / `gt_labels_3d`。但 `CustomCollect3D2` 的 `meta_keys`
+（见本 run config）只含几何/相机元数据（`filename`/`img_shape`/`lidar2img`/
+`cam_aware`/`bda_rot` 等 27 项），**根本不含 GT 键**。GT 实际挂在 **sample 顶层**：
+`dataset[i]['gt_bboxes_3d']` / `['gt_labels_3d']` 是逐帧列表（old→new），
+`[-1]` 即当前帧——与训练路径一致（`R4Det.forward_train` 把当前帧 GT 交给
+`set_object_gt`，其内部同样按「每帧一个样本列表」的组织方式光栅化）。
+
+**后果**：M1→M2→M3→M4 全部依赖这个 GT，`rollout` 是它们的第一步，因此每次运行
+都会在**第一个 clip** 抛 `KeyError: 'gt_bboxes_3d'`，且在写 gate JSON **之前**
+就退出——整包 S1 证据（四门 + 三窗 + source）全废。这是本 run 里最严重的一处：
+前三处会给出错误读数，这一处直接让读数不存在。
+
+**实测证据（不是静态推断）**：用 450-iter 冒烟权重
+（`/data/lurui/work_dirs/semA_smoke450_seed0/iter_450.pth`，真 semA checkpoint）
+跑 `--limit 2 --stride 200`：
+* 修复前（`git show HEAD^:...` 的版本）→ `KeyError: 'gt_bboxes_3d'`，
+  **没有 JSON 落盘**；
+* 修复后 → 正常完成，四门读数与 `input_fingerprints` 全部写出。
+
+**修复**：抽出单一入口 `sample_current_gt(dataset, index)`，只它一处解析 GT，
+并在 `rollout` 里调用；函数对「GT 不在顶层」「逐帧数量不一致」「无 GT 帧」
+三种情形显式报错，并在报错信息里点名「不得从 `img_metas` 读 GT」。
+
+**等价性验证（关键，证明改后与训练同源）**：
+* 10 个 gate clip（3/203/403/…/1803）逐个与 `dataset.get_ann_info(i)`
+  对比标签：**10/10 一致**（含 idx 1803 的 `Other` 被 pipeline 过滤为 −1 的
+  情形，模型实际收到的就是这个已过滤版本）。
+* 用训练同款光栅化器 `bev_centers_to_heatmap`（`num_classes=4`、
+  `out_size=(216,248)`、同 `point_cloud_range`、`min_radius=2`）对比
+  pipeline 后 GT 与 raw `get_ann_info` GT：idx 1803/3/1603 的
+  **热图逐位相同**。
+* val 管线 `is_train=False`（确定性），实测 `dataset[3]` 两次调用的
+  boxes/labels/points/img **全部逐位相同**，故 `rollout` 内第二次读样本
+  不会让几何与 GT 失配。
+
+**是否波及历史结论**：全仓检索 `meta['gt_bboxes_3d']` / `img_metas[-1][0]`
+已无其它命中（唯一命中是本次新增的测试断言）。§69 区域探针
+（`probe_z_util_region_split.py`）、§71.6 的 S0 wiring 探针均不读 GT，
+**§69/§71 已记录结论不受影响**。
+
+**回归**：`test_probe_semreadout_ep6` 增至 **32 passed**（新增
+`TestSampleCurrentGt` 6 条：取逐帧列表末项、拒绝从 `img_metas` 读 GT、
+逐帧数量不一致报错、无 GT 帧报错、标签为 long tensor、
+`rollout` 不再出现 `meta['gt_bboxes_3d']`）。测试有牙齿：把修复临时回退成
+`meta['gt_bboxes_3d']`，`test_rollout_no_longer_reads_img_metas_for_gt`
+立即失败；恢复后 32 条全过。三份 probe 测试合跑 **52 passed**。
+
+**同批核验的其余三件（无需改动）**：
+* `probe_z_utilization_standard`：用同一冒烟权重按看门狗原样
+  （`--limit 4 --batch-size 4 --shuffle-offset 2`）跑通并写出 JSON；
+  另确认 `--limit 4` 下 offset 2 / −1 都不会自映射（offset 2 在
+  `limit=2` 时会自映射报错——这是探针的既有保护，看门狗的 `limit=4`
+  不受影响）。
+* `probe_posterior_source`：静态确认 semA 走 `MotionAlignedRSSMFusion`
+  分支（无 `latent_gru`），探针选 `transition`（native BEV res），与 MAI
+  ep12/ep16 已记录的 `fusion_class=MotionAlignedInnovationRSSMFusion`
+  同属 `transition` 路径；`stride=700` 产出 3 个索引 [3, 703, 1403]，
+  与 MAI 存档一致，**不改**。
+* 看门狗三条 z-util 窗口的索引选择：`start 3/100/1800 + limit 4`
+  均为 4/4 命中（`[3,4,5,6]`/`[100..103]`/`[1800..1803]`）。
+
+**操作事故（如实记录，未影响训练）**：为验证修复，曾在训练进行中把探针跑在
+GPU 5/6/7 上，`probe_posterior_source` 因显存不足 OOM。训练日志零 OOM/
+零 Traceback、显存 19716/19788/19724 MiB 稳定、步频与 ETA 无异常，训练
+进程 PID 未变。此后所有探针验证改为**静态或复用 450-iter 冒烟权重且不与
+训练争卡**；正式采集仍由看门狗在停训、GPU 释放后进行。
+
 **边界**：门槛数值、探针的采样窗口（M1 `stride=200`/10 帧、z-util 三窗、
 source `stride=700` 对应 3 个索引——与 MAI ep12/ep16 逐字一致，故不改）、
 模型与训练日程全部未动；看门狗脚本本身**未改**（它正处等待循环，bash 按
 文件偏移读脚本，改动须重启会话，见 §71.9.2 附注）。训练持续产出，无
-NaN/OOM/重启。
+NaN/OOM/重启。§71.9.7 的 GT 修复同样只动探针侧：不改模型、不改数据管线、
+不写权重。
 
 * 下一步：等 ep6 val + `epoch_6.pth`，看门狗自动采集 M1–M4 与三窗读数；
   **S1 判定是人工步骤**，且即便 S1 全过，也须先取得用户对 §5 S2 数值门的

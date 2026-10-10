@@ -122,6 +122,17 @@
     键必须是探针实际写出的键，任一侧改名会让测试红而非静默 INCOMPLETE）。
     门槛数值、采样窗口、模型与日程均未动；看门狗脚本本身未改（正处等待
     循环，改它须重启会话）。详见 §71.9.6。
+  - ep6 证据链**第六处**（最严重一处）预检修复（`118fa2a`，ep6 未产出时
+    完成）：M1–M4 的 GT 读错位置。`rollout()` 从 `img_metas[-1][0]` 取
+    `gt_bboxes_3d`/`gt_labels_3d`，但 `CustomCollect3D2.meta_keys` **不含 GT**；
+    GT 在 sample 顶层且是逐帧列表（`[-1]` 为当前帧，与 `R4Det` 交给
+    `set_object_gt` 的当前帧 GT 同源）。后果：每次运行都在**第一个 clip**
+    抛 `KeyError` 且**不写 gate JSON**，四门 + 三窗 + source 整包证据全废。
+    已抽出唯一入口 `sample_current_gt()` 并加 6 条回归测试（回退修复即红）。
+    用 450-iter 冒烟权重实测：旧版 `KeyError` 无 JSON，新版正常写出四门。
+    等价性：10/10 clip 标签与 `get_ann_info` 一致，热图与训练同款光栅化器
+    逐位相同。同批静态核验其余三件（z-util 三窗索引 4/4、source 探针
+    正确选 `transition`、看门狗 offset 无自映射）**均无需改动**。详见 §71.9.7。
 - **待用户裁决（唯一阻塞项，已换到候选 A 的数值门）**：见
   `docs/rssm_candidate_A_prereg_20261010.md` **§5**。S1（ep6：`thr50 ≥ 0.30`、
   `hit@1 ≥ 0.60`、z/h 排他、toggle、跨类 shuffle ≥ chance+20pt）、
