@@ -104,4 +104,8 @@ CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py \
   --start-index 3 --limit 4 --stride 700 \
   --output "$WORK_DIR/post_source_std_ep6_stride700.json" >> "$WATCH_LOG" 2>&1
 
+# Assemble the readings + print the pre-registered fork. Read-only, decides
+# nothing, launches nothing: the verdict stays a manual step.
+python me_rssm/sanity/semA_ep6_verdict.py --run "$WORK_DIR" >> "$WATCH_LOG" 2>&1
+
 echo "[watch] $(date -u '+%F %T') probes done; gate decision is a manual step" >> "$WATCH_LOG"
