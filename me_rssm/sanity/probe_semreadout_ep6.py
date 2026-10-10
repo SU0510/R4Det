@@ -153,8 +153,13 @@ def rollout(model, dataset, index, sem_input=None, use_residual=True):
             fusion.sem_head_input = restore
 
 
-def make_target(run, num_classes, pcr, min_radius=2):
-    """GT centre heatmap on the SEM grid (H=x, W=y), matching training."""
+def make_target(run, num_classes, pcr, min_radius):
+    """GT centre heatmap on the SEM grid (H=x, W=y), matching training.
+
+    ``min_radius`` has no default on purpose: it must come from the same config
+    key the training rasteriser reads (``object_min_radius``), or a probe would
+    score a target the model was never trained against.
+    """
     from mmdet3d.core.utils.gaussian import bev_centers_to_heatmap
     sm = run['sem_map']
     sm = sm[None] if sm.dim() == 3 else sm
@@ -164,13 +169,18 @@ def make_target(run, num_classes, pcr, min_radius=2):
         min_radius=min_radius, device=sm.device, dtype=torch.float32)
 
 
-def head_quality(run, num_classes, pcr):
-    """The exact quantities the training loop logs as stat_sem_*."""
+def head_quality(run, num_classes, pcr, min_radius):
+    """The exact quantities the training loop logs as stat_sem_*.
+
+    ``min_radius`` is threaded through from the config on purpose: the training
+    rasteriser uses ``object_min_radius``, so a probe default would silently
+    score a different target the moment that value stops being 2.
+    """
     sm = run['sem_map']
     if sm is None:
         return None
     sm = sm[None] if sm.dim() == 3 else sm
-    tgt = make_target(run, num_classes, pcr).to(sm.device)
+    tgt = make_target(run, num_classes, pcr, min_radius).to(sm.device)
     prob = sm.float().sigmoid()
     pos = tgt.eq(1.0)
     num_pos = float(pos.sum())
@@ -354,9 +364,12 @@ def main():
     h_runs = [rollout(model, dataset, i, sem_input='h') for i in indices]
     feat_runs = [rollout(model, dataset, i, sem_input='feat') for i in indices]
 
-    m1 = [q for q in (head_quality(r, num_classes, pcr) for r in z_runs) if q]
-    m2_h = [q for q in (head_quality(r, num_classes, pcr) for r in h_runs) if q]
-    m2_f = [q for q in (head_quality(r, num_classes, pcr) for r in feat_runs) if q]
+    m1 = [q for q in (head_quality(r, num_classes, pcr, min_radius)
+                      for r in z_runs) if q]
+    m2_h = [q for q in (head_quality(r, num_classes, pcr, min_radius)
+                        for r in h_runs) if q]
+    m2_f = [q for q in (head_quality(r, num_classes, pcr, min_radius)
+                        for r in feat_runs) if q]
 
     m1_thr, m1_hit = mean_of(m1, 'thr50'), mean_of(m1, 'hit1')
     h_thr, f_thr = mean_of(m2_h, 'thr50'), mean_of(m2_f, 'thr50')
@@ -379,7 +392,7 @@ def main():
     for pos, idx in enumerate(indices):
         on = z_runs[pos]
         off = rollout(model, dataset, idx, use_residual=False)
-        tgt = make_target(on, num_classes, pcr)
+        tgt = make_target(on, num_classes, pcr, min_radius)
         fg = tgt[0].eq(1.0).any(dim=0).flatten()
         sel = torch.nonzero(fg, as_tuple=False).flatten()
         if sel.numel() == 0:
@@ -442,7 +455,7 @@ def main():
         run = z_runs[pos]
         donor_pos = donor_of[pos]
         donor_run = z_runs[donor_pos]
-        tgt = make_target(run, num_classes, pcr)
+        tgt = make_target(run, num_classes, pcr, min_radius)
         fg = tgt[0].eq(1.0).any(dim=0).flatten()
         sel = torch.nonzero(fg, as_tuple=False).flatten()
         if sel.numel() == 0 or run['residual'] is None:

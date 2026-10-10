@@ -28,6 +28,8 @@ _spec.loader.exec_module(probe)
 
 PC_RANGE = [0.0, -39.68, -4.0, 69.12, 39.68, 2.0]
 H, W, C = 8, 10, 4
+# Mirrors the config's object_min_radius; threaded explicitly, never defaulted.
+MIN_RADIUS = 2
 
 
 class _MockBoxes:
@@ -69,9 +71,9 @@ class TestHeadQuality(unittest.TestCase):
         cx = 0.5 * (PC_RANGE[0] + PC_RANGE[3])
         cy = 0.5 * (PC_RANGE[1] + PC_RANGE[4])
         run = _run([[cx, cy, 0.0]], [2])
-        tgt = probe.make_target(run, C, PC_RANGE)
+        tgt = probe.make_target(run, C, PC_RANGE, MIN_RADIUS)
         run['sem_map'] = 6.0 * tgt[0] - 3.0
-        q = probe.head_quality(run, C, PC_RANGE)
+        q = probe.head_quality(run, C, PC_RANGE, MIN_RADIUS)
         self.assertAlmostEqual(q['thr50'], 1.0, places=6)
         self.assertAlmostEqual(q['hit1'], 1.0, places=6)
         # A flat plateau is NOT the same thing: ties collapse onto the first
@@ -79,7 +81,7 @@ class TestHeadQuality(unittest.TestCase):
         run['sem_map'] = torch.where(tgt[0] > 0,
                                      torch.full_like(tgt[0], 8.0),
                                      torch.full_like(tgt[0], -8.0))
-        q_flat = probe.head_quality(run, C, PC_RANGE)
+        q_flat = probe.head_quality(run, C, PC_RANGE, MIN_RADIUS)
         self.assertAlmostEqual(q_flat['thr50'], 1.0, places=6)
         self.assertEqual(q_flat['hit1'], 0.0)
         # ``pos`` is target == 1.0, i.e. the exact centre cell of each object
@@ -95,7 +97,7 @@ class TestHeadQuality(unittest.TestCase):
         cy = 0.5 * (PC_RANGE[1] + PC_RANGE[4])
         run = _run([[cx, cy, 0.0]], [2])
         run['sem_map'] = torch.full((C, H, W), -8.0)
-        q = probe.head_quality(run, C, PC_RANGE)
+        q = probe.head_quality(run, C, PC_RANGE, MIN_RADIUS)
         self.assertEqual(q['thr50'], 0.0)
         self.assertEqual(q['hit1'], 0.0)
 
@@ -104,7 +106,7 @@ class TestHeadQuality(unittest.TestCase):
         x = PC_RANGE[0] + 0.95 * (PC_RANGE[3] - PC_RANGE[0])
         y = PC_RANGE[1] + 0.05 * (PC_RANGE[4] - PC_RANGE[1])
         run = _run([[x, y, 0.0]], [2])
-        tgt = probe.make_target(run, C, PC_RANGE)[0, 2]
+        tgt = probe.make_target(run, C, PC_RANGE, MIN_RADIUS)[0, 2]
         self.assertGreater(float(tgt[-1].max()), 0.0,
                            'expected the far-x object on the LAST H row')
         self.assertGreater(float(tgt[:, 0].max()), 0.0,
@@ -113,7 +115,7 @@ class TestHeadQuality(unittest.TestCase):
 
     def test_empty_frame_returns_none(self):
         run = _run([], [])
-        self.assertIsNone(probe.head_quality(run, C, PC_RANGE))
+        self.assertIsNone(probe.head_quality(run, C, PC_RANGE, MIN_RADIUS))
 
 
 class TestClassScores(unittest.TestCase):
@@ -290,6 +292,51 @@ class TestClipSelection(unittest.TestCase):
             self.assertEqual(probe.select_clips(_DS(), args), [3, 23, 43, 63])
         finally:
             probe.dz.history_validity = original
+
+
+class TestMinRadiusIsThreaded(unittest.TestCase):
+    """The M1-M4 targets must use the config's object_min_radius.
+
+    The probe read the value from the config but every rasteriser call fell
+    back to a hard-coded default of 2, so the gate would have silently scored a
+    different target from training the moment the config changed. Pinned by
+    intercepting the rasteriser and asserting the value it receives.
+    """
+
+    def setUp(self):
+        import mmdet3d.core.utils.gaussian as gaussian
+        self.gaussian = gaussian
+        self.seen = []
+        self._orig = gaussian.bev_centers_to_heatmap
+
+        def spy(boxes, labels, num_classes, out_size, point_cloud_range,
+                min_radius, device=None, dtype=None):
+            self.seen.append(min_radius)
+            return self._orig(
+                boxes, labels, num_classes=num_classes, out_size=out_size,
+                point_cloud_range=point_cloud_range, min_radius=min_radius,
+                device=device, dtype=dtype)
+
+        gaussian.bev_centers_to_heatmap = spy
+        probe.make_target.__globals__['bev_centers_to_heatmap'] = spy
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        self.gaussian.bev_centers_to_heatmap = self._orig
+        probe.make_target.__globals__['bev_centers_to_heatmap'] = self._orig
+
+    def test_head_quality_forwards_the_configured_radius(self):
+        for radius in (1, 2, 3):
+            self.seen.clear()
+            run = _run([[20.0, 0.0, 0.0]], [2])
+            probe.head_quality(run, C, PC_RANGE, radius)
+            self.assertEqual(self.seen, [radius],
+                             'head_quality dropped the configured '
+                             'object_min_radius')
+
+    def test_make_target_requires_the_radius(self):
+        with self.assertRaises(TypeError):
+            probe.make_target(_run([[20.0, 0.0, 0.0]], [2]), C, PC_RANGE)
 
 
 class TestGateBoundaries(unittest.TestCase):
