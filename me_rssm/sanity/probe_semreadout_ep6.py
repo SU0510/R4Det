@@ -32,6 +32,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -322,6 +323,37 @@ def gate_m4(own_hit, transfer, num_classes):
                 and own_hit >= bar and transfer >= bar)
 
 
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def input_fingerprints(config_path, checkpoint_path):
+    """Identify exactly which artifacts produced this reading.
+
+    A verdict is only meaningful if the config and the checkpoint it was read
+    from are recoverable. Recording the hashes (and the checkpoint mtime)
+    makes a stale or mismatched evidence bundle detectable after the fact --
+    the failure mode that motivates this probe, since the gate JSON is the
+    only record of the S1 numbers.
+    """
+    out = {}
+    for name, path in (('config', config_path),
+                       ('checkpoint', checkpoint_path)):
+        path = os.path.abspath(path)
+        out[name + '_path'] = path
+        if os.path.exists(path):
+            out[name + '_sha256'] = _sha256(path)
+            out[name + '_size_bytes'] = os.path.getsize(path)
+            out[name + '_mtime'] = int(os.path.getmtime(path))
+        else:
+            out[name + '_sha256'] = None
+    return out
+
+
 def main():
     from mmcv import Config
     from mmcv.runner import load_checkpoint
@@ -532,6 +564,8 @@ def main():
     }
     report['gates']['M4'] = gate_m4(own_hit, transfer, num_classes)
 
+    report['input_fingerprints'] = input_fingerprints(args.config,
+                                                      args.checkpoint)
     output = os.path.abspath(args.output)
     os.makedirs(os.path.dirname(output) or '.', exist_ok=True)
     with open(output, 'w') as handle:

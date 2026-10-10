@@ -425,5 +425,50 @@ class TestGateBoundaries(unittest.TestCase):
         self.assertFalse(probe.gate_m4(0.9, None, 4))
 
 
+class TestInputFingerprints(unittest.TestCase):
+    """The bundle must say exactly which artifacts produced the reading."""
+
+    def test_records_path_hash_size_and_mtime(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, 'cfg.py')
+            ckpt = os.path.join(tmp, 'epoch_6.pth')
+            with open(cfg, 'w') as handle:
+                handle.write('model = dict()\n')
+            with open(ckpt, 'wb') as handle:
+                handle.write(b'not really a checkpoint')
+            fp = probe.input_fingerprints(cfg, ckpt)
+        self.assertEqual(len(fp['config_sha256']), 64)
+        self.assertEqual(len(fp['checkpoint_sha256']), 64)
+        self.assertNotEqual(fp['config_sha256'], fp['checkpoint_sha256'])
+        self.assertEqual(fp['config_size_bytes'], len('model = dict()\n'))
+        self.assertGreater(fp['checkpoint_mtime'], 0)
+
+    def test_missing_checkpoint_does_not_raise(self):
+        """A fingerprint of a missing artifact is None, not a crash.
+
+        The probe must record the absence rather than abort: the assembled
+        verdict is what flags the incomplete bundle.
+        """
+        fp = probe.input_fingerprints(__file__, '/nonexistent/epoch_6.pth')
+        self.assertIsNone(fp['checkpoint_sha256'])
+        self.assertEqual(len(fp['config_sha256']), 64)
+
+    def test_hash_distinguishes_contents(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            a = os.path.join(tmp, 'a.bin')
+            b = os.path.join(tmp, 'b.bin')
+            with open(a, 'wb') as handle:
+                handle.write(b'one')
+            with open(b, 'wb') as handle:
+                handle.write(b'two')
+            self.assertNotEqual(probe._sha256(a), probe._sha256(b))
+            with open(b, 'wb') as handle:
+                handle.write(b'one')
+            self.assertEqual(probe._sha256(a), probe._sha256(b))
+
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

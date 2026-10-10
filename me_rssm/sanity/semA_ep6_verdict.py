@@ -32,6 +32,7 @@ Usage:
 """
 
 import argparse
+import datetime
 import glob
 import json
 import os
@@ -50,12 +51,97 @@ DEFAULT_RUN = ('/data/lurui/work_dirs/'
                'fgfull_N4_no2d_igdr_2x4_24e_semA_seed0')
 GATE_JSON = 'semreadout_ep6_gate.json'
 
+# Every artifact the ep6 battery is supposed to leave behind, with the schema
+# keys that must be present. The watchdog is a shell `&&`-free sequence of
+# probe calls, so a probe that dies (OOM, CUDA error, wrong family) writes no
+# JSON at all while the log still ends with "probes done". Checking the bundle
+# is therefore part of the verdict: an incomplete bundle is NOT EVALUABLE, and
+# must never be read as a failed gate.
+EVIDENCE = (
+    ('S1 gate (M1-M4)', GATE_JSON,
+     ('gates', 'M1_sem_head', 'M2_exclusivity', 'M3_readout_toggle',
+      'M4_class_information', 'indices', 'checkpoint',
+      'input_fingerprints')),
+    ('z-utilization w3', 'z_util_std_ep6_w3.json',
+     ('indices', 'per_sample')),
+    ('z-utilization w100', 'z_util_std_ep6_w100.json',
+     ('indices', 'per_sample')),
+    ('z-utilization w1800', 'z_util_std_ep6_w1800.json',
+     ('indices', 'per_sample')),
+    ('posterior source', 'post_source_std_ep6_stride700.json',
+     ('indices', 'fusion_class', 'mu_q', 'h_t', 'e_pooled')),
+)
+
+# The M1-M4 gates must all be present for an aggregate verdict to mean
+# anything; a probe that reports 3 of 4 gates is not a pass.
+REQUIRED_GATES = ('M1', 'M2', 'M3', 'M4')
+
 
 def load_json(path):
     if not os.path.exists(path):
         return None
     with open(path, encoding='utf-8') as handle:
         return json.load(handle)
+
+
+def check_evidence(run_dir):
+    """(rows, ok) -- does the battery bundle exist and carry its schema?
+
+    Returns one row per expected artifact: (label, filename, status, detail).
+    """
+    rows = []
+    ok = True
+    for label, name, keys in EVIDENCE:
+        path = os.path.join(run_dir, name)
+        if not os.path.exists(path):
+            rows.append((label, name, 'MISSING', 'probe wrote no JSON'))
+            ok = False
+            continue
+        try:
+            payload = load_json(path)
+        except (ValueError, OSError) as exc:
+            rows.append((label, name, 'UNREADABLE', str(exc)[:80]))
+            ok = False
+            continue
+        if not isinstance(payload, dict):
+            rows.append((label, name, 'MALFORMED', 'top level is not an object'))
+            ok = False
+            continue
+        missing = [k for k in keys if k not in payload]
+        if missing:
+            rows.append((label, name, 'INCOMPLETE',
+                         'missing keys: ' + ', '.join(missing)))
+            ok = False
+            continue
+        if name == GATE_JSON:
+            gates = payload.get('gates') or {}
+            absent = [g for g in REQUIRED_GATES if g not in gates]
+            if absent:
+                rows.append((label, name, 'INCOMPLETE',
+                             'missing gates: ' + ', '.join(absent)))
+                ok = False
+                continue
+            if not payload.get('indices'):
+                rows.append((label, name, 'INCOMPLETE', 'no clips selected'))
+                ok = False
+                continue
+        if name.startswith('z_util'):
+            count = len(payload.get('per_sample') or {})
+            if count < 2:
+                rows.append((label, name, 'INCOMPLETE',
+                             f'only {count} per-sample reading(s)'))
+                ok = False
+                continue
+            bad = [k for k, v in (payload.get('per_sample') or {}).items()
+                   if not isinstance(v, dict)
+                   or 'variants' not in v]
+            if bad:
+                rows.append((label, name, 'INCOMPLETE',
+                             f'{len(bad)} reading(s) lack variants'))
+                ok = False
+                continue
+        rows.append((label, name, 'OK', ''))
+    return rows, ok
 
 
 def val_by_epoch(run_dir):
@@ -108,12 +194,31 @@ def main():
     else:
         print('no val records yet -> S1 NOT EVALUABLE')
 
+    print()
+    print('=' * 72)
+    print('EVIDENCE BUNDLE COMPLETENESS (a dead probe writes no JSON)')
+    print('=' * 72)
+    rows, evidence_ok = check_evidence(run)
+    for label, name, status, detail in rows:
+        line = f'  [{status:10s}] {label:22s} {name}'
+        if detail:
+            line += f'  <- {detail}'
+        print(line)
+    if evidence_ok:
+        print('  -> all expected artifacts present')
+    else:
+        print('  -> INCOMPLETE BUNDLE: rerun the missing probe(s) before '
+              'reading any gate number as a failure')
+
     gate = load_json(os.path.join(run, GATE_JSON))
     print()
     print('=' * 72)
     print('S1 MECHANISM GATES (pre-registered section 5, read from '
           f'{GATE_JSON})')
     print('=' * 72)
+    if not evidence_ok and gate is not None:
+        print('  WARNING: the bundle is incomplete; the gate reading below '
+              'is provisional until the missing artifacts exist.')
     if gate is None:
         print(f'  MISSING {GATE_JSON} -- the ep6 watchdog has not finished '
               'the battery; S1 NOT EVALUABLE')
@@ -166,9 +271,23 @@ def main():
         print(f"   head_swap_to_donor={m4.get('mean_head_swap_to_donor')} "
               f"changed_frac={m4.get('mean_changed_frac')} (context)")
 
-        all_pass = all(gates.get(k) is True for k in ('M1', 'M2', 'M3', 'M4'))
+        fp = gate.get('input_fingerprints') or {}
+        if fp.get('checkpoint_sha256'):
+            print(f"   checkpoint: {gate.get('checkpoint')}")
+            print(f"     sha256={fp['checkpoint_sha256'][:16]}... "
+                  f"size={fp.get('checkpoint_size_bytes')} "
+                  f"mtime={fp.get('checkpoint_mtime')} "
+                  f"({datetime.datetime.utcfromtimestamp(fp['checkpoint_mtime']).strftime('%Y-%m-%d %H:%M:%S')} UTC)")
+            print(f"   config sha256={str(fp.get('config_sha256'))[:16]}...")
+
+        all_pass = all(gates.get(k) is True for k in REQUIRED_GATES)
         print()
-        print(f'S1 AGGREGATE: {"ALL PASS" if all_pass else "NOT ALL PASS"}')
+        if all_pass and not evidence_ok:
+            print('S1 AGGREGATE: ALL GATES PASS but the evidence bundle is '
+                  'INCOMPLETE -- treat as NOT EVALUABLE until it is rerun')
+        else:
+            print(f'S1 AGGREGATE: '
+                  f'{"ALL PASS" if all_pass else "NOT ALL PASS"}')
 
     print()
     print('=' * 72)
