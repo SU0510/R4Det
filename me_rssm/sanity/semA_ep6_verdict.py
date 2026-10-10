@@ -76,6 +76,21 @@ EVIDENCE = (
 # anything; a probe that reports 3 of 4 gates is not a pass.
 REQUIRED_GATES = ('M1', 'M2', 'M3', 'M4')
 
+# Pre-registered M1 grid-extrapolation rule (training record section
+# 71.9.3(2)). The hit@1 >= 0.60 bar was calibrated on route-C's 16x16 pooled
+# grid (chance ~1.6e-2); candidate A supervises the full-res 216x248 grid
+# (chance ~7.5e-5, 209x the cells), where a correct centre in one argmax cell
+# is a far stricter event. The pre-registration therefore fixes the outcome in
+# advance: a miss on the RAW full-res rate while thr50 AND the
+# excess-over-chance reading are healthy is INSUFFICIENT EVIDENCE -- add a
+# full-res matched control -- and must NOT be recorded as a mechanism
+# refutation. The prereg fixed no numeric excess bar, so the check below uses
+# the excess the calibrated bar implies on its own grid and prints it.
+M1_BAR_THR50 = 0.30
+M1_BAR_HIT1 = 0.60
+M1_CALIBRATION_CHANCE = 1.6e-2
+M1_EXCESS_BAR = M1_BAR_HIT1 - M1_CALIBRATION_CHANCE
+
 
 def load_json(path):
     if not os.path.exists(path):
@@ -144,6 +159,31 @@ def check_evidence(run_dir):
     return rows, ok
 
 
+def m1_excess_mean(m1):
+    """Mean hit1_excess_over_chance over the M1 clips, or None."""
+    vals = [c.get('hit1_excess_over_chance') for c in (m1.get('per_clip') or [])
+            if c.get('hit1_excess_over_chance') is not None]
+    return statistics.mean(vals) if vals else None
+
+
+def m1_grid_limited(mean_thr50, mean_hit1, mean_excess):
+    """Is M1's failure attributable solely to the full-res hit@1 scale?
+
+    True only when thr50 cleared its bar and the excess-over-chance reading
+    reaches the excess the calibrated bar implies: the head does find object
+    centres, but the raw one-cell-argmax rate is not comparable across a grid
+    209x denser than the one the bar came from. Per section 71.9.3(2) that
+    outcome is INSUFFICIENT EVIDENCE, not a refutation.
+    """
+    if mean_thr50 is None or mean_hit1 is None or mean_excess is None:
+        return False
+    if mean_thr50 < M1_BAR_THR50:
+        return False
+    if mean_hit1 >= M1_BAR_HIT1:
+        return False  # it passed on the raw rate; nothing to explain away
+    return mean_excess >= M1_EXCESS_BAR
+
+
 def val_by_epoch(run_dir):
     out = {}
     for path in sorted(glob.glob(os.path.join(run_dir, '*.log.json'))):
@@ -210,6 +250,7 @@ def main():
         print('  -> INCOMPLETE BUNDLE: rerun the missing probe(s) before '
               'reading any gate number as a failure')
 
+    decision = {}
     gate = load_json(os.path.join(run, GATE_JSON))
     print()
     print('=' * 72)
@@ -248,14 +289,28 @@ def main():
             ex = [c.get('hit1_excess_over_chance') for c in clips
                   if c.get('hit1_excess_over_chance') is not None]
             if ch:
+                mean_excess = statistics.mean(ex) if ex else None
                 print(f'   [supplement, NOT gated] hit1_chance mean='
                       f'{statistics.mean(ch):.6f}  '
-                      f'excess_over_chance mean={statistics.mean(ex):.4f}')
-                print('   NOTE: bars were calibrated on route-C 16x16; A runs '
-                      '216x248. If M1 misses on the raw full-res rate while '
-                      'thr50/the excess reading are healthy, the '
-                      'pre-registered outcome is INSUFFICIENT EVIDENCE, not a '
-                      'mechanism refutation -- add a full-res matched control.')
+                      f'excess_over_chance mean={mean_excess}')
+                decision["m1_grid_limited"] = m1_grid_limited(
+                    m1.get('mean_thr50'), m1.get('mean_hit1'), mean_excess)
+                if decision["m1_grid_limited"]:
+                    print(f'   -> PRE-REGISTERED RULE APPLIES (section '
+                          f'71.9.3(2)): thr50 cleared {M1_BAR_THR50} and the '
+                          f'excess reading {mean_excess:.4f} reaches the '
+                          f'{M1_EXCESS_BAR:.4f} the calibrated bar implies. '
+                          f'M1\'s miss is on the FULL-RES raw rate only '
+                          f'-> INSUFFICIENT EVIDENCE, not a mechanism '
+                          f'refutation. Add a full-res matched control '
+                          f'before any verdict.')
+                else:
+                    print('   NOTE: bars were calibrated on route-C 16x16; A '
+                          'runs 216x248. If M1 misses on the raw full-res '
+                          'rate while thr50/the excess reading are healthy, '
+                          'the pre-registered outcome is INSUFFICIENT '
+                          'EVIDENCE, not a mechanism refutation -- add a '
+                          'full-res matched control.')
 
         # --- M2 ---------------------------------------------------------
         print(f"M2 z-exclusivity: {verdict_of('M2')}"
@@ -289,10 +344,23 @@ def main():
             print(f"   config sha256={str(fp.get('config_sha256'))[:16]}...")
 
         all_pass = all(gates.get(k) is True for k in REQUIRED_GATES)
+        # The only non-gate exception the pre-registration allows: an M1 miss
+        # that is explained by the cross-grid hit@1 extrapolation. All other
+        # gates must still pass for this branch to apply.
+        other_pass = all(gates.get(k) is True
+                         for k in REQUIRED_GATES if k != 'M1')
+        grid_limited = (decision.get('m1_grid_limited') and other_pass
+                        and gates.get('M1') is False)
         print()
         if all_pass and not evidence_ok:
             print('S1 AGGREGATE: ALL GATES PASS but the evidence bundle is '
                   'INCOMPLETE -- treat as NOT EVALUABLE until it is rerun')
+        elif grid_limited:
+            print('S1 AGGREGATE: M1 failed on the full-res raw rate only, '
+                  'with a healthy thr50/excess reading and all other gates '
+                  'passing -> INSUFFICIENT EVIDENCE (pre-registered section '
+                  '71.9.3(2)), NOT a mechanism refutation. Do not archive as '
+                  'negative; add a full-res matched control first.')
         else:
             print(f'S1 AGGREGATE: '
                   f'{"ALL PASS" if all_pass else "NOT ALL PASS"}')
@@ -330,6 +398,10 @@ def main():
           'BEFORE continuing ep6->ep16.')
     print('  S1 any fail -> archive as a negative result with the measured '
           'reason; if M2 failed, the probabilistic-state claim is void.')
+    print('  EXCEPTION (section 71.9.3(2)): M1 failing ONLY on the full-res '
+          'raw hit@1, with thr50/the excess reading healthy and every other '
+          'gate passing, is INSUFFICIENT EVIDENCE -- add a full-res matched '
+          'control before deciding; do not archive as a refutation.')
     print('  Any Ped/Cyc <= non-inferiority line -> stop, record as the '
           "family side-effect's sixth reproduction.")
     print('  Never: weight/KL sweeps or an ep24 rescue.')

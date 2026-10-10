@@ -255,3 +255,63 @@ class TestProducerConsumerContract(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+
+class TestM1GridLimitedRule(unittest.TestCase):
+    """Pre-registered section 71.9.3(2): an M1 miss caused by the cross-grid
+    hit@1 extrapolation is INSUFFICIENT EVIDENCE, not a refutation.
+
+    The arms must be mutually exclusive, or the rule would swallow real M1
+    failures.
+    """
+
+    def test_healthy_excess_with_cleared_thr50_is_grid_limited(self):
+        # thr50 well past its bar, hit@1 far below 0.60, excess at the
+        # calibrated bar -> the head does find centres; only the raw rate fails.
+        self.assertTrue(verdict.m1_grid_limited(0.45, 0.08, 0.60))
+        self.assertTrue(verdict.m1_grid_limited(0.30, 0.01, 0.5841))
+
+    def test_thr50_also_failing_is_not_excused(self):
+        """If thr50 missed its bar, the miss is NOT attributable to the grid."""
+        self.assertFalse(verdict.m1_grid_limited(0.29, 0.08, 0.60))
+        self.assertFalse(verdict.m1_grid_limited(0.0, 0.0, 0.99))
+
+    def test_healthy_excess_but_hit1_passing_is_not_excused(self):
+        """Nothing to explain away when M1 actually passed on the raw rate."""
+        self.assertFalse(verdict.m1_grid_limited(0.45, 0.60, 0.60))
+        self.assertFalse(verdict.m1_grid_limited(0.45, 0.99, 0.99))
+
+    def test_low_excess_is_not_excused(self):
+        self.assertFalse(verdict.m1_grid_limited(0.45, 0.02, 0.019))
+        self.assertFalse(verdict.m1_grid_limited(0.45, 0.02, 0.0))
+
+    def test_missing_readings_never_excuse(self):
+        for args in ((None, 0.08, 0.60), (0.45, None, 0.60),
+                     (0.45, 0.08, None)):
+            self.assertFalse(verdict.m1_grid_limited(*args))
+
+    def test_thresholds_match_the_preregistered_bars(self):
+        self.assertEqual(verdict.M1_BAR_THR50, 0.30)
+        self.assertEqual(verdict.M1_BAR_HIT1, 0.60)
+        # the excess bar is derived from the calibrated chance, not invented
+        self.assertAlmostEqual(
+            verdict.M1_EXCESS_BAR,
+            verdict.M1_BAR_HIT1 - verdict.M1_CALIBRATION_CHANCE)
+        self.assertLess(verdict.M1_EXCESS_BAR, verdict.M1_BAR_HIT1)
+        # and the full-res chance must be far below the calibrated one
+        self.assertLess(verdict.M1_CALIBRATION_CHANCE, 0.05)
+
+    def test_excess_mean_reads_the_probe_supplement(self):
+        m1 = {'per_clip': [{'hit1_excess_over_chance': 0.2},
+                           {'hit1_excess_over_chance': 0.4},
+                           {'hit1_excess_over_chance': None}]}
+        self.assertAlmostEqual(verdict.m1_excess_mean(m1), 0.3)
+        self.assertIsNone(verdict.m1_excess_mean({'per_clip': []}))
+        self.assertIsNone(verdict.m1_excess_mean({}))
+
+    def test_rule_is_only_reachable_for_a_failing_m1(self):
+        """Source guard: the aggregate branch requires M1 to be False."""
+        source = _read(os.path.join('me_rssm', 'sanity',
+                                    'semA_ep6_verdict.py'))
+        self.assertIn("gates.get('M1') is False", source)
+        self.assertIn("k != 'M1'", source)
