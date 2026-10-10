@@ -10,9 +10,11 @@
 #         lesson of §70.2 — a supervision term with no gradient pressure
 #         cannot move anything, and 0.18%-of-total recon is the failure we are
 #         NOT allowed to repeat).
-#   S0-e  stat_cls_res_rms leaves 0 exactly (readout alive) — and
-#         ||d loss_cls / d W_cls|| > 0 proves the residual really reaches the
-#         class logits, not just the log dict.
+#   S0-e  stat_cls_res_rms leaves 0 at step 0 (the zero-init identity
+#         contract) and becomes NON-zero once W_cls moves — i.e. the readout
+#         is alive and the residual reaches the class logits, not just the
+#         log dict. ||d loss_cls / d W_cls|| > 0 is the direct reading and
+#         is checked by probe_semreadout_wiring.py.
 #   baseline path untouched: loss_rssm_recon / loss_rssm_kl behave as in the
 #         baseline smoke ranges, and the first iterations show the class
 #         logits identical to the baseline because W_cls starts at 0.
