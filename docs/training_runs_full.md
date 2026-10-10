@@ -12965,6 +12965,38 @@ CUDA 可用）。即该风险当前**未触发**，属预防性加固。
 改脚本后按 §71.9.2 的约定**重启看门狗会话**（新起点 17:52:22 UTC），
 确保 bash 从偏移 0 读取。
 
+#### 71.9.11 `sem_head_input` 未识别值静默落到 `feat` 臂（`0fae53f`）
+
+**缺陷**：`SemanticReadoutRSSMFusion._sem_source()` 原实现是
+
+```python
+if self.sem_head_input == 'z': return z_t
+if self.sem_head_input == 'h': return h_t
+return feat          # <-- 任何其它值
+```
+
+即**未识别的取值一律落到 `feat`**。而 M2 正是靠切换这个属性来构造
+h 臂与 feat 臂：若该属性被写成 `'H'` / `'FEAT'` / 其它拼写，**h 臂会静默
+变成 feat 臂的副本**，M2 就会把「同一个张量的两次测量」当作「两个控制臂」
+报告，得出假的「两臂都劣于 z」。构造函数虽然已做取值校验，但探针是在
+**运行时直接改属性**（`rollout` 里 `fusion.sem_head_input = sem_input`），
+走的正是这条未校验路径。
+
+**实测**：`_sem_source` 逐值探针确认 `'z'/'h'/'feat'` 分别返回各自张量，
+而 `'Z'/'H'/'FEAT'/'typo'/''` **全部返回 `feat`**。
+
+**修复**：改为三分支显式返回，其余取值 `raise ValueError`。
+
+**验证**：新增 T13（断言三个合法臂各自返回自己的张量；7 个非法值
+`'Z'/'H'/'FEAT'/'typo'/''/'feature'` 必须抛 `ValueError`）。
+测试有牙齿：把 `raise` 换回 `return feat`，T13 立即以
+`AssertionError: ValueError not raised` 失败；恢复后
+`test_semantic_readout_rssm` **12 passed**。
+
+**边界**：只把「静默兜底」改成「显式报错」，三臂语义与 M2 判据数值均未动。
+当前 config 写的是 `sem_head_input='z'`，看门狗三段控制臂也各自写死
+`'z'/'h'/'feat'`，故本 run 读数不受影响；这是防止未来改配置时静默失效。
+
 **边界**：门槛数值、探针的采样窗口（M1 `stride=200`/10 帧、z-util 三窗、
 source `stride=700` 对应 3 个索引——与 MAI ep12/ep16 逐字一致，故不改）、
 模型与训练日程全部未动；看门狗脚本本身**未改**（它正处等待循环，bash 按
