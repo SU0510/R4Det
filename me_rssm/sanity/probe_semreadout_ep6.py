@@ -234,10 +234,16 @@ def head_scores_with_residual(model, run, residual):
     movement in the head's class argmax is attributable to the swapped z.
 
     ``residual`` is on the head grid (the same convention the detector uses);
-    pass ``None`` for the no-readout control.
+    pass ``None`` for the no-readout control. The residual is moved to the
+    features' device: ``Anchor3DHead._expand_cls_logit_residual`` builds its
+    channel map on ``ref.device`` and calls ``residual.index_select`` with it,
+    so a CPU residual against CUDA features raises a device mismatch (the
+    rollouts deliberately keep every reading on CPU).
     """
     feats = [t.cuda() if torch.cuda.is_available() else t
              for t in run['pts_feats']]
+    if residual is not None:
+        residual = residual.to(feats[0].device)
     with torch.no_grad():
         outs = model.pts_bbox_head(feats, cls_logit_residual=residual)
     return [t.detach().float().cpu() for t in outs[0]]

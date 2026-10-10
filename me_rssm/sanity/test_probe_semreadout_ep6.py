@@ -178,7 +178,9 @@ class TestHeadSwap(unittest.TestCase):
 
         def __call__(self, feats, cls_logit_residual=None):
             self.calls.append(cls_logit_residual)
-            out = self.base_logits.clone()
+            # A real head's parameters live on the module's device, so mirror
+            # the incoming features instead of pinning the fixture to CPU.
+            out = self.base_logits.to(feats[0].device).clone()
             if cls_logit_residual is not None:
                 n_anchor = out.shape[1] // C
                 out = out + cls_logit_residual.repeat(1, n_anchor, 1, 1) * self.gain
@@ -192,8 +194,9 @@ class TestHeadSwap(unittest.TestCase):
         base = torch.zeros(1, 2 * C, W, H)      # 2 anchor slots, flat scores
         head = self._Head(base)
         model = self._Model(head)
-        run = {'pts_feats': [torch.zeros(1, 4, W, H)]}
-        donor_res = torch.zeros(1, C, W, H)     # head grid
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        run = {'pts_feats': [torch.zeros(1, 4, W, H, device=device)]}
+        donor_res = torch.zeros(1, C, W, H, device=device)   # head grid
         donor_res[0, 3, 2, 5] = 4.0             # head (w=2, h=5), class 3
         out = probe.head_scores_with_residual(model, run, donor_res)
         scores = probe.class_scores_from_head({'cls_score': out}, C)
@@ -201,7 +204,8 @@ class TestHeadSwap(unittest.TestCase):
         self.assertEqual(int(scores[row].argmax()), 3)
         self.assertEqual(len(head.calls), 1)
         self.assertIs(head.calls[0], donor_res,
-                      'the donor residual must reach the head unchanged')
+                      'a residual already on the features device must reach '
+                      'the head unchanged (no gratuitous copy)')
 
     def test_none_residual_is_the_no_readout_control(self):
         head = self._Head(torch.zeros(1, 2 * C, W, H))
@@ -209,6 +213,50 @@ class TestHeadSwap(unittest.TestCase):
         probe.head_scores_with_residual(
             model, {'pts_feats': [torch.zeros(1, 4, W, H)]}, None)
         self.assertIsNone(head.calls[0])
+
+    class _DeviceStrictHead:
+        """Mimics the real head's device contract.
+
+        ``Anchor3DHead._expand_cls_logit_residual`` builds its index map with
+        ``ref.device`` and then calls ``residual.index_select(1, src)``: if the
+        probe hands it a CPU residual while it is running on CUDA features,
+        PyTorch raises a device mismatch. On a CUDA box the CPU-feature fixture
+        below reproduces exactly that (``.cuda()`` moves the features, the
+        residual used to stay behind), so this test fails against the
+        un-fixed probe there.
+        """
+
+        def __init__(self, base_logits):
+            self.base_logits = base_logits
+            self.calls = []
+
+        def __call__(self, feats, cls_logit_residual=None):
+            self.calls.append(cls_logit_residual)
+            if cls_logit_residual is None:
+                return [self.base_logits.clone()], None, None
+            self.assert_same_device(feats[0].device, cls_logit_residual.device)
+            # same op the real head performs, with an index map on ref.device
+            src = torch.tensor([0] * C, device=feats[0].device)
+            cls_logit_residual.index_select(1, src)
+            return [self.base_logits.clone()], None, None
+
+        @staticmethod
+        def assert_same_device(feat_device, residual_device):
+            if feat_device != residual_device:
+                raise AssertionError(
+                    'cls_logit_residual must arrive on the features device: '
+                    f'features {feat_device}, residual {residual_device}')
+
+    def test_swap_moves_residual_onto_the_features_device(self):
+        head = self._DeviceStrictHead(torch.zeros(1, 2 * C, W, H))
+        model = self._Model(head)
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        probe.head_scores_with_residual(
+            model,
+            {'pts_feats': [torch.zeros(1, 4, W, H, device=device)]},
+            torch.zeros(1, C, W, H))          # deliberately left on CPU
+        self.assertEqual(head.calls[0].device.type,
+                         torch.device(device).type)
 
 
 class TestClipSelection(unittest.TestCase):
