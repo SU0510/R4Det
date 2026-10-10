@@ -8,10 +8,17 @@
 # counterfactual readout for cross-generation comparability.
 #
 #   M1-M4  me_rssm/sanity/probe_semreadout_ep6.py  -- the S1 gate itself
-#   P1     probe_z_utilization_gated.py (w3/w100/w1800) -- family-standard
-#          shuffle_z / zero_z / h-dependency readout, comparable with every
-#          previous generation (MAI / MCI / DC-RSSM).
-#   P2     probe_posterior_source_gated.py -- source attribution.
+#   P1     me_rssm/sanity/probe_z_utilization_standard.py (w3/w100/w1800) --
+#          shuffle_z / zero_z / prior_only readout, comparable with every
+#          previous generation (MAI / MCI / DC-RSSM). Candidate A runs the
+#          STANDARD family (MotionAlignedRSSMFusion), which has no
+#          `_z_intervention` hook point, so the gated probe aborts on it with
+#          "target model is not a gated variant" (verified 2026-10-10). The
+#          standard probe runs the same posterior-head intervention and the
+#          same scoring, and forwards the deployed class residual to the head.
+#   P2     tools/probe_posterior_source.py -- source attribution. The standard
+#          tool (transition hook), not the MCI variant that reads the eval-mode
+#          `_last_h_t` stash.
 #
 # The DECISION stays manual: this script only stops training and freezes
 # evidence. It never launches a follow-up run (a GO requires user-approved
