@@ -423,6 +423,75 @@ class TestPosteriorSourceSection(unittest.TestCase):
                           f'probe_posterior_source no longer writes {key}')
 
 
+class TestDegenerateBundles(unittest.TestCase):
+    """The draft is rendered unattended; a broken bundle must not crash it.
+
+    If render() raises, the watchdog logs a warning and there is no draft at
+    all -- exactly when a human most needs to see what is missing. These
+    bundles must all produce text.
+    """
+
+    def _empty_run(self, gate=True, log=True, epochs=()):
+        d = tempfile.mkdtemp(prefix='rec72_empty_')
+        if gate:
+            with open(os.path.join(d, verdict.GATE_JSON), 'w') as handle:
+                json.dump({'gates': {}, 'M1_sem_head': {}, 'M2_exclusivity': {},
+                           'M3_readout_toggle': {}, 'M4_class_information': {},
+                           'indices': [], 'checkpoint': 'x',
+                           'input_fingerprints': {}}, handle)
+        if log:
+            with open(os.path.join(d, 'run.log.json'), 'w') as handle:
+                for e in epochs:
+                    handle.write(json.dumps({
+                        'mode': 'val', 'epoch': e, 'iter': 1,
+                        'pts_bbox/KITTI/Overall_3D_moderate': 30.0 + e}) + '\n')
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        return d
+
+    def test_entirely_empty_directory_renders(self):
+        text = record.render(tempfile.mkdtemp(prefix='rec72_none_'),
+                             '2026-10-10')
+        self.assertIn('NOT EVALUABLE', text)
+
+    def test_headline_never_calls_an_unmeasured_bundle_failed(self):
+        """The H1 must say NOT EVALUABLE, not '未全门通过'.
+
+        '未全门通过' means gates were measured and some failed, which is a
+        mechanism finding. An absent bundle is not that.
+        """
+        for name, run in (('empty', tempfile.mkdtemp(prefix='rec72_h_')),
+                          ('no val', self._empty_run(log=False))):
+            headline = record.render(run, '2026-10-10').splitlines()[0]
+            self.assertIn('NOT EVALUABLE', headline, name)
+            self.assertNotIn('未全门通过', headline, name)
+
+    def test_no_val_records_renders(self):
+        text = record.render(self._empty_run(log=False), '2026-10-10')
+        self.assertIn('无 val 记录', text)
+        self.assertIn('NOT MEASURED', text)
+
+    def test_partial_metrics_do_not_crash_the_class_table(self):
+        text = record.render(self._empty_run(epochs=(1, 2)), '2026-10-10')
+        self.assertIn('ep1-ep2', text)
+
+    def test_missing_gate_readings_are_not_rendered_as_failures(self):
+        """'not measured' must never read as 'measured and failed'."""
+        text = record.render(self._empty_run(log=False), '2026-10-10')
+        self.assertNotIn('NOT ALL PASS', text)
+        self.assertIn('NOT MEASURED', text)
+
+    def test_m3_absent_counts_do_not_render_as_none_over_none(self):
+        text = record.render(self._empty_run(log=False), '2026-10-10')
+        self.assertNotIn('None/None', text)
+
+    def test_non_numeric_reading_renders_as_na(self):
+        self.assertEqual(record.num(None), 'n/a')
+        self.assertEqual(record.pct(None), 'n/a')
+        self.assertEqual(record.signed(None), 'n/a')
+        self.assertEqual(record.num('x'), 'n/a')
+        self.assertEqual(record.pct('x'), 'n/a')
+
+
 class TestProducerConsumerContract(unittest.TestCase):
     """The generator reads keys the real probes must actually write."""
 

@@ -152,15 +152,21 @@ def saved_epochs(run_dir):
 
 
 def pct(value, digits=4):
-    return 'n/a' if value is None else f'{value * 100:.{digits}f}%'
+    if not isinstance(value, (int, float)):
+        return 'n/a'
+    return f'{value * 100:.{digits}f}%'
 
 
 def num(value, digits=4):
-    return 'n/a' if value is None else f'{value:.{digits}f}'
+    if not isinstance(value, (int, float)):
+        return 'n/a'
+    return f'{value:.{digits}f}'
 
 
 def signed(value, digits=4):
-    return 'n/a' if value is None else f'{value:+.{digits}f}'
+    if not isinstance(value, (int, float)):
+        return 'n/a'
+    return f'{value:+.{digits}f}'
 
 
 def render(run_dir, date_str):
@@ -192,8 +198,19 @@ def render(run_dir, date_str):
             return 'NOT MEASURED'
         return 'PASS' if gates.get(name) else 'FAIL'
 
-    add(f'## 72. 候选 A ep6 机制门（S1）：'
-        f'{"全门通过" if all_pass else "未全门通过"}（{date_str}）')
+    # The heading must distinguish "measured and failed" from "not measured":
+    # an incomplete bundle is NOT EVALUABLE, and calling it "未全门通过" would
+    # read as a mechanism failure.
+    if not evidence_ok or gates_payload is None:
+        headline = 'NOT EVALUABLE（证据不完整）'
+    elif grid_limited:
+        headline = '证据不足（M1 跨网格口径）'
+    elif all_pass:
+        headline = '全门通过'
+    else:
+        headline = '未全门通过'
+
+    add(f'## 72. 候选 A ep6 机制门（S1）：{headline}（{date_str}）')
     add('')
     add('本节执行 `docs/rssm_candidate_A_prereg_20261010.md` §5 预登记的 S1 ep6')
     add('机制门。训练从零起（3 卡 GPU5/6/7、seed0、deterministic、24e 余弦日程），')
@@ -267,13 +284,18 @@ def render(run_dir, date_str):
         f'{num(m2.get("z_mean_thr50"))}）、`feat` '
         f'**{pct(m2.get("feat_relative"))}**'
         f'{"（两臂均达线）" if m2_ok else ""} | **{gate_text("M2")}** |')
+    m3_n = m3.get('n')
+    m3_wins = m3.get('wins')
+    m3_reading = (f'**{m3_wins}/{m3_n}**'
+                  if m3_n is not None else '**NOT MEASURED**')
     add(f'| M3 读出非装饰 | 强制 residual=0 使正样本 class-CE 变差 ≥8/10 | '
-        f'**{m3.get("wins")}/{m3.get("n")}** | **{gate_text("M3")}** |')
+        f'{m3_reading} | **{gate_text("M3")}** |')
     add(f'| M4 类别正确性 | `own_hit` 与 `donor_transfer` ≥ chance+20pt '
-        f'（bar {num(m4.get("bar"), 2)}） | `own_hit` '
+        f'（bar {num(m4.get("bar"), 2) if m4.get("bar") is not None else "n/a"}） | `own_hit` '
         f'**{num(m4.get("mean_own_hit"))}**、`donor_transfer` '
         f'**{num(m4.get("mean_donor_transfer"))}**（chance '
-        f'{num(m4.get("chance"), 2)}） | **{gate_text("M4")}** |')
+        f'{num(m4.get("chance"), 2) if m4.get("chance") is not None else "n/a"}） | '
+        f'**{gate_text("M4")}** |')
     add('')
     chance_vals = [c['hit1_chance'] for c in (m1.get('per_clip') or [])
                    if c.get('hit1_chance') is not None]
