@@ -294,6 +294,39 @@ class TestClipSelection(unittest.TestCase):
             probe.dz.history_validity = original
 
 
+class TestHit1ChanceSupplement(unittest.TestCase):
+    """M1's hit@1 bars were calibrated on route-C's 16x16 grid, not full-res.
+
+    The probe must therefore ALSO report the grid-matched chance level, while
+    never letting that supplement move gates['M1'] (the prereg pins the gate
+    to the raw 0.30/0.60 values).
+    """
+
+    def test_chance_and_excess_are_reported(self):
+        run = _run([[20.0, 0.0, 0.0]], [2])
+        q = probe.head_quality(run, C, PC_RANGE, MIN_RADIUS)
+        self.assertIn('hit1_chance', q)
+        self.assertIn('hit1_excess_over_chance', q)
+        self.assertAlmostEqual(q['hit1_chance'],
+                               q['num_pos_cells'] / (H * W), places=12)
+        self.assertAlmostEqual(
+            q['hit1_excess_over_chance'],
+            q['hit1'] - q['num_pos_cells'] / (H * W), places=12)
+
+    def test_chance_shrinks_with_grid_density(self):
+        # same object on a dense grid => far smaller chance level
+        dense = probe.head_quality(
+            _run([[20.0, 0.0, 0.0]], [2]), C, PC_RANGE, MIN_RADIUS)
+        self.assertLess(dense['hit1_chance'], 0.5)
+
+    def test_gate_m1_ignores_the_supplement(self):
+        # gate_m1 takes only the two pre-registered scalars
+        import inspect
+        params = list(inspect.signature(probe.gate_m1).parameters)
+        self.assertEqual(params, ['mean_thr50', 'mean_hit1'])
+        self.assertNotIn('chance', ' '.join(params))
+
+
 class TestMinRadiusIsThreaded(unittest.TestCase):
     """The M1-M4 targets must use the config's object_min_radius.
 

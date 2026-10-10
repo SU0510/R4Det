@@ -191,11 +191,27 @@ def head_quality(run, num_classes, pcr, min_radius):
     peak = torch.zeros_like(flat).scatter_(
         2, peak_idx[:, :, None], 1.0).view_as(prob)
     occupied = (pos.sum(dim=(2, 3)) > 0).sum().clamp_min(1.0)
+    cells = float(prob.shape[-1] * prob.shape[-2])
+    # Resolution-aware SUPPLEMENT, not a gate: M1's 0.30/0.60 bars were fixed
+    # before this probe existed. Their nearest precedent (§59 route-C) ran the
+    # same CenterNet formulation on a 16x16 pooled grid with min_radius=1,
+    # while candidate A supervises the full 216x248 grid (209x more cells) with
+    # min_radius=2. Since hit@1 asks whether ONE argmax cell lands on a
+    # GT-marked cell, both the chance level (~num_pos/cells: 1.6e-2 pooled vs
+    # 7.5e-5 full-res) and what a given rate means are grid-dependent, so the
+    # raw rate cannot be calibrated across the two.
+    # `hit1_excess_over_chance` reports the rate against that chance level
+    # instead, which is comparable across grids and costs no extra forward.
+    # It never feeds gates['M1'].
     return {
         'thr50': float(((prob > 0.5) & pos).sum()) / num_pos,
         'hit1': float((peak * pos).sum()) / float(occupied),
         'num_pos_cells': int(num_pos),
         'occupied_class_channels': int(occupied),
+        'hit1_chance': float(num_pos) / cells,
+        'hit1_excess_over_chance': (
+            float((peak * pos).sum()) / float(occupied)
+            - float(num_pos) / cells),
     }
 
 
