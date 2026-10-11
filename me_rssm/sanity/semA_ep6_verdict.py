@@ -76,6 +76,116 @@ EVIDENCE = (
 # anything; a probe that reports 3 of 4 gates is not a pass.
 REQUIRED_GATES = ('M1', 'M2', 'M3', 'M4')
 
+# --- A2 pre-registered gates (docs/rssm_candidate_A2_prereg_20261011.md §5) --
+# A2 re-uses A's M1-M4, but adds scale-free / localisation gates that A's probe
+# never produced. They live in the rank probe's own JSON, so this assembler has
+# to evaluate them; otherwise an A2 run whose M1'/M1-loc failed would print
+# "ALL PASS" off M1-M4 alone and the arm would be promoted on an incomplete
+# gate set. Detected by the presence of the rank artifact, so A's archived
+# bundle (which has no rank JSON) keeps its exact original verdict.
+A2_RANK_VAL = 'semA_rank_val_ep6.json'
+A2_RANK_TRAIN = 'semA_rank_train_ep6.json'
+A2_M4FLOOR = 'semA_m4floor_ep6.json'
+A2_FROZEN_N = 20
+A2_BAR_AUC = 0.80
+A2_BAR_AUC_MARGIN = 0.25
+A2_BAR_MAXGT_CLIPS = 12          # of A2_FROZEN_N
+A2_BAR_RECALL_TOPK_MEDIAN = 0.25
+
+
+def _fmt(value, digits=4):
+    """Fixed-width float for the printed gate lines; 'None' stays explicit."""
+    return 'None' if value is None else f'{value:.{digits}f}'
+
+
+def _finite(value):
+    return isinstance(value, (int, float)) and value == value
+
+
+def _mean(rows, key):
+    vals = [r[key] for r in rows if _finite(r.get(key))]
+    return statistics.mean(vals) if vals else None
+
+
+def _median(rows, key):
+    vals = [r[key] for r in rows if _finite(r.get(key))]
+    return statistics.median(vals) if vals else None
+
+
+def arm_of_bundle(run_dir):
+    """'A2S' / 'A2R' / None -- which generation produced this ep6 bundle.
+
+    The discriminator is the CONFIG PATH, not the mere presence of an A2-only
+    artifact: A's archived bundle also carries a ``semA_rank_val_ep6.json``
+    (the rank probe was run against it after the fact, with a different clip
+    contract), so keying on the file would re-open A's closed verdict as
+    "NOT EVALUABLE". Only the A2 configs turn the added gates on.
+    """
+    gate = load_json(os.path.join(run_dir, GATE_JSON)) or {}
+    cfg = str((gate.get('input_fingerprints') or {}).get('config_path')
+              or gate.get('config') or '')
+    if not cfg:
+        rank = load_json(os.path.join(run_dir, A2_RANK_VAL)) or {}
+        cfg = str(rank.get('config') or '')
+    if 'semA2S' in cfg:
+        return 'A2S'
+    if 'semA2R' in cfg:
+        return 'A2R'
+    return None
+
+
+def a2_readings(run_dir, arm=None):
+    """Evaluate A2's added gates from the rank artifact. None when not A2.
+
+    Returns {'applicable', 'gates', 'readings', 'blockers'} or None when this
+    bundle is not an A2 arm (see ``arm_of_bundle``). ``blockers`` are reasons
+    the readings cannot be judged at all (wrong frozen n, index mismatch);
+    those must surface as NOT EVALUABLE, never as a silent pass.
+    """
+    if arm is None:
+        arm = arm_of_bundle(run_dir)
+    if arm is None:
+        return None
+    val = load_json(os.path.join(run_dir, A2_RANK_VAL))
+    if val is None:
+        return {'applicable': True, 'arm': arm, 'gates': {'M1p': None},
+                'readings': {'n_clips': 0},
+                'blockers': [f'{A2_RANK_VAL} is missing; the watchdog never '
+                             f'produced the M1\'/M1-loc readings']}
+    rows = val.get('per_clip') or []
+    blockers = []
+    if len(rows) != A2_FROZEN_N:
+        blockers.append(f'rank val n={len(rows)}, frozen contract is '
+                        f'{A2_FROZEN_N}')
+    auc = _mean(rows, 'auc_mean_over_occupied_channels')
+    shift = _mean(rows, 'gt_shuffle_auc')
+    auc_margin = (None if auc is None or shift is None else auc - shift)
+    n_maxgt = sum(1 for r in rows
+                  if _finite(r.get('max_gt_prob')) and r['max_gt_prob'] >= 0.5)
+    recall_median = _median(rows, 'recall_at_top_k_mean')
+    readings = {
+        'n_clips': len(rows),
+        'auc': auc, 'auc_gt_shuffle': shift, 'auc_margin': auc_margin,
+        'n_max_gt_prob_ge_0.5': n_maxgt,
+        'recall_at_top_k_median': recall_median,
+    }
+    gates = {
+        'M1p': (auc is not None and auc_margin is not None
+                and auc >= A2_BAR_AUC and auc_margin >= A2_BAR_AUC_MARGIN),
+    }
+    # M1-loc is A2-S only (pre-registration section 5), so a stray rank
+    # artifact on the A2-R arm cannot quietly import a supervision-side gate.
+    if arm == 'A2S':
+        gates['M1loc'] = bool(
+            n_maxgt >= A2_BAR_MAXGT_CLIPS
+            and recall_median is not None
+            and recall_median >= A2_BAR_RECALL_TOPK_MEDIAN)
+    if blockers:
+        for key in gates:
+            gates[key] = None          # NOT MEASURED, never pass/fail
+    return {'applicable': True, 'arm': arm, 'gates': gates,
+            'readings': readings, 'blockers': blockers}
+
 # Pre-registered M1 grid-extrapolation rule (training record section
 # 71.9.3(2)). The hit@1 >= 0.60 bar was calibrated on route-C's 16x16 pooled
 # grid (chance ~1.6e-2); candidate A supervises the full-res 216x248 grid
@@ -251,6 +361,7 @@ def main():
               'reading any gate number as a failure')
 
     decision = {}
+    a2 = None                      # A2 added-gate readings; set below if A2
     gate = load_json(os.path.join(run, GATE_JSON))
     print()
     print('=' * 72)
@@ -323,14 +434,24 @@ def main():
                   'void (the semantics came from h/observation), per section 7.')
 
         # --- M3 ---------------------------------------------------------
+        # The bar is a RATE of the FROZEN window, so the required count scales
+        # with n (A: 8/10; A2: 16/20). Printing a hard-coded "/10" here made
+        # the A2 verdict look four times stricter than it was.
+        m3_need = m3.get('required_wins')
+        m3_need_txt = (f'>={m3_need}/{m3.get("frozen_n")}'
+                       if m3_need is not None else '>=8/10')
         print(f"M3 readout      : {verdict_of('M3')}"
-              f"  wins={m3.get('wins')}/{m3.get('n')} (need >=8/10)")
+              f"  wins={m3.get('wins')}/{m3.get('n')} (need {m3_need_txt})")
 
         # --- M4 ---------------------------------------------------------
         print(f"M4 class info   : {verdict_of('M4')}"
               f"  own_hit={m4.get('mean_own_hit')} "
               f"donor_transfer={m4.get('mean_donor_transfer')} "
-              f"(bar {m4.get('bar')})")
+              f"(own bar {m4.get('own_hit_bar')}, "
+              f"donor bar {m4.get('bar')})")
+        if m4.get('pooled_prior_floor') is not None:
+            print(f'   pooled prior floor={m4.get("pooled_prior_floor")} '
+                  f'(the own_hit bar is floor + 0.20, NOT 1/C + 0.20)')
         print(f"   head_swap_to_donor={m4.get('mean_head_swap_to_donor')} "
               f"changed_frac={m4.get('mean_changed_frac')} (context)")
 
@@ -349,6 +470,57 @@ def main():
         # gates must still pass for this branch to apply.
         other_pass = all(gates.get(k) is True
                          for k in REQUIRED_GATES if k != 'M1')
+
+        # --- A2 added gates (M1' / M1-loc) -------------------------------
+        # These are pre-registered mechanism gates for the A2 arms and are NOT
+        # part of A's M1-M4 set, so they are evaluated separately and folded
+        # into the aggregate below instead of being forced into REQUIRED_GATES
+        # (which would rewrite A's archived verdict).
+        a2 = a2_readings(run)
+        if a2 is not None:
+            r2 = a2['readings']
+            g2 = a2['gates']
+            # The frozen clip list cannot be re-chosen after the fact: the rank
+            # probe and the gate probe must have selected the same clips.
+            rank_idx = load_json(os.path.join(run, A2_RANK_VAL)).get('indices')
+            gate_idx = gate.get('indices')
+            if rank_idx != gate_idx:
+                a2['blockers'].append('rank and gate probes selected '
+                                      'different clips')
+                for key in g2:
+                    g2[key] = None
+            print()
+            print('=' * 72)
+            print(f'A2 ADDED GATES (pre-registered section 5, arm '
+                  f'{a2["arm"]}, read from {A2_RANK_VAL})')
+            print('=' * 72)
+            sym = {True: 'PASS', False: 'FAIL', None: 'NOT MEASURED'}
+
+            def verdict2(name):
+                return sym.get(g2.get(name), 'NOT MEASURED')
+
+            print(f"M1' rank vs shuffle : {verdict2('M1p')}"
+                  f"  auc={_fmt(r2['auc'])} (bar >={A2_BAR_AUC})"
+                  f"  auc-gt_shuffle={_fmt(r2['auc_margin'])}"
+                  f" (bar >={A2_BAR_AUC_MARGIN})")
+            if 'M1loc' in g2:
+                print(f"M1-loc peak budget  : {verdict2('M1loc')}"
+                      f"  clips with max_gt_prob>=0.5 = "
+                      f"{r2['n_max_gt_prob_ge_0.5']}/{A2_FROZEN_N}"
+                      f" (bar >={A2_BAR_MAXGT_CLIPS})"
+                      f"  recall@top-k median="
+                      f"{_fmt(r2['recall_at_top_k_median'])}"
+                      f" (bar >={A2_BAR_RECALL_TOPK_MEDIAN})")
+            elif a2['arm'] == 'A2R':
+                print('M1-loc              : n/a for A2-R (pre-registered '
+                      'A2-S only)')
+            for note in a2['blockers']:
+                print(f'   BLOCKER: {note} -> A2 gates read NOT MEASURED')
+            decision['a2_gates'] = g2
+            a2_unmeasured = any(v is None for v in g2.values())
+            a2_all_pass = (not a2_unmeasured
+                           and all(v is True for v in g2.values()))
+
         grid_limited = (decision.get('m1_grid_limited') and other_pass
                         and gates.get('M1') is False)
         print()
@@ -364,6 +536,31 @@ def main():
         else:
             print(f'S1 AGGREGATE: '
                   f'{"ALL PASS" if all_pass else "NOT ALL PASS"}')
+
+        # --- A2 aggregate -------------------------------------------------
+        # An A2 arm passes S1 only when A's M1-M4 AND the A2-added gates pass.
+        # Reporting the M1-M4 line alone would let a run whose M1'/M1-loc
+        # failed read as a pass, which is the defect this section closes.
+        if a2 is not None:
+            a2_gates = a2['gates']
+            a2_measured = all(v is not None for v in a2_gates.values())
+            a2_pass = a2_measured and all(v is True for v in a2_gates.values())
+            labels = ', '.join(f'{k}={sym.get(v, "NOT MEASURED")}'
+                               for k, v in a2_gates.items())
+            print()
+            if not a2_measured:
+                print(f'A2 AGGREGATE: {labels} -> NOT EVALUABLE for the A2 '
+                      f'added gates; fix the blockers above and re-read')
+            elif all_pass and a2_pass:
+                print(f'A2 AGGREGATE: ALL PASS (M1-M4 + {labels}) -- the '
+                      f'section-5 S2 numbers may be requested')
+            elif all_pass and not a2_pass:
+                print(f'A2 AGGREGATE: NOT ALL PASS -- M1-M4 all passed but the '
+                      f'A2 added gates failed ({labels}). The arm does NOT '
+                      f'enter ep16.')
+            else:
+                print(f'A2 AGGREGATE: NOT ALL PASS (M1-M4 not all passing; '
+                      f'{labels})')
 
     print()
     print('=' * 72)

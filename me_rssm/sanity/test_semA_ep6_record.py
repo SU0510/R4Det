@@ -964,3 +964,69 @@ class TestProducerConsumerContract(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+
+class TestA2RecordRows(unittest.TestCase):
+    """The ep6 draft must report A2's added gates, not just M1-M4."""
+
+    def setUp(self):
+        self.fx = _Fixture(epochs=6)
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['input_fingerprints']['config_path'] = (
+            '/x/TJ4D-..._no2d_igdr_semA2S_24e.py')
+        self.fx.dump(verdict.GATE_JSON, gate)
+        rows = [{'index': 3 + 100 * i,
+                 'auc_mean_over_occupied_channels': 0.90,
+                 'gt_shuffle_auc': 0.50,
+                 'max_gt_prob': 0.9 if i < 15 else 0.1,
+                 'recall_at_top_k_mean': 0.40} for i in range(20)]
+        self.fx.dump('semA_rank_val_ep6.json',
+                     {'config': '/x/..._semA2S_24e.py', 'n_clips': 20,
+                      'indices': [r['index'] for r in rows],
+                      'per_clip': rows})
+
+    def tearDown(self):
+        self.fx.close()
+
+    def test_added_gates_appear_in_the_table(self):
+        text = self.fx.render()
+        self.assertIn("M1' 排序泛化", text)
+        self.assertIn('M1-loc 峰预算', text)
+        self.assertIn('**PASS**', text)
+
+    def test_heading_uses_the_added_gates(self):
+        """All of M1-M4 may pass while M1-loc fails; the heading must follow
+        the FULL gate set rather than declaring 全门通过."""
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['gates']['M3'] = False
+        self.fx.dump(verdict.GATE_JSON, gate)
+        rows = [{'index': 3 + 100 * i,
+                 'auc_mean_over_occupied_channels': 0.90,
+                 'gt_shuffle_auc': 0.50,
+                 'max_gt_prob': 0.1,          # every clip misses the bar
+                 'recall_at_top_k_mean': 0.0} for i in range(20)]
+        self.fx.dump('semA_rank_val_ep6.json',
+                     {'config': '/x/..._semA2S_24e.py', 'n_clips': 20,
+                      'indices': [r['index'] for r in rows],
+                      'per_clip': rows})
+        text = self.fx.render()
+        headline = text.splitlines()[0]
+        # "未全门通过" CONTAINS "全门通过" as a substring, so an exact-prefix
+        # check is required: a naive `.count('全门通过') == 0` would pass a
+        # headline that wrongly claims full passage.
+        self.assertIn('未全门通过', headline)
+        self.assertNotIn('：全门通过', headline)
+
+    def test_wrong_frozen_n_makes_the_heading_not_evaluable(self):
+        rows = [{'index': 3 + 100 * i,
+                 'auc_mean_over_occupied_channels': 0.90,
+                 'gt_shuffle_auc': 0.50,
+                 'max_gt_prob': 0.9,
+                 'recall_at_top_k_mean': 0.40} for i in range(10)]
+        self.fx.dump('semA_rank_val_ep6.json',
+                     {'config': '/x/..._semA2S_24e.py', 'n_clips': 10,
+                      'indices': [r['index'] for r in rows],
+                      'per_clip': rows})
+        text = self.fx.render()
+        self.assertIn('NOT EVALUABLE（A2 增补门未测全）', text.splitlines()[0])
+        self.assertIn('A2 增补门 BLOCKER', text)

@@ -415,20 +415,68 @@ class TestGateBoundaries(unittest.TestCase):
     def test_m3_sign_test(self):
         def rows(deltas):
             return [{'delta_off_minus_on': d} for d in deltas]
-        self.assertTrue(probe.gate_m3(rows([0.1] * 8)))
-        self.assertFalse(probe.gate_m3(rows([0.1] * 7)))          # <8 clips
-        self.assertFalse(probe.gate_m3(rows([0.1] * 7 + [-0.1])))  # 7/8 wins
-        self.assertFalse(probe.gate_m3(rows([0.1] * 7 + [0.0])),
-                         'a tie is not a win')
-        self.assertTrue(probe.gate_m3(rows([0.1] * 10)))
+        self.assertTrue(probe.gate_m3(rows([0.1] * 8), min_clips=8))
+        self.assertFalse(probe.gate_m3(rows([0.1] * 7), min_clips=8))
+        # A tie is not a win: at the frozen 10-clip window, 7 wins + 3 ties is
+        # 7/10 = 70% < 80% -> FAIL. If ties counted as wins this would pass.
+        self.assertFalse(probe.gate_m3(rows([0.1] * 7 + [0.0] * 3),
+                                       min_clips=10), 'a tie is not a win')
+        self.assertTrue(probe.gate_m3(rows([0.1] * 10), min_clips=10))
 
-    def test_m4_chance_plus_20pt(self):
-        self.assertTrue(probe.gate_m4(0.45, 0.45, 4))     # boundary is >=
-        self.assertFalse(probe.gate_m4(0.4499, 0.45, 4))
-        self.assertFalse(probe.gate_m4(0.45, 0.4499, 4))
-        self.assertTrue(probe.gate_m4(0.40, 0.40, 5))     # 5 classes -> 0.40
-        self.assertFalse(probe.gate_m4(None, 0.9, 4))
-        self.assertFalse(probe.gate_m4(0.9, None, 4))
+    def test_m3_bar_is_a_rate_not_an_absolute_count(self):
+        """Widening the clip window must never LOOSEN this gate.
+
+        The first revision compared ``wins`` against a hard-coded 8. Under A's
+        10-clip contract that is 80%; under A2's pre-registered 20-clip
+        contract the same constant silently becomes 40%. The bar is fixed at
+        the RATE 8/10, so the required count must scale with n.
+        """
+        def rows(deltas):
+            return [{'delta_off_minus_on': d} for d in deltas]
+        self.assertEqual(probe.m3_required_wins(10), 8)
+        self.assertEqual(probe.m3_required_wins(20), 16)
+        self.assertEqual(probe.m3_required_wins(5), 4)   # ceiling, not floor
+        # 15/20 is still 75% < 80% -> FAIL under the frozen rate
+        self.assertFalse(probe.gate_m3(rows([0.1] * 15 + [-0.1] * 5),
+                                       min_clips=20))
+        self.assertTrue(probe.gate_m3(rows([0.1] * 16 + [-0.1] * 4),
+                                      min_clips=20))
+        # 8 wins is only enough when the frozen window really is 10 clips
+        self.assertFalse(probe.gate_m3(rows([0.1] * 8 + [-0.1] * 12),
+                                       min_clips=20))
+
+    def test_m3_short_window_is_not_measured(self):
+        """A probe that evaluated fewer clips than the frozen contract is not
+        a (weaker) pass: it is NOT MEASURED, and must read False."""
+        rows = [{'delta_off_minus_on': 0.1}] * 10
+        self.assertFalse(probe.gate_m3(rows, min_clips=20))
+
+    def test_m4_own_bar_uses_the_pooled_prior_floor(self):
+        """own_hit is scored against the sample's majority-class floor.
+
+        On an unbalanced window a constant majority-class vote scores far
+        above 1/C, so a chance-based bar (0.45 at C=4) is too easy: it would
+        pass a residual that carries no class information at all.
+        """
+        # A's real floor: 0.5128 -> bar 0.7128. own_hit 0.65 clears the old
+        # 0.45 bar but must FAIL against the floor.
+        self.assertFalse(probe.gate_m4(0.65, 0.60, 4, 0.5128))
+        self.assertTrue(probe.gate_m4(0.72, 0.60, 4, 0.5128))
+        # boundary: the bar itself passes
+        self.assertTrue(probe.gate_m4(0.5128 + 0.20, 0.60, 4, 0.5128))
+
+    def test_m4_donor_bar_stays_chance_calibrated(self):
+        """donor_transfer is scored against the DONOR's dominant class, so its
+        chance level really is 1/C + 20 pt -- independent of the floor."""
+        self.assertTrue(probe.gate_m4(1.0, 0.45, 4, 0.10))
+        self.assertFalse(probe.gate_m4(1.0, 0.4499, 4, 0.10))
+        self.assertTrue(probe.gate_m4(0.40, 0.40, 5, 0.10))
+
+    def test_m4_without_the_floor_is_not_measured(self):
+        """Silently falling back to the chance bar is the defect itself."""
+        self.assertIsNone(probe.gate_m4(0.9, 0.9, 4))
+        self.assertFalse(probe.gate_m4(None, 0.9, 4, 0.5))
+        self.assertFalse(probe.gate_m4(0.9, None, 4, 0.5))
 
 
 class TestInputFingerprints(unittest.TestCase):
@@ -531,8 +579,10 @@ class TestWriteReport(unittest.TestCase):
         after_m2 = source.split("report['gates']['M2'] = gate_m2(rel_h, rel_f)",
                                 1)[1]
         self.assertIn('write_report(', after_m2.split('# ------')[0])
-        self.assertIn("report['gates']['M3'] = gate_m3(m3)", source)
-        after_m3 = source.split("report['gates']['M3'] = gate_m3(m3)", 1)[1]
+        self.assertIn("report['gates']['M3'] = gate_m3(m3, "
+                      "min_clips=frozen_n)", source)
+        after_m3 = source.split("report['gates']['M3'] = gate_m3(m3, "
+                                "min_clips=frozen_n)", 1)[1]
         self.assertIn('write_report(', after_m3.split('# ------')[0])
 
 

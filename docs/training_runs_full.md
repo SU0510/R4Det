@@ -14180,3 +14180,81 @@ grid `[248,216]` 与 `pts_feats` 一致；零初始化下 head 侧残差 absmax 
 **边界**：本次只改探针编排与测试，**未改任何判据数值、未改模型、
 未改训练超参、未重启训练**；A2-S 的 ep6 读数仍未产出，A 的归档判定不变。
 修好后 A2-S 的 ep6 证据包将与 A 同构，跨代读数可直接对照。
+
+#### 73.6.6 ep6 判据口径对齐修复（2026-10-11，训练中修复；A2-S 的 ep6 尚未产出）
+
+§73.6.5 修的是**证据是否齐全**。本节修的是**门本身读得对不对**：逐行核对
+`probe_semreadout_ep6.py` / `semA_ep6_verdict.py` / `semA_ep6_record.py` 后，
+发现三处**代码与预登记不一致**。三处都在 A2-S 的 ep6 落地前修复，因此
+**没有任何 A2 读数被事后调门**；A 的归档判定**逐位不变**（下方有负向验证）。
+
+**缺陷一：M3 的通过线是绝对计数，不是比例——窗口一放宽就自动变松。**
+
+A 用 10 clip，预登记写「≥8/10」。A2 按 §5 冻结契约改用 20 clip，但
+`gate_m3` 的实现是 `min_wins=8` 的**绝对条数**，于是同一条门在 A2 上实际变成
+**8/20 = 40%**，比 A 的 80% 松一倍——这正是预登记要防的事后漂移，只是方向反了
+（不是收紧，而是**悄悄放宽**）。
+
+修复：把门定义为**比例** `8/10`，条数由窗口大小换算（`m3_required_wins`），
+并把「冻结样本量」变成**必填参数**（不再有默认值）——调用方必须先声明自己的
+分母；`len(rows) < min_clips` 读 **NOT MEASURED（False）**，绝不当成更弱的通过。
+
+| 窗口 n | 通过所需胜出条数 | 说明 |
+|---:|---:|---|
+| 8 | 7 | 向上取整，故 7/8=87.5% 已过 |
+| 10 | 8 | 与 A 归档逐位一致 |
+| 16 | 13 | — |
+| **20（A2）** | **16** | 修复前只要求 **8** |
+| 24 | 20 | — |
+
+**缺陷二：A2 新增的 M1'/M1-loc 门没有任何工具去判。**
+
+§5 为 A2 预登记了 M1'（`auc ≥ 0.80` 且 `auc − gt_shuffle ≥ 0.25`）与
+M1-loc（`max_gt_prob ≥ 0.5` 的 clip 数 ≥12/20 **且** `recall@top-k` 中位 ≥0.25），
+但这两个读数落在 `semA_rank_*.json`，而 `semA_ep6_verdict.py` 只读
+`semreadout_ep6_gate.json` 里的 M1–M4。后果：**一个 M1'/M1-loc 全挂的 A2
+臂仍会打印 "S1 AGGREGATE: ALL PASS"**，据此进 ep16。
+
+修复：`semA_ep6_verdict.py` 新增 `arm_of_bundle()` / `a2_readings()`，按
+**config 路径**识别 A2-S/A2-R（不是按产物是否存在——A 的归档包里也有一份
+事后跑出来的 `semA_rank_val_ep6.json`，按文件判会把 A 的归档判定重新打开成
+"NOT EVALUABLE"），评估以上两门，并新增 **A2 AGGREGATE** 行：只有 M1–M4
+**与**增补门全过才算 S1 通过。`semA_ep6_record.py` 同步把两门写进 §72 表格，
+且标题在增补门未测全时改为 **NOT EVALUABLE（A2 增补门未测全）**。
+M1-loc 仅对 A2-S 生效（§5 预登记即为 A2-S 专属），A2-R 不引入监督侧的门。
+
+**缺陷三：M4 的 `own_hit` 用 `1/C + 20pt` 当线，而预登记写的是
+`pooled prior floor + 20pt`。**
+
+§71.9.18 **早已诊断出**这一点（A 的窗口 pooled 地板 0.5128 ⇒ 真线 0.7128，
+代码却查 0.45），但**只写进了分析文档，没有回改代码**。本次把代码对齐到预登记：
+`gate_m4(own_hit, transfer, num_classes, pooled_prior_floor)`，
+`own_hit` 用 `floor + 0.20`、`donor_transfer` 仍用 `1/C + 0.20`
+（后者按 donor 类打分，chance 口径本就成立）；缺少 floor 时返回
+**None（NOT MEASURED）**，而不是回退到宽松的 chance 线。probe 自己从
+已经栅格化过的标签里 `bincount` 出 floor，**不增加任何前向开销**。
+
+**A 的归档判定逐位不变的负向验证（修复后重跑 A 的证据包）**：
+
+| 门 | A 归档值 | 修复后重算 | 结论 |
+|---|---|---|---|
+| M3 | 7/10 wins, `gates.M3=False` | `gate_m3(rows, min_clips=10)` → **False** | 不变 |
+| M4 | `own_hit` 0.7379 / `donor_transfer` 0.3818 | floor 0.5128 → own bar 0.7128（own_hit **过**）；donor bar 0.45（**未过**）⇒ 门 **False** | 不变 |
+| M1–M2 | 不变 | 未改 | 不变 |
+| 全局 | `S1 AGGREGATE: NOT ALL PASS` | 同 | 不变 |
+
+即 `own_hit` 由「按错线过」改为「按对线过」，而 M4 的 **FAIL 始终由
+`donor_transfer` 决定**，与 §71.9.18 的结论一致；A 的 S1 仍是
+M1/M3/M4 FAIL、**不进 ep16**，一个字都不改。
+
+**测试**：`test_probe_semreadout_ep6.py` / `test_semA_ep6_verdict.py` /
+`test_semA_ep6_record.py` 新增针对上述三缺陷的回归（比例换算表、必填分母、
+短窗口 NOT MEASURED、A 代数不被误判为 A2、A2-S 两门齐备、A2-R 不引入
+M1-loc、M1'/M1-loc 任一条腿未过即 FAIL、冻结 n 不符读 NOT MEASURED、
+渲染器标题跟随全门集合）。四个相关文件合跑 **161 passed**
+（`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 -p no:warnings`）。
+
+**边界**：本次只改**判据实现与渲染**，未改模型、未改训练超参、未重启训练、
+**未读任何 A2-S 的 ep6 数值**（该 checkpoint 尚未产出）；A2-S 仍在 GPU5/6/7
+训练中。修复后 A2-S 的 ep6 判定将在**完整门集合**上作出，不会出现
+"只看 M1–M4 就宣告通过"的漏判。

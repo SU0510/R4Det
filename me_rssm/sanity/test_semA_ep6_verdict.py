@@ -315,3 +315,131 @@ class TestM1GridLimitedRule(unittest.TestCase):
                                     'semA_ep6_verdict.py'))
         self.assertIn("gates.get('M1') is False", source)
         self.assertIn("k != 'M1'", source)
+
+
+class TestA2AddedGates(unittest.TestCase):
+    """A2's pre-registered M1'/M1-loc gates must actually be evaluated.
+
+    These live in the rank artifact, not the M1-M4 gate JSON. Before this
+    path existed nothing read them: an A2 arm whose added gates failed still
+    printed "ALL PASS" off M1-M4 alone. The tests below pin both halves --
+    that the gates ARE folded in for an A2 config, and that the A generation
+    is left byte-for-byte alone (A's bundle also carries a rank JSON, produced
+    after the fact under a different clip contract).
+    """
+
+    def _rank(self, cfg, n=20, auc=0.90, shift=0.50, maxgt_hi=15,
+              recall_med=0.40):
+        rows = []
+        for i in range(n):
+            rows.append({
+                'index': 3 + 100 * i,
+                'auc_mean_over_occupied_channels': auc,
+                'gt_shuffle_auc': shift,
+                'max_gt_prob': 0.9 if i < maxgt_hi else 0.1,
+                'recall_at_top_k_mean': recall_med,
+            })
+        return {'probe': 'rank', 'config': cfg, 'n_clips': n,
+                'indices': [r['index'] for r in rows], 'per_clip': rows}
+
+    def test_a_generation_is_not_treated_as_a2(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build_bundle(tmp)                      # A config path
+            _write(tmp, verdict.A2_RANK_VAL,
+                   self._rank('/x/..._semA_seed0.py'))
+            self.assertIsNone(verdict.arm_of_bundle(tmp))
+            self.assertIsNone(verdict.a2_readings(tmp))
+
+    def test_a2s_arm_is_detected_from_the_config_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = _gate()
+            gate['input_fingerprints']['config_path'] = (
+                '/x/TJ4D-..._no2d_igdr_semA2S_24e.py')
+            build_bundle(tmp, gate)
+            self.assertEqual(verdict.arm_of_bundle(tmp), 'A2S')
+
+    def test_a2s_gets_both_added_gates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = _gate()
+            gate['input_fingerprints']['config_path'] = '/x/..._semA2S_24e.py'
+            build_bundle(tmp, gate)
+            _write(tmp, verdict.A2_RANK_VAL, self._rank('/x/..._semA2S_24e.py'))
+            got = verdict.a2_readings(tmp)
+            self.assertEqual(set(got['gates']), {'M1p', 'M1loc'})
+            self.assertTrue(got['gates']['M1p'])
+            self.assertTrue(got['gates']['M1loc'])
+
+    def test_a2r_does_not_import_the_supervision_side_gate(self):
+        """M1-loc is pre-registered A2-S only (section 5)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = _gate()
+            gate['input_fingerprints']['config_path'] = '/x/..._semA2R_24e.py'
+            build_bundle(tmp, gate)
+            _write(tmp, verdict.A2_RANK_VAL, self._rank('/x/..._semA2R_24e.py'))
+            got = verdict.a2_readings(tmp)
+            self.assertEqual(set(got['gates']), {'M1p'})
+
+    def test_m1loc_fails_on_either_leg(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = _gate()
+            gate['input_fingerprints']['config_path'] = '/x/..._semA2S_24e.py'
+            build_bundle(tmp, gate)
+            # too few clips reach max_gt_prob >= 0.5
+            _write(tmp, verdict.A2_RANK_VAL,
+                   self._rank('/x/..._semA2S_24e.py', maxgt_hi=11))
+            self.assertFalse(verdict.a2_readings(tmp)['gates']['M1loc'])
+            # peak budget recovered, but the top-k budget is still lost
+            _write(tmp, verdict.A2_RANK_VAL,
+                   self._rank('/x/..._semA2S_24e.py', recall_med=0.24))
+            self.assertFalse(verdict.a2_readings(tmp)['gates']['M1loc'])
+
+    def test_m1p_requires_both_the_level_and_the_margin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = _gate()
+            gate['input_fingerprints']['config_path'] = '/x/..._semA2S_24e.py'
+            build_bundle(tmp, gate)
+            # high auc but no shuffle margin -> the ranking is not specific
+            _write(tmp, verdict.A2_RANK_VAL,
+                   self._rank('/x/..._semA2S_24e.py', auc=0.95, shift=0.80))
+            self.assertFalse(verdict.a2_readings(tmp)['gates']['M1p'])
+            # healthy margin but the level itself slipped below the bar
+            _write(tmp, verdict.A2_RANK_VAL,
+                   self._rank('/x/..._semA2S_24e.py', auc=0.79, shift=0.40))
+            self.assertFalse(verdict.a2_readings(tmp)['gates']['M1p'])
+
+    def test_wrong_frozen_n_is_not_measured_not_passed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = _gate()
+            gate['input_fingerprints']['config_path'] = '/x/..._semA2S_24e.py'
+            build_bundle(tmp, gate)
+            # 10 clips, all perfect: must NOT read as a pass
+            _write(tmp, verdict.A2_RANK_VAL,
+                   self._rank('/x/..._semA2S_24e.py', n=10))
+            got = verdict.a2_readings(tmp)
+            self.assertIsNone(got['gates']['M1p'])
+            self.assertTrue(got['blockers'])
+
+    def test_missing_rank_artifact_blocks_rather_than_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = _gate()
+            gate['input_fingerprints']['config_path'] = '/x/..._semA2S_24e.py'
+            build_bundle(tmp, gate)
+            got = verdict.a2_readings(tmp)
+            self.assertIsNone(got['gates']['M1p'])
+            self.assertTrue(got['blockers'])
+
+    def test_clip_contract_mismatch_blocks_the_gates(self):
+        """Source guard: the aggregate voids the added gates on index drift."""
+        source = _read(os.path.join('me_rssm', 'sanity',
+                                    'semA_ep6_verdict.py'))
+        self.assertIn('rank and gate probes selected ', source)
+        self.assertIn('different clips', source)
+
+    def test_record_renderer_consults_the_a2_gates(self):
+        """The draft generator must not head an A2 bundle 'all gates pass'
+        off M1-M4 alone."""
+        source = _read(os.path.join('me_rssm', 'sanity',
+                                    'semA_ep6_record.py'))
+        self.assertIn('verdict.a2_readings(run_dir)', source)
+        self.assertIn('added_all_pass', source)
+        self.assertIn('A2 增补门未测全', source)

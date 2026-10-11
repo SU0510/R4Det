@@ -15,11 +15,19 @@ Pre-registration: docs/rssm_candidate_A_prereg_20261010.md §5 S1.
         passthrough.
     M3  the readout is not decorative: paired toggle of the residual on the
         trained weights (residual ON vs forced 0) must worsen the positive-
-        cell class CE on >= 8/10 clips (sign test).
-    M4  the residual carries CLASS information, not just amplitude: the class
-        argmax of z's residual must hit the GT class at GT foreground cells
-        (own reading) and follow the donor's dominant class when z is swapped
-        for another sample's z (donor reading): both >= chance + 20 pt.
+        cell class CE on a fixed RATE of the frozen window -- 8/10 = 80% of
+        clips. The bar is a rate, not a count, so widening the window cannot
+        loosen it (A2's frozen window is 20 clips -> 16 required wins); a
+        window shorter than the frozen contract is NOT MEASURED.
+    M4  the residual carries CLASS information, not just amplitude. The two
+        readings have DIFFERENT bars:
+          own_hit         >= pooled prior floor + 20 pt, where the floor is the
+                          accuracy of a constant majority-class vote over this
+                          window's fg cells (a property of the sample: on A's
+                          window it was 0.5128, so the bar was 0.7128 -- NOT
+                          the 1/C + 20 pt = 0.45 the first draft checked);
+          donor_transfer  >= 1/C + 20 pt, because it is scored against the
+                          donor clip's dominant class, not the window mix.
 
 No AP is measured, no training, no checkpoint is written. Read-only.
 
@@ -358,17 +366,63 @@ def gate_m2(rel_h, rel_f):
                 and rel_h <= -0.30 and rel_f <= -0.30)
 
 
-def gate_m3(rows, min_clips=8, min_wins=8):
-    """Pre-registered S1/M3: residual toggle worsens positive-cell CE."""
+def m3_required_wins(n, win_rate_num=8, win_rate_den=10):
+    """Clips that must win for the pairing gate to pass at sample size ``n``.
+
+    The bar is a RATE (8/10 = 80%), not an absolute count. The first version
+    hard-coded ``min_wins=8``; when the A2 pre-registration widened the frozen
+    contract from 10 to 20 clips, that silently relaxed the gate to 8/20 = 40%
+    -- a strictly easier test than the one A was held to, i.e. exactly the
+    post-hoc gate drift the pre-registration exists to prevent. Expressing the
+    bar as an exact rational keeps 10 clips at 8 wins (so archived A readings
+    are unchanged) while making 20 clips require 16.
+    """
+    return -(-win_rate_num * int(n) // win_rate_den)  # integer ceiling
+
+
+def gate_m3(rows, min_clips, win_rate_num=8, win_rate_den=10):
+    """Pre-registered S1/M3: residual toggle worsens positive-cell CE.
+
+    ``min_clips`` is the FROZEN sample size (the watchdog's ``--limit``) and is
+    deliberately REQUIRED: the defect this signature closes was a default that
+    silently applied one generation's contract to another generation's window.
+    A caller that has not decided its denominator must not be able to call this
+    gate at all. ``len(rows) < min_clips`` reads NOT MEASURED (False), never a
+    weaker pass.
+    """
+    if len(rows) < min_clips:
+        return False
     wins = sum(1 for r in rows if r['delta_off_minus_on'] > 0)
-    return bool(len(rows) >= min_clips and wins >= min_wins)
+    return bool(wins >= m3_required_wins(len(rows), win_rate_num, win_rate_den))
 
 
-def gate_m4(own_hit, transfer, num_classes):
-    """Pre-registered S1/M4: class-correct information, not amplitude."""
-    bar = 1.0 / num_classes + 0.20
+def gate_m4(own_hit, transfer, num_classes, pooled_prior_floor=None):
+    """Pre-registered S1/M4: class-correct information, not amplitude.
+
+    The two readings carry DIFFERENT bars, and the first draft collapsed them
+    into one:
+
+      * ``own_hit``  -- must beat the pooled prior floor by 20 pt. The floor is
+        the accuracy of a constant majority-class vote over this window's
+        foreground cells, so it is a property of the SAMPLE, not of the number
+        of classes. Substituting ``1/num_classes`` (as the first draft did) sets
+        a bar that is too easy whenever the class mix is unbalanced: on A's
+        10-clip window the floor was 0.5128, so the real bar was 0.7128 while
+        the code checked 0.45.
+      * ``donor_transfer`` -- must reach ``1/num_classes + 0.20``; this one IS
+        the chance-calibrated reading, because a donor swap is scored against
+        the donor clip's dominant class rather than against the window mix.
+
+    ``pooled_prior_floor`` is required: without it the own_hit bar cannot be
+    computed, and falling back to the chance bar would silently restore the
+    defect. Returning ``None`` means NOT MEASURED.
+    """
+    donor_bar = 1.0 / num_classes + 0.20
+    if pooled_prior_floor is None:
+        return None
+    own_bar = float(pooled_prior_floor) + 0.20
     return bool(own_hit is not None and transfer is not None
-                and own_hit >= bar and transfer >= bar)
+                and own_hit >= own_bar and transfer >= donor_bar)
 
 
 def _sha256(path):
@@ -527,9 +581,17 @@ def main():
                    'ce_on': float(ce_on), 'ce_off': float(ce_off),
                    'delta_off_minus_on': float(ce_off - ce_on)})
     wins = sum(1 for r in m3 if r['delta_off_minus_on'] > 0)
-    report['M3_readout_toggle'] = {'per_clip': m3, 'wins': wins,
-                                   'n': len(m3)}
-    report['gates']['M3'] = gate_m3(m3)
+    # The frozen contract size is the watchdog's --limit (10 for A, 20 for A2).
+    # Both the pass bar (a RATE, 8/10) and the required sample size come from
+    # it, so widening the window can never loosen the gate.
+    frozen_n = int(args.limit)
+    required_wins = m3_required_wins(frozen_n)
+    report['M3_readout_toggle'] = {
+        'per_clip': m3, 'wins': wins, 'n': len(m3),
+        'frozen_n': frozen_n, 'required_wins': required_wins,
+        'win_rate': '8/10',
+    }
+    report['gates']['M3'] = gate_m3(m3, min_clips=frozen_n)
     write_report(report, args.output)  # flush M3 before M4's donor swaps
 
     # ---------------------------- M4 -------------------------------------
@@ -573,6 +635,7 @@ def main():
         donor_of[pos] = donor_pos
 
     m4 = []
+    pooled_labels = []
     for pos, idx in enumerate(indices):
         run = z_runs[pos]
         donor_pos = donor_of[pos]
@@ -583,6 +646,7 @@ def main():
         if sel.numel() == 0 or run['residual'] is None:
             continue
         labels = tgt[0].reshape(num_classes, -1).permute(1, 0)[sel].argmax(dim=1)
+        pooled_labels.append(labels.detach().to('cpu'))
         own = residual_class_map(run, num_classes)[sel].argmax(dim=1)
         donor_res = residual_class_map(donor_run, num_classes)
         donor_dom = dominant_class(donor_run)
@@ -621,8 +685,24 @@ def main():
     own_hit = _m(m4, 'own_hit')
     transfer = _m(m4, 'donor_transfer')
     head_swap = _m(m4, 'head_swap_to_donor')
+    # Pooled prior floor: the accuracy a constant majority-class vote scores on
+    # exactly these foreground cells. It is a property of THIS window's class
+    # mix, so it (not 1/C) is the base for the own_hit bar. Computed from the
+    # labels the loop already rasterised -- no second forward pass.
+    if pooled_labels:
+        pooled = torch.cat(pooled_labels)
+        counts = torch.bincount(pooled, minlength=num_classes).float()
+        pooled_prior_floor = float(counts.max() / counts.sum())
+        pooled_class_counts = [int(c) for c in counts.tolist()]
+    else:
+        pooled_prior_floor = None
+        pooled_class_counts = []
+    own_bar = (None if pooled_prior_floor is None
+               else pooled_prior_floor + 0.20)
     report['M4_class_information'] = {
         'per_clip': m4, 'chance': chance, 'bar': chance + 0.20,
+        'own_hit_bar': own_bar, 'pooled_prior_floor': pooled_prior_floor,
+        'pooled_class_counts': pooled_class_counts,
         'mean_own_hit': own_hit, 'mean_donor_transfer': transfer,
         'mean_head_swap_to_donor': head_swap,
         'mean_changed_frac': _m(m4, 'changed_frac'),
@@ -636,7 +716,8 @@ def main():
                  'that describe z (own_hit / donor_transfer); head_swap is '
                  'reported with the same bar.'),
     }
-    report['gates']['M4'] = gate_m4(own_hit, transfer, num_classes)
+    report['gates']['M4'] = gate_m4(own_hit, transfer, num_classes,
+                                    pooled_prior_floor)
 
     report['input_fingerprints'] = input_fingerprints(args.config,
                                                       args.checkpoint)

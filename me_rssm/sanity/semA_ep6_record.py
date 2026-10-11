@@ -358,14 +358,25 @@ def render(run_dir, date_str):
             return 'NOT MEASURED'
         return 'PASS' if gates.get(name) else 'FAIL'
 
+    # A2 arms add pre-registered gates (M1' / M1-loc) that live in their own
+    # artifact. Folding them in is mandatory: an A2 bundle whose added gates
+    # failed must not be headed "全门通过" off M1-M4 alone.
+    a2 = verdict.a2_readings(run_dir)
+    a2_gates = (a2 or {}).get('gates') or {}
+    a2_measured = all(v is not None for v in a2_gates.values())
+    a2_all_pass = a2_measured and all(v is True for v in a2_gates.values())
+    added_all_pass = (a2 is None) or (a2_measured and a2_all_pass)
+
     # The heading must distinguish "measured and failed" from "not measured":
     # an incomplete bundle is NOT EVALUABLE, and calling it "未全门通过" would
     # read as a mechanism failure.
     if not evidence_ok or gates_payload is None:
         headline = 'NOT EVALUABLE（证据不完整）'
+    elif a2 is not None and not a2_measured:
+        headline = 'NOT EVALUABLE（A2 增补门未测全）'
     elif grid_limited:
         headline = '证据不足（M1 跨网格口径）'
-    elif all_pass:
+    elif all_pass and added_all_pass:
         headline = '全门通过'
     else:
         headline = '未全门通过'
@@ -448,14 +459,65 @@ def render(run_dir, date_str):
     m3_wins = m3.get('wins')
     m3_reading = (f'**{m3_wins}/{m3_n}**'
                   if m3_n is not None else '**NOT MEASURED**')
-    add(f'| M3 读出非装饰 | 强制 residual=0 使正样本 class-CE 变差 ≥8/10 | '
-        f'{m3_reading} | **{gate_text("M3")}** |')
-    add(f'| M4 类别正确性 | `own_hit` 与 `donor_transfer` ≥ chance+20pt '
-        f'（bar {num(m4.get("bar"), 2) if m4.get("bar") is not None else "n/a"}） | `own_hit` '
-        f'**{num(m4.get("mean_own_hit"))}**、`donor_transfer` '
-        f'**{num(m4.get("mean_donor_transfer"))}**（chance '
-        f'{num(m4.get("chance"), 2) if m4.get("chance") is not None else "n/a"}） | '
-        f'**{gate_text("M4")}** |')
+    # The bar is a RATE of the frozen window, so state the count it implies at
+    # THIS window's n rather than the fixed string "8/10": under A2's 20-clip
+    # contract the bar is 16/20, and typing 8/10 would misdescribe the gate.
+    m3_need = m3.get('required_wins')
+    m3_frozen = m3.get('frozen_n')
+    if m3_need is not None and m3_frozen is not None:
+        m3_bar_text = f'≥{m3_need}/{m3_frozen}（窗口冻结比例 8/10）'
+    else:
+        m3_bar_text = '≥8/10（窗口冻结比例 8/10）'
+    add(f'| M3 读出非装饰 | 强制 residual=0 使正样本 class-CE 变差 '
+        f'{m3_bar_text} | {m3_reading} | **{gate_text("M3")}** |')
+    if m4.get('pooled_prior_floor') is not None:
+        add(f'| M4 类别正确性 | `own_hit` ≥ **pooled prior floor + 20pt**、'
+            f'`donor_transfer` ≥ chance+20pt | `own_hit` '
+            f'**{num(m4.get("mean_own_hit"))}**（floor '
+            f'{num(m4.get("pooled_prior_floor"))} → bar '
+            f'{num(m4.get("own_hit_bar"))}）、`donor_transfer` '
+            f'**{num(m4.get("mean_donor_transfer"))}**（bar '
+            f'{num(m4.get("bar"), 2) if m4.get("bar") is not None else "n/a"}） '
+            f'| **{gate_text("M4")}** |')
+    else:
+        add(f'| M4 类别正确性 | `own_hit` 与 `donor_transfer` ≥ chance+20pt '
+            f'（bar {num(m4.get("bar"), 2) if m4.get("bar") is not None else "n/a"}） | `own_hit` '
+            f'**{num(m4.get("mean_own_hit"))}**、`donor_transfer` '
+            f'**{num(m4.get("mean_donor_transfer"))}**（chance '
+            f'{num(m4.get("chance"), 2) if m4.get("chance") is not None else "n/a"}） | '
+            f'**{gate_text("M4")}** |')
+    if a2 is not None:
+        # A2's added gates, from the rank artifact. Their rows are emitted
+        # right after M4 so the table reflects the FULL pre-registered gate
+        # set the aggregate verdict is computed from.
+        a2r = a2.get('readings') or {}
+        sym = {True: 'PASS', False: 'FAIL', None: 'NOT MEASURED'}
+
+        def gate_text2(name):
+            return sym.get(a2_gates.get(name), 'NOT MEASURED')
+
+        add(f"| M1' 排序泛化 | val（n={verdict.A2_FROZEN_N}）`auc` ≥ "
+            f"{verdict.A2_BAR_AUC} 且 `auc − gt_shuffle` ≥ "
+            f"{verdict.A2_BAR_AUC_MARGIN} | `auc` "
+            f"**{num(a2r.get('auc'))}**、`auc − gt_shuffle` "
+            f"**{num(a2r.get('auc_margin'))}**"
+            f"（shuffle {num(a2r.get('auc_gt_shuffle'))}） | "
+            f"**{gate_text2('M1p')}** |")
+        if 'M1loc' in a2_gates:
+            add(f"| M1-loc 峰预算 | `max_gt_prob ≥ 0.5` 的 clip 数 ≥ "
+                f"{verdict.A2_BAR_MAXGT_CLIPS}/{verdict.A2_FROZEN_N} 且 "
+                f"`recall@top-k` 中位 ≥ "
+                f"{verdict.A2_BAR_RECALL_TOPK_MEDIAN} | "
+                f"**{a2r.get('n_max_gt_prob_ge_0.5')}/{verdict.A2_FROZEN_N}**、"
+                f"中位 **{num(a2r.get('recall_at_top_k_median'))}** | "
+                f"**{gate_text2('M1loc')}** |")
+        else:
+            add('| M1-loc 峰预算 | （A2-R 不适用：§5 预登记为 A2-S 专属） | '
+                '— | n/a |')
+        for note in (a2.get('blockers') or []):
+            add('')
+            add(f'> **A2 增补门 BLOCKER**：{note}（该门按 NOT MEASURED，'
+                f'不得当失败或通过）。')
     add('')
     chance_vals = [c['hit1_chance'] for c in (m1.get('per_clip') or [])
                    if c.get('hit1_chance') is not None]
