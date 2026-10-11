@@ -14147,6 +14147,13 @@ grid `[248,216]` 与 `pts_feats` 一致；零初始化下 head 侧残差 absmax 
    顺序、冻结的 20-clip 契约（`limit=20/stride=100/start-index=3`）、
    补跑器的存在性守卫、以及不得自动续训。
 
+**回归运行（2026-10-11，训练在跑时的 CPU 只读确认）**：上述 11 个测试文件
+（`test_semantic_readout_rssm`、`test_watch_semA_ep6_cli`、`test_semA_ep6_verdict`、
+`test_semA_ep6_record`、`test_probe_semA_rank`、`test_probe_semA_m4floor`、
+`test_probe_semreadout_ep6`、`test_probe_semA_bnmode`、`test_config_build`、
+`test_equivalence`、`test_grad_paths`）合跑 **201 passed**（`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`
+`-p no:warnings`），无失败、无跳过。
+
 **负向验证（证明测试真能拦住该缺陷）**：在临时目录用 `8ae570d` 的旧
 `watch_semA2_ep6.sh` 跑同一测试文件，新测试**3 条失败**
 （`test_a2_watchdog_produces_the_required_evidence_artifacts`、
