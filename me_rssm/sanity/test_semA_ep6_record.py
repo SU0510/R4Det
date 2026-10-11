@@ -140,6 +140,7 @@ class _Fixture:
                 }) + '\n')
                 handle.write(json.dumps({
                     'mode': 'train', 'epoch': e, 'iter': 1900,
+                    'time': 1.5 + 0.05 * e, 'memory': 17106,
                     'stat_sem_hit1': 0.1 * e, 'stat_sem_thr50': 0.05 * e,
                     'loss_rssm_sem': 1.0 / e, 'stat_cls_res_rms': 0.5,
                     'stat_mu_diff_sq': 0.2,
@@ -312,6 +313,125 @@ class TestEvidenceIntegrity(unittest.TestCase):
                 encoding='utf-8') as handle:
             source = handle.read()
         self.assertIn("text.count('<!-- FILL:')", source)
+
+
+class TestRunFactDerivation(unittest.TestCase):
+    """The §72.2 run facts are DERIVED from the run's own logs.
+
+    They used to be ``<!-- FILL -->`` markers, i.e. hand-typed timestamps.
+    Section 72.10 promises "未手抄任何读数", and hand transcription is the
+    error class this generator exists to remove -- so the values come from
+    the artifacts whenever the logs are present.
+    """
+
+    def setUp(self):
+        self.fx = _Fixture()
+        self.addCleanup(self.fx.close)
+
+    def _write_logs(self):
+        d = self.fx.dir
+        with open(os.path.join(d, '20261010_145003.log'), 'w') as h:
+            h.write('2026-10-10 14:50:03,170 - mmdet - INFO - start\n')
+            h.write('noise line\n')
+            h.write('2026-10-10 20:56:08,141 - mmdet - INFO - end\n')
+        with open(os.path.join(d, 'stdout.log'), 'w') as h:
+            h.write('2026-10-10 14:50:03,170 - mmdet - INFO - start\n')
+            h.write("    raise SignalException(f\"Process {os.getpid()}"
+                    " got signal: {sigval}\", sigval=sigval)\n")
+            h.write('SignalException: Process 1573258 got signal: 2\n')
+            h.write('EXIT=1\n')
+        with open(os.path.join(d, record.WATCH_LOG), 'w') as h:
+            h.write('[watch] 2026-10-10 20:56:29 gate hit (fresh ckpt); '
+                    'stopping\n')
+            h.write('[watch] 2026-10-10 20:57:15 GPUs free after 45s; '
+                    'running probes\n')
+            # The real watchdog log also carries the probes' own timestamped
+            # mmcv output, i.e. it IS a timestamped span -- so "first *.log"
+            # selection would silently report the PROBE window as training.
+            h.write('2026-10-10 20:57:25,983 - mmcv - INFO - probe output\n')
+            h.write('2026-10-10 20:58:54,100 - mmcv - INFO - probe output\n')
+            h.write('[watch] 2026-10-10 20:58:57 probes done; manual step\n')
+
+    def test_span_is_derived_and_no_fill_remains(self):
+        self._write_logs()
+        text = self.fx.render()
+        self.assertIn('2026-10-10 14:50:03 → 2026-10-10 20:56:08', text)
+        self.assertNotIn('<!-- FILL:', text)
+
+    def test_train_log_is_the_runs_own_not_stdout_or_watch(self):
+        self._write_logs()
+        self.assertEqual(record.train_log_name(self.fx.dir),
+                         '20261010_145003.log')
+
+    def test_train_log_ignores_a_log_that_sorts_earlier(self):
+        """A decoy that sorts BEFORE the run log (and a log with no
+        timestamps) must not be picked -- taking the first *.log would."""
+        self._write_logs()
+        with open(os.path.join(self.fx.dir, '0_decoy.log'), 'w') as h:
+            h.write('2020-01-01 00:00:00 - decoy - start\n')
+            h.write('2020-01-01 00:00:01 - decoy - end\n')
+        self.assertEqual(record.train_log_name(self.fx.dir),
+                         '20261010_145003.log')
+        text = self.fx.render()
+        self.assertIn('2026-10-10 14:50:03 → 2026-10-10 20:56:08', text)
+        self.assertNotIn('2020-01-01 00:00:00 →', text)
+
+    def test_train_log_never_falls_back_to_the_watch_log(self):
+        """The watchdog log starts AFTER the interruption; using it would
+        report the PROBE window as the training window."""
+        self._write_logs()
+        os.remove(os.path.join(self.fx.dir, '20261010_145003.log'))
+        os.remove(os.path.join(self.fx.dir, 'stdout.log'))
+        self.assertIsNone(record.train_log_name(self.fx.dir))
+
+    def test_stdout_is_an_acceptable_stand_in(self):
+        """stdout.log is the same process's stdout, so its span matches."""
+        self._write_logs()
+        os.remove(os.path.join(self.fx.dir, '20261010_145003.log'))
+        self.assertEqual(record.train_log_name(self.fx.dir), 'stdout.log')
+
+
+    def test_throughput_is_the_median_of_train_records(self):
+        secs, mem, n = record.train_throughput(self.fx.dir)
+        self.assertEqual(n, 6)          # one per fixture epoch
+        self.assertAlmostEqual(secs, 1.675)     # median of 1.55..1.80
+        self.assertAlmostEqual(mem, 17106.0)
+
+    def test_throughput_ignores_val_records(self):
+        """Only train records carry time/memory; a val-only bundle must not
+        silently produce a throughput reading."""
+        with open(os.path.join(self.fx.dir, 'run.log.json')) as h:
+            lines = [json.loads(x) for x in h if x.strip()]
+        with open(os.path.join(self.fx.dir, 'run.log.json'), 'w') as h:
+            for rec in lines:
+                if rec.get('mode') == 'train':
+                    continue
+                h.write(json.dumps(rec) + '\n')
+        self.assertIsNone(record.train_throughput(self.fx.dir))
+
+    def test_watch_facts_take_the_real_signal_not_the_traceback_literal(self):
+        """The raising frame's own source line also contains "got signal:".
+
+        Taking the FIRST match yields the literal ``{sigval}`` and renders
+        garbage into the record.
+        """
+        self._write_logs()
+        gate, free, done, signal, exit_code = record.watch_facts(self.fx.dir)
+        self.assertEqual(gate, '2026-10-10 20:56:29')
+        self.assertEqual(free, '2026-10-10 20:57:15')
+        self.assertEqual(done, '2026-10-10 20:58:57')
+        self.assertEqual(signal, 2)
+        self.assertEqual(exit_code, 1)
+
+    def test_signal_is_named_and_never_renders_the_raw_literal(self):
+        self._write_logs()
+        text = self.fx.render()
+        self.assertIn('SIGINT(2)', text)
+        self.assertNotIn('sigval', text)
+
+    def test_missing_logs_still_fall_back_to_visible_fill(self):
+        text = self.fx.render()          # no log files written at all
+        self.assertIn('<!-- FILL:', text)
 
 
 class TestNoS2Claim(unittest.TestCase):

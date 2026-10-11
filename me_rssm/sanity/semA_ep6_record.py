@@ -32,9 +32,14 @@ Two things it asserts rather than leaves implicit:
   * that NO S2 AP claim is made here (S2 is the ep12-16 window and needs user
     approval before any ep6->ep16 continuation).
 
-Fields that cannot be derived from the artifacts (wall-clock run facts that
-live only in the terminal history) are emitted as visible ``<!-- FILL: ... -->``
-markers and counted in a warning on stderr, so they cannot be silently dropped.
+Run facts are DERIVED from the run's own logs -- the ep6 wall-clock span from
+the training log's first/last timestamps, throughput and memory from the
+``time``/``memory`` fields of the ``*.log.json`` train records, and the stop
+reason plus gate/GPU-release timestamps from the watchdog log. Anchoring a
+hand-typed timestamp is the transcription surface this generator exists to
+remove, so nothing here is typed by hand. Only if a bundle is missing those
+logs does the field degrade to a visible ``<!-- FILL: ... -->`` marker, which
+is counted in a warning on stderr so it cannot be silently dropped.
 
 Usage:
   python3 me_rssm/sanity/semA_ep6_record.py \
@@ -48,6 +53,7 @@ import glob
 import importlib.util
 import json
 import os
+import re
 import statistics
 import sys
 
@@ -75,6 +81,9 @@ WINDOWS = (
     ('远距', 1800, 'z_util_std_ep6_w1800.json'),
 )
 POST_SOURCE = 'post_source_std_ep6_stride700.json'
+WATCH_LOG = 'watch_semA_ep6.log'
+SIGNAL_NAMES = {1: 'SIGHUP', 2: 'SIGINT', 9: 'SIGKILL', 15: 'SIGTERM'}
+STDOUT_LOG = 'stdout.log'
 
 # Standard-family same-epoch comparator for the shuffle_z reading: the plain
 # no2d_igdr RSSM, seed1, ep6. Transcribed from docs/training_runs_full.md
@@ -149,6 +158,121 @@ def saved_epochs(run_dir):
         if stem.isdigit():
             out.append(int(stem))
     return sorted(out)
+
+
+
+# --- run facts (wall-clock/log facts the evidence JSONs do not carry) ----
+#
+# These live in the run's own text logs, so they are DERIVED, not hand-filled:
+# section 72.10 claims "未手抄任何读数", and anchoring a hand-typed timestamp
+# is exactly the transcription surface this generator exists to remove. The
+# FILL fallback stays for a bundle whose logs are missing.
+
+_TS_RE = re.compile(r'^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)')
+_WATCH_TS_RE = re.compile(
+    r'^\[(?:watch)\] (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (.*)$')
+_EXIT_RE = re.compile(r'^EXIT=(-?\d+)\s*$')
+
+
+def _timestamped_spans(run_dir):
+    """{log basename: (first_ts, last_ts, n)} over lines starting with a ts."""
+    spans = {}
+    for path in sorted(glob.glob(os.path.join(run_dir, '*.log'))):
+        first = last = None
+        count = 0
+        with open(path, encoding='utf-8', errors='replace') as handle:
+            for line in handle:
+                match = _TS_RE.match(line)
+                if not match:
+                    continue
+                count += 1
+                first = first or match.group(1)
+                last = match.group(1)
+        if count:
+            spans[os.path.basename(path)] = (first, last, count)
+    return spans
+
+
+def train_log_name(run_dir):
+    """The log the ep6 span is read from, in an EXPLICIT preference order.
+
+    The run's own ``YYYYmmdd_HHMMSS.log`` is the authoritative training log.
+    ``stdout.log`` is the same process's stdout and is an acceptable stand-in
+    (its span matches). The watchdog log is NEVER a training log: it starts
+    after the run was interrupted, so using it would report the PROBE window
+    as the training window. Anything else (e.g. a stray ``0_decoy.log``) is
+    ignored rather than silently accepted by "first ``*.log``" ordering.
+    """
+    spans = _timestamped_spans(run_dir)
+    stamped = [n for n in spans if re.match(r'^\d{8}_\d{6}\.log$', n)]
+    if stamped:
+        return sorted(stamped)[0]
+    if STDOUT_LOG in spans:
+        return STDOUT_LOG
+    return None
+
+
+def train_throughput(run_dir):
+    """(median time s/iter, median memory MiB) over train records, or None."""
+    times, memories = [], []
+    for path in sorted(glob.glob(os.path.join(run_dir, '*.log.json'))):
+        with open(path, encoding='utf-8') as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get('mode') != 'train':
+                    continue
+                if isinstance(rec.get('time'), (int, float)):
+                    times.append(float(rec['time']))
+                if isinstance(rec.get('memory'), (int, float)):
+                    memories.append(float(rec['memory']))
+    if not times:
+        return None
+    return (statistics.median(times),
+            statistics.median(memories) if memories else None,
+            len(times))
+
+
+def watch_facts(run_dir):
+    """(gate_ts, free_ts, done_ts, signal, exit_code) from the watchdog log."""
+    path = os.path.join(run_dir, WATCH_LOG)
+    if not os.path.exists(path):
+        return None
+    gate = free = done = None
+    with open(path, encoding='utf-8', errors='replace') as handle:
+        for line in handle:
+            match = _WATCH_TS_RE.match(line)
+            if not match:
+                continue
+            ts, rest = match.group(1), match.group(2)
+            if gate is None and rest.startswith('gate hit'):
+                gate = ts
+            elif free is None and rest.startswith('GPUs free'):
+                free = ts
+            elif rest.startswith('probes done'):
+                done = ts
+    stdout = os.path.join(run_dir, STDOUT_LOG)
+    signal = exit_code = None
+    if os.path.exists(stdout):
+        with open(stdout, encoding='utf-8', errors='replace') as handle:
+            for line in handle:
+                hit = _EXIT_RE.match(line)
+                if hit:
+                    exit_code = int(hit.group(1))
+                # The traceback's own f-string literal also contains
+                # "got signal:", so keep the LAST numeric match (the raised
+                # exception message) instead of the first.
+                if 'got signal:' in line:
+                    tail = line.rsplit('got signal:', 1)[1].strip()
+                    token = tail.split()[0].rstrip(',') if tail else ''
+                    if token.isdigit():
+                        signal = int(token)
+    return (gate, free, done, signal, exit_code)
 
 
 def pct(value, digits=4):
@@ -352,13 +476,36 @@ def render(run_dir, date_str):
     add('')
     add('| 项 | 值 |')
     add('|---|---|')
-    add(FILL.format('ep6 段起止 UTC 时刻（stdout.log 首末时间戳）'))
+    train_log = train_log_name(run_dir)
+    span = _timestamped_spans(run_dir).get(train_log) if train_log else None
+    if span:
+        add(f'| ep6 段起止 UTC | {span[0]} → {span[1]}'
+            f'（`{train_log}`，{span[2]} 条带时间戳行） |')
+    else:
+        add(FILL.format('ep6 段起止 UTC 时刻（日志首末时间戳）'))
     add('| GPU / seed | 5/6/7、seed 0、deterministic |')
-    add(FILL.format('吞吐中位 s/iter、显存 GiB/卡（训练日志 time/memory 段）'))
+    tp = train_throughput(run_dir)
+    if tp:
+        secs, mem, n = tp
+        mem_txt = (f'{mem / 1024:.1f} GiB/卡' if mem else 'n/a')
+        add(f'| 吞吐 / 显存 | 中位 **{secs:.3f} s/iter**、'
+            f'{mem_txt}（`*.log.json` train 段 {n} 条） |')
+    else:
+        add(FILL.format('吞吐中位 s/iter、显存 GiB/卡（训练日志 time/memory 段）'))
     add(f'| val 记录 | ep{eps[0]}-ep{eps[-1]} 各一条，共 {len(eps)} 条 |'
         if eps else '| val 记录 | 无 |')
     add(f'| 落盘 | {saved}（`checkpoint_config.interval=2`） |')
-    add(FILL.format('停止方式与 GPU 释放时刻（watch_semA_ep6.log）'))
+    wf = watch_facts(run_dir)
+    if wf and wf[0]:
+        gate_ts, free_ts, done_ts, signal, exit_code = wf
+        sig_name = SIGNAL_NAMES.get(signal, str(signal) if signal else '?')
+        sig_txt = (f'{sig_name}({signal})' if signal else '?')
+        add(f'| 停止方式 | 看门狗在新鲜 `epoch_6.pth` + ep6 val 后中断训练'
+            f'（signal {sig_txt}，退出码 {exit_code}；中断是看门狗按 §5 的'
+            f'预期动作，非崩溃）· gate hit {gate_ts} → GPU 释放 {free_ts} →'
+            f' 探针结束 {done_ts} |')
+    else:
+        add(FILL.format('停止方式与 GPU 释放时刻（watch_semA_ep6.log）'))
     add('')
 
     # --- per-epoch curve --------------------------------------------------
