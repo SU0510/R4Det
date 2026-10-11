@@ -15043,6 +15043,64 @@ BN 调用带 `--batch-size 2`。
 `semA_zcontract_ep6.json` **仍缺**（§74.3）；本臂 BN 实测与 z 契约对账**未完成**。
 未改判据、未重启训练、未补跑 GPU 探针。
 
+#### 73.6.26 「产物字段 → 消费者」**系统扫描**（2026-10-11，A2-R 训练中；只读）
+
+§73.6.20 / §73.6.21 / §73.6.23 / §73.6.24 是**同一个失效模式的四次实例**：
+某处产出、某处本该消费，缺一环**不报错**。此前四次都是**撞上**才修；本条改为**主动扫一遍**。
+
+**方法（可复跑）**：对 A2-S 捆绑包里每个 `*.json` 取**顶层键**，在
+`semA_ep6_record.py` 与 `semA_ep6_verdict.py` 源码里按标识符**整词**搜索；
+命中 = 有消费者，未命中 = 待人工判定。
+
+| 产物 | 顶层键 | 无消费者 |
+|---|---:|---:|
+| `semreadout_ep6_gate.json` | 11 | 0 |
+| `z_util_std_ep6_w3/w100/w1800.json` | 各 5 | 0 |
+| `semA_rank_val/train_ep6.json` | 各 11 | 2（`ann_file` / `reading_note`，纯元数据） |
+| `post_source_std_ep6_stride700.json` | 21 | 9 |
+| `semA_m4floor_ep6.json` | 26 | 12 |
+
+**结论一：不存在「预登记要求、却没人渲染」的字段。** 把上表每一处未命中项逐个人工比对
+两份预登记的 §5 报告字段清单，命中数为 **0** ⇒ 四次已修缺陷属**契约层**，
+剩下的未消费字段是**诊断**、不是违约。这一点必须写明，否则「未消费」会被误读成「漏报」。
+
+**结论二（landmine，记录不改）**：`semA_m4floor_ep6.json` 的 `chance_1_over_c` = **0.25**
+是 M4 `donor_transfer` 门槛的**基数**，而生成器只渲染 `donor_transfer` 本身、
+**不渲染这个基数** ⇒ 「chance + 20pt = 0.45」这条线**无法从渲染结果自身核验**。
+今天数值上无害（C=4 ⇒ 1/C 恰为 0.25）。**不改生成器**的理由：M4 块为 A 与 A2 **共用**，
+加一行会让 A 已归档的 §72 重渲染**不再逐字节相同**——而 §73.6.23/§73.6.24 两处修复
+特意保住的就是这个不变量。⇒ 属**换 A 归档一致性**的取舍，留待拍板。
+
+**结论三（聚合口径 landmine）**：同一名目下存在**不同聚合**的字段，彼此不等但都正确：
+
+| 名目 | 未渲染变体 | 已渲染变体 |
+|---|---|---|
+| head 命中（残差=训练值） | `head_hit_residual_as_trained` **0.740**（通道 pooled 曲线 `×1.0` 点） | `recomputed_mean_own_hit` **0.770**（逐 clip 后等权均值） |
+| `conv_cls` 前景间隔 | `conv_cls_gap_fg_median` **1.954**（逐 clip 中位 → 再均值） | `conv_cls_gap_fg_mean` **2.520**（逐 clip 均值 → 再均值） |
+| 类别先验地板 | `per_clip_prior_floor_mean` **0.692**（逐 clip 地板 → 再均值） | `pooled_prior_floor` **0.500**（池化占用通道后取多数类占比；§5 指定的那一支） |
+
+三者**都不是矛盾数字**；但把未渲染那列误读成已渲染的同一读数，就会读出
+「0.74 vs 0.77 不一致」这类**伪冲突**。**M4 门用的是 pooled 支**（§5 明写），判定不受影响。
+
+**结论四（字段名断言了不存在的东西）**：`post_source_std_ep6_stride700.json` 的
+`e_t_pooled_normalized` 与 `e_t_pooled_raw` **逐位相同**（rms 0.5792 / batch-common 0.3981 /
+sample-specific 0.4207 / 特异占比 0.5276）。成因**不是**「归一化恰好无效」，而是**构造上**：
+探针只在 fusion 具备 `_posterior_observation` 钩子时才走归一化支，
+而 `SemanticReadoutRSSMFusion` **没有**该钩子，故 else 支直接
+`e_pooled = captured['e_t']`（`tools/probe_posterior_source.py:158–161`）。
+⇒ 字段名承诺「raw vs normalized」的对比，而在本类上两者**必然相等**。
+另一处同源重复：`posterior_head_output` 与 `mu_q` **逐位相同**（同一张量挂两个键）。
+两者**今天都无消费者**，故没有错误数字进入任何报告；记下来是为了**下次别把它当独立证据**。
+
+**结论五（不是缺陷）**：`semA_splitprobe_val_full_n20.json` /
+`semA_splitprobe_train_full_n20.json` / `semA_bnmode_ep6_trainsplit.json`
+**全仓库没有任何产出者**。这是**刻意**的：生成器把这两组源写成「两侧必须同时存在，
+否则显式报 NOT MEASURED」（`SPLIT_ATTRIBUTION_SOURCES` 的注释已说明来由）
+⇒ 属**优雅降级**，不是漏产出。记录它是为了**下一次扫描不再重复报警**。
+
+**边界**：只读扫描；未改生成器、未改任何 JSON、未改门槛、未重跑 GPU 探针。
+未消费字段的**去留**（渲染 or 删除）是需要拍板的取舍，本次只记录。
+
 
 ## 74. A2-S ep6 实际完成与进展核验（2026-10-11 15:39 UTC）
 
