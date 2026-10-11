@@ -431,6 +431,23 @@ def render(run_dir, date_str):
     add('A 的 full-res 216×248 网格随机基线只有 ~7.5e-5（209× 格数），')
     add('故这两个读数必须与门槛并排记录。')
     add('')
+    # The exception is only meaningful if the record says whether it APPLIED.
+    # Leaving it as "an exception exists" would let a genuine miss read as
+    # "口径未校准", which is exactly the post-hoc escape the prereg forbids.
+    if gates_payload is not None and gates.get('M1') is False:
+        thr50_v = m1.get('mean_thr50')
+        if grid_limited:
+            add('**§71.9.3(2) 例外条款：适用**（详见上文聚合判定）。')
+        else:
+            add(f'**§71.9.3(2) 例外条款：不适用**——该条款要求 M1 '
+                f'*仅*在 full-res 原始 `hit@1` 上未过，而 `thr50` 与')
+            add(f'`hit1_excess_over_chance` 健康。实测 `thr50` '
+                f'**{num(thr50_v)}**（bar {num(verdict.M1_BAR_THR50, 2)}）与 '
+                f'`excess` **{num(mean_excess)}**（bar '
+                f'{num(verdict.M1_EXCESS_BAR, 4)}）**两项都未达线**，')
+            add('故 M1 是**真实未过**，不是跨网格口径造成的伪失败，')
+            add('不得以「口径未校准」为由豁免。')
+        add('')
 
     if not evidence_ok:
         add('**证据包不完整 ⇒ NOT EVALUABLE**：上面四门读数在缺失产物补齐前')
@@ -451,6 +468,14 @@ def render(run_dir, date_str):
         if gates.get('M2') is not True:
             add('M2 未过 ⇒ **“概率状态”这一宣称作废**：语义来自 h/观测，')
             add('z 只是被穿过的通路。')
+        else:
+            add('**M2 通过 ⇒ “概率状态”这一主张未被本次测量否证。**')
+            add(f'h 臂与 feat 臂的 `thr50` 均为 '
+                f'{num(m2.get("h_mean_thr50"))}/'
+                f'{num(m2.get("feat_mean_thr50"))}，而 z 臂为 '
+                f'{num(m2.get("z_mean_thr50"))}：语义信号确实由 z 承载，')
+            add('不是从 h 或当前观测穿透过来的。该主张的瓶颈在读出与任务')
+            add('收益（M1/M3/M4），不在「z 有没有信息」这一步。')
     add('')
 
     # --- config ----------------------------------------------------------
@@ -568,6 +593,20 @@ def render(run_dir, date_str):
     # --- gate detail ------------------------------------------------------
     add('### 72.6 S1 门明细（逐 clip）')
     add('')
+    m1_cells = [(c.get('index'), c.get('num_pos_cells'))
+                for c in (m1.get('per_clip') or [])
+                if c.get('num_pos_cells') is not None]
+    if m1_cells:
+        light = min(m1_cells, key=lambda kv: kv[1])
+        heavy = max(m1_cells, key=lambda kv: kv[1])
+        if light[1] != heavy[1]:
+            add(f'> **样本权重不均提示**：各 clip 的 GT 目标数并不相等——'
+                f'clip `{light[0]}` 只有 **{light[1]}** 个目标，'
+                f'clip `{heavy[0]}` 有 **{heavy[1]}** 个（§71.9.14 预检：'
+                f'3/4/3/11/4/2/6/6/1/2）。')
+            add(f'> 逐 clip 比率在 `{light[0]}` 上只能取少数离散值、方差最大，')
+            add('> 故下面 M1/M3/M4 的**分组结论不得由单个 clip 单独支撑**。')
+            add('')
     add('**M1 逐 clip**：')
     add('')
     add('| index | thr50 | hit@1 | hit1_chance | excess_over_chance | 正格数 |')
@@ -731,7 +770,23 @@ def render(run_dir, date_str):
         add('   非劣 Car ≥ 47.34 / Truck ≥ 29.22 / Ped ≥ 29.93 / Cyc ≥ 47.63；')
         add('   hard fail < 38.78）；批准后才允许从 `epoch_6.pth` 续训至 ep16。')
     else:
+        reasons = []
+        if gates.get('M1') is not True:
+            reasons.append(
+                f'M1 `thr50` {num(m1.get("mean_thr50"))}/`hit@1` '
+                f'{num(m1.get("mean_hit1"))}（例外条款不适用，真实未过）')
+        if gates.get('M3') is not True:
+            reasons.append(f'M3 仅 {m3.get("wins")}/{m3.get("n")}')
+        if gates.get('M4') is not True:
+            reasons.append(
+                f'M4 `donor_transfer` {num(m4.get("mean_donor_transfer"))}'
+                f'（bar {num(m4.get("bar"), 2) if m4.get("bar") is not None else "n/a"}）')
         add('1. S1 未全过 ⇒ 按负结果归档，读数写进 Analysis，不投 ep16。')
+        if reasons:
+            add('   实测原因：' + '；'.join(reasons) + '。')
+        add('   归档的是**本次候选 A 的读出/监督设计**，不是「z 无信息」'
+            '（M2 已证明 z 承载语义），也不是「所有语义监督/残差读出方向」'
+            '（§7 只据此否定本设计，未否定候选 A/B 所代表的方向）。')
     add('2. 任意 Ped/Cyc 触到非劣线 ⇒ 停止，记为家族副作用第 6 次复现。')
     add('3. **不做**权重/KL 扫描，**不做** ep24 抢救，不靠放大系数救活机制。')
     add('')

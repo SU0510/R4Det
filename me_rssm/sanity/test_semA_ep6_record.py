@@ -46,9 +46,9 @@ record = _load('record_ep6', 'me_rssm/sanity/semA_ep6_record.py')
 verdict = record.verdict
 
 
-def _clip(index, thr50=0.5, hit1=0.7):
+def _clip(index, thr50=0.5, hit1=0.7, num_pos_cells=4):
     return {'index': index, 'thr50': thr50, 'hit1': hit1,
-            'num_pos_cells': 4, 'occupied_class_channels': 2,
+            'num_pos_cells': num_pos_cells, 'occupied_class_channels': 2,
             'hit1_chance': 0.0001, 'hit1_excess_over_chance': hit1 - 0.0001}
 
 
@@ -432,6 +432,157 @@ class TestRunFactDerivation(unittest.TestCase):
     def test_missing_logs_still_fall_back_to_visible_fill(self):
         text = self.fx.render()          # no log files written at all
         self.assertIn('<!-- FILL:', text)
+
+
+class TestM1ExceptionIsAdjudicated(unittest.TestCase):
+    """The prereg's cross-grid exception must be recorded as APPLIED or NOT.
+
+    "An exception exists" is not a finding. If the record only ever describes
+    the exception, a genuine miss can be read as "口径未校准" -- the post-hoc
+    escape section 7 forbids. The generator therefore states the adjudication
+    from the shared threshold constants in semA_ep6_verdict.
+    """
+
+    def setUp(self):
+        self.fx = _Fixture()
+        self.addCleanup(self.fx.close)
+
+    def _fail_m1_flatly(self):
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['gates']['M1'] = False
+        gate['M1_sem_head']['mean_thr50'] = 0.1167
+        gate['M1_sem_head']['mean_hit1'] = 0.0833
+        gate['M1_sem_head']['per_clip'] = [
+            _clip(3, 0.1, 0.05), _clip(203, 0.12, 0.1)]
+        self.fx.dump(verdict.GATE_JSON, gate)
+
+    def test_not_applicable_is_stated_with_both_missed_bars(self):
+        self._fail_m1_flatly()
+        text = self.fx.render()
+        self.assertIn('例外条款：不适用', text)
+        self.assertIn('真实未过', text)
+        # both bars quoted, so the reader can check the adjudication
+        self.assertIn('0.3000', text)
+        self.assertIn('0.5840', text)
+
+    def test_applicable_exception_is_not_called_a_genuine_miss(self):
+        """The exception is a NARROW band: thr50 clears 0.30 and hit@1 sits
+        just under the 0.60 bar, at/above the 0.584 the calibrated bar
+        implies. A miss well below the band is a genuine miss."""
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['gates']['M1'] = False
+        gate['M1_sem_head']['mean_thr50'] = 0.40       # cleared 0.30
+        gate['M1_sem_head']['mean_hit1'] = 0.59        # missed 0.60, in band
+        gate['M1_sem_head']['per_clip'] = [
+            _clip(3, 0.4, 0.59), _clip(203, 0.4, 0.59)]
+        self.fx.dump(verdict.GATE_JSON, gate)
+        text = self.fx.render()
+        self.assertIn('例外条款：适用', text)
+        self.assertNotIn('真实未过', text)
+
+    def test_exception_band_is_bounded_below_by_the_excess_bar(self):
+        """Regression guard on the adjudication itself: drop hit@1 to 0.50
+        (thr50 still 0.40) and the SAME fixture must flip to 'not
+        applicable'. Without this, the exception could silently widen into
+        'any M1 miss with ok thr50 is inconclusive'."""
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['gates']['M1'] = False
+        gate['M1_sem_head']['mean_thr50'] = 0.40
+        gate['M1_sem_head']['mean_hit1'] = 0.50
+        gate['M1_sem_head']['per_clip'] = [
+            _clip(3, 0.4, 0.50), _clip(203, 0.4, 0.50)]
+        self.fx.dump(verdict.GATE_JSON, gate)
+        self.assertIn('例外条款：不适用', self.fx.render())
+
+    def test_passing_m1_gets_no_exception_paragraph(self):
+        text = self.fx.render()          # fixture passes every gate
+        self.assertNotIn('例外条款：适用', text)
+        self.assertNotIn('真实未过', text)
+
+
+class TestM2PassIsStatedPositively(unittest.TestCase):
+    """M2 passing must record what SURVIVES, not just what failed."""
+
+    def setUp(self):
+        self.fx = _Fixture()
+        self.addCleanup(self.fx.close)
+
+    def test_m2_pass_keeps_the_probabilistic_claim_alive(self):
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['gates']['M3'] = False       # force NOT ALL PASS
+        self.fx.dump(verdict.GATE_JSON, gate)
+        text = self.fx.render()
+        self.assertIn('M2 通过', text)
+        self.assertIn('未被本次测量否证', text)
+        self.assertNotIn('这一宣称作废', text)
+
+    def test_m2_fail_voids_the_probabilistic_claim(self):
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['gates']['M2'] = False
+        gate['M2_exclusivity']['h_relative'] = -0.1
+        self.fx.dump(verdict.GATE_JSON, gate)
+        text = self.fx.render()
+        self.assertIn('这一宣称作废', text)
+        self.assertNotIn('未被本次测量否证', text)
+
+
+class TestClipWeightCaveat(unittest.TestCase):
+    """A 1-target clip must not be able to carry a grouped conclusion."""
+
+    def setUp(self):
+        self.fx = _Fixture()
+        self.addCleanup(self.fx.close)
+
+    def test_unequal_clip_weights_are_flagged(self):
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['M1_sem_head']['per_clip'] = [
+            _clip(3, num_pos_cells=11), _clip(203, num_pos_cells=1)]
+        self.fx.dump(verdict.GATE_JSON, gate)
+        text = self.fx.render()
+        self.assertIn('样本权重不均提示', text)
+        self.assertIn('不得由单个 clip 单独支撑', text)
+        self.assertIn('`203`', text)      # the 1-target clip is named
+
+    def test_uniform_clip_weights_raise_no_note(self):
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['M1_sem_head']['per_clip'] = [
+            _clip(3, num_pos_cells=4), _clip(203, num_pos_cells=4)]
+        self.fx.dump(verdict.GATE_JSON, gate)
+        self.assertNotIn('样本权重不均提示', self.fx.render())
+
+
+class TestNegativeArchiveNamesItsReasons(unittest.TestCase):
+    """Section 7 says archive "把读数写进 Analysis" -- so the fork line must
+    carry the measured reasons, not just the word 负结果. It must also scope
+    what is being rejected, since M2 passing means z DOES carry the signal.
+    """
+
+    def setUp(self):
+        self.fx = _Fixture()
+        self.addCleanup(self.fx.close)
+
+    def test_reasons_are_named_per_failing_gate(self):
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['gates'].update({'M1': False, 'M3': False, 'M4': False})
+        gate['M1_sem_head']['mean_thr50'] = 0.1167
+        gate['M1_sem_head']['mean_hit1'] = 0.0833
+        gate['M1_sem_head']['per_clip'] = [_clip(3, 0.12, 0.08)]
+        gate['M3_readout_toggle'] = {'wins': 7, 'n': 10, 'per_clip': []}
+        gate['M4_class_information']['mean_donor_transfer'] = 0.3818
+        self.fx.dump(verdict.GATE_JSON, gate)
+        text = self.fx.render()
+        self.assertIn('实测原因', text)
+        self.assertIn('0.1167', text)
+        self.assertIn('7/10', text)
+        self.assertIn('0.3818', text)
+
+    def test_archive_scope_excludes_what_M2_proved(self):
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['gates']['M1'] = False
+        gate['M1_sem_head']['mean_thr50'] = 0.1
+        self.fx.dump(verdict.GATE_JSON, gate)
+        text = self.fx.render()
+        self.assertIn('不是「z 无信息」', text)
 
 
 class TestNoS2Claim(unittest.TestCase):
