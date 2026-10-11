@@ -556,6 +556,29 @@ def class_coverage(run_dir, a2=None):
     return out or None
 
 
+def m4floor_readings(run_dir, a2=None):
+    """The m4floor probe's mechanism readings, or None.
+
+    This artifact is produced for BOTH arms but was read by nothing: the
+    pre-registration makes two of its readings load-bearing --
+    ``frac_cells_residual_can_flip`` is A2-R's S0-5 anticipation (§5), and
+    ``pooled_prior_floor`` is what M4's ``own_hit`` bar is computed from. A
+    measured reading that no report carries is indistinguishable from an
+    unmeasured one, which is the failure mode this whole audit keeps hitting.
+    """
+    if a2 is None:
+        a2 = verdict.a2_readings(run_dir)
+    if a2 is None:
+        return None
+    path = os.path.join(run_dir, verdict.A2_M4FLOOR)
+    if not os.path.exists(path):
+        return None
+    payload = load_json(path)
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
 def watch_facts(run_dir):
     """(gate_ts, free_ts, done_ts, signal, exit_code) from the watchdog log."""
     path = os.path.join(run_dir, watch_log_name(run_dir))
@@ -1216,6 +1239,45 @@ def render(run_dir, date_str):
             f'{num(clip.get("head_swap_to_donor"))} | '
             f'{clip.get("donor_index")} | {num(clip.get("changed_frac"))} |')
     add('')
+
+    # The m4floor probe's own readings: the M4 bar's base (pooled floor) and
+    # A2-R's pre-registered S0-5 anticipation. Read by nothing before this.
+    m4f = m4floor_readings(run_dir, a2)
+    if m4f:
+        add('**M4 地板 / 读出存活读数**（`semA_m4floor_ep6.json`，'
+            'M4 的 `own_hit` 线即由这里的 pooled 地板推出）：')
+        add('')
+        add('| 读数 | 值 | 说明 |')
+        add('|---|---:|---|')
+        add(f'| `pooled_prior_floor` | **{num(m4f.get("pooled_prior_floor"))}** | '
+            f'窗口内「恒投多数类」的准确率，M4 `own_hit` 线的基准 |')
+        add(f'| `recomputed_mean_own_hit` | '
+            f'**{num(m4f.get("recomputed_mean_own_hit"))}** | '
+            f'由残差现场重算，与地板同源 |')
+        add(f'| `margin_over_pooled_prior` | '
+            f'**{signed(m4f.get("margin_over_pooled_prior"))}** | '
+            f'`own_hit −` 地板（**机制读数**）|')
+        add(f'| `frac_cells_residual_can_flip` | '
+            f'**{num(m4f.get("frac_cells_residual_can_flip"))}** | '
+            f'A2-R 的 S0-5 预期读数（§5；不设通过线）|')
+        add(f'| `residual_gap_fg_mean` / `conv_cls_gap_fg_mean` | '
+            f'**{num(m4f.get("residual_gap_fg_mean"))}** / '
+            f'**{num(m4f.get("conv_cls_gap_fg_mean"))}** | '
+            f'残差与 `conv_cls` 的前景间隔（稀释程度）|')
+        add('')
+        scale = m4f.get('head_hit_by_residual_scale_pooled')
+        if isinstance(scale, dict) and scale:
+            keys = sorted(scale, key=lambda k: float(k))
+            add('head 命中随残差**尺度**的变化（`residual=0` 与强制满尺度'
+                '在两端）：`' + ' / '.join(
+                    f'×{k} → {num(scale[k])}' for k in keys) + '`。')
+            add('')
+    # NOTE: the original code ended the M4 block with exactly one blank line
+    # here; A's archived section has that shape, so this must not add another
+    # (an extra blank would make A's draft differ from the doc by whitespace
+    # only -- still a difference a diff-based audit would flag as drift).
+    if m4f:
+        add('')
 
     # --- family readout ---------------------------------------------------
     add('### 72.7 家族标准反事实读数（`shuffle_z` / `zero_z` / `prior_only`）')

@@ -905,6 +905,47 @@ class TestSplitAttribution(unittest.TestCase):
         self.assertIsNone(record.class_coverage(self.fx.dir))
         self.assertNotIn('类别覆盖', self.fx.render())
 
+    def test_m4floor_readings_are_reported(self):
+        """Pre-registered readings that nothing rendered were effectively lost.
+
+        `semA_m4floor_ep6.json` is produced for every arm but was read by
+        nothing: M4's own_hit bar is DERIVED from its pooled floor, and
+        `frac_cells_residual_can_flip` is A2-R's pre-registered S0-5
+        anticipation (prereg section 5). A measured reading no report carries
+        is indistinguishable from an unmeasured one.
+        """
+        cfg = '/x/..._semA2S_24e.py'
+        gate = _gate_payload()
+        gate['input_fingerprints']['config_path'] = cfg
+        self.fx.dump(verdict.GATE_JSON, gate)
+        idx = [3 + 100 * i for i in range(20)]
+        rows = [{'index': i, 'auc_mean_over_occupied_channels': 0.9,
+                 'gt_shuffle_auc': 0.47, 'max_gt_prob': 0.9,
+                 'recall_at_top_k_mean': 0.5, 'occupied_channels': 2}
+                for i in idx]
+        self.fx.dump(verdict.A2_RANK_VAL,
+                     {'config': cfg, 'n_clips': 20, 'indices': idx,
+                      'per_clip': rows})
+        self.fx.dump(verdict.A2_M4FLOOR, {
+            'pooled_prior_floor': 0.5128,
+            'recomputed_mean_own_hit': 0.7379,
+            'margin_over_pooled_prior': 0.2251,
+            'frac_cells_residual_can_flip': 0.2530,
+            'residual_gap_fg_mean': 1.1190,
+            'conv_cls_gap_fg_mean': 2.7782,
+            'head_hit_by_residual_scale_pooled': {'0.0': 0.64, '1000000.0': 0.59},
+        })
+        sec = self.fx.render().split('### 72.6')[1].split('### 72.7')[0]
+        self.assertIn('pooled_prior_floor', sec)
+        self.assertIn('0.5128', sec)
+        self.assertIn('frac_cells_residual_can_flip', sec)
+        self.assertIn('S0-5', sec)
+        self.assertIn('尺度', sec)
+
+    def test_m4floor_absent_renders_nothing(self):
+        """No artifact -> no invented reading (A borrows no A2 unit)."""
+        self.assertIsNone(record.m4floor_readings("/nonexistent-run"))
+
     def test_generator_does_not_hard_code_the_published_readings(self):
         """Structural pin: the numbers must come from the bundle's JSON. If
         they were pasted as constants, an A2 draft would assert another run's

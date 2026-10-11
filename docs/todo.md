@@ -621,3 +621,12 @@
   A 代不输出（其 rank 产物不属冻结契约）。推导值与预登记手记**逐位一致**，
   不产生新读数。新增 2 条测试；`test_semA_ep6_record` 109 passed，11 文件合跑
   **266 passed**，A 的 §72 仍 IDEMPOTENT。
+
+- **ep6 渲染器第八轮审计完成（2026-10-11，§73.6.21；训练中修复）**：发现
+  `semA_m4floor_ep6.json` **没有任何消费者**（判定器只声明常量、渲染器从未读），
+  而它承载两项被判据依赖的读数：M4 的 `own_hit` 线基准 `pooled_prior_floor`
+  （A=0.5128）与 A2-R 的 S0-5 `frac_cells_residual_can_flip`（§5 明写要记录）。
+  测了却没有报告携带 ⇒ 记录上与「没测」不可区分。新增 `m4floor_readings()` 与
+  §72.6 地板/读出存活表（pooled floor、margin、flip 比例、前景间隔、尺度曲线），
+  **仅 A2 臂渲染**。新增 2 条测试；`test_semA_ep6_record` 111 passed，11 文件合跑
+  **268 passed**，A 的 §72 逐字节不变。

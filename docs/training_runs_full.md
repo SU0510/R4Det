@@ -14910,3 +14910,37 @@ clip——类别覆盖作为报告字段给出，不作为选样条件**」，�
 > **未闭环项（留给 A2-S 的 §73.7）**：Car 在 A 的 M4 窗口完全缺席这一点已记录，
 > 但**该窗口的类覆盖是否也漏掉 Car 需要看 A2-S 自己的产物**——本条只修「报告
 > 字段缺失」，不据此重判 A 的 M4（A 的归档判定不变）。
+
+#### 73.6.21 `semA_m4floor_ep6.json` 被**零消费者**读取：M4 线的基准与 A2-R 的 S0-5 都不在草稿里（2026-10-11，训练中修复；A2-S ep6 未产出）
+
+§73.6.13 提到 A2 的 `m4floor` 产物用于「M4 修正后口径」（`own_hit` 改按 pooled
+floor 判）。但扫消费者时发现：**`semA_ep6_verdict.py` 只声明了常量
+`A2_M4FLOOR`，从未读过该文件；`semA_ep6_record.py` 也从未读它**。于是这份产物
+在**任何报告里都不出现**，而按预登记它承载两项**被判据依赖**的读数：
+
+1. **M4 的 `own_hit` 线由它推出**（`pooled_prior_floor`，A 为 0.5128）——
+   §73.6.6 缺陷三把 `gate_m4` 改成用 pooled 地板后，
+   `semA_ep6_record.py` 渲染 M4 行时**仍只打印 `m4.get("pooled_prior_floor")`**
+   （来自 gate JSON，A 的 gate 里该字段是 `None` ⇒ 渲染成 n/a），
+   而地板数字其实**就在 m4floor 产物里**；
+2. **A2-R 的 S0-5 预期读数** `frac_cells_residual_can_flip`（§5 明写「应高于 A 的
+   0.2530；记录实测值；不设通过线」）——该读数只在 m4floor 产物里。
+
+⇒ **测了但没有任何报告携带的读数，与「没测」在记录上不可区分**，这正是本轮审计
+反复出现的失败模式。
+
+修复：新增 `m4floor_readings()` 与 §72.6 的「M4 地板 / 读出存活读数」表，输出
+
+* `pooled_prior_floor`（M4 线的基准）、`recomputed_mean_own_hit`、
+  `margin_over_pooled_prior`；
+* `frac_cells_residual_can_flip`（**显式标注为 A2-R 的 S0-5 预期**）；
+* `residual_gap_fg_mean` / `conv_cls_gap_fg_mean`（稀释程度）；
+* `head_hit_by_residual_scale_pooled` 的**尺度曲线**（`residual=0` 与强制满尺度
+  在两端）。
+
+**仅 A2 臂渲染**（函数先经 `a2_readings`，A 返回 `None`）。A 的 §71.9.18 已手写过
+这些读数，草稿不再重列，故 A 的 §72 **逐字节不变**（已 diff 验证）。
+
+新增 2 条测试（渲染 + A 不发明读数）；`test_semA_ep6_record` **111 passed**；
+11 个文件合跑 **268 passed**（266 + 2）。**边界**：未改门槛、探针、证据 JSON；
+训练未动；A 的归档判定与草稿不变。
