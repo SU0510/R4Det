@@ -651,10 +651,26 @@ class TestZContractBlock(unittest.TestCase):
     def test_noise_ratio_is_reported(self):
         self.assertIn('噪声占比', self.fx.render())
 
-    def test_missing_artifact_omits_the_block_without_crashing(self):
+    def test_missing_artifact_keeps_the_section_with_a_visible_gap(self):
+        """A missing z-contract reading must stay VISIBLE.
+
+        Dropping the section outright left a numbering gap (72.9 -> 72.11) and
+        said nothing about why the reconciliation was absent. Silence reads as
+        "no issue", which is the opposite of what a missing probe means.
+        """
         os.remove(os.path.join(self.fx.dir, record.ZCONTRACT_JSON))
         text = self.fx.render()
-        self.assertNotIn('### 72.10 z 契约对账', text)
+        self.assertIn('### 72.10 z 契约对账', text)
+        self.assertIn('FILL', text)
+        self.assertIn('未被测量', text)
+        # and it must NOT be read as a gate reading either way
+        self.assertIn('不得据此宣称契约无影响', text)
+
+    def test_present_artifact_still_renders_the_reconciliation(self):
+        text = self.fx.render()
+        self.assertIn('### 72.10 z 契约对账', text)
+        self.assertIn('部署（`mu_q`', text)
+        self.assertNotIn('未被测量', text)
 
 
 class TestM2ClaimIsScoped(unittest.TestCase):
@@ -1305,6 +1321,15 @@ class TestArmAwareSingleVariable(unittest.TestCase):
     def test_a_draft_does_not_gain_the_value_row(self):
         self._set_arm('/x/..._semA_seed0.py', with_rank=False)
         self.assertEqual(record.arm_single_variable(self.tmp)[1], '——')
+
+    def test_train_stats_heading_tracks_the_arm(self):
+        """Section 72.5's rows are THIS arm's own training diagnostics."""
+        self._set_arm('/x/..._semA_seed0.py', with_rank=False)
+        self.assertEqual(record.arm_side_label(self.tmp), 'A 侧')
+        self._set_arm('/x/..._semA2S_24e.py')
+        self.assertEqual(record.arm_side_label(self.tmp), 'A2-S 侧')
+        self._set_arm('/x/..._semA2R_24e.py')
+        self.assertEqual(record.arm_side_label(self.tmp), 'A2-R 侧')
 
 
 class TestArmAwareProse(unittest.TestCase):

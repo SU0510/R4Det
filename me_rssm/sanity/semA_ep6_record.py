@@ -229,6 +229,19 @@ def a2_split_contrast(run_dir, a2=None):
     return {'train': _agg(train), 'val': _agg(val)}
 
 
+def arm_side_label(run_dir, a2=None):
+    """'A 侧' / 'A2-S 侧' ... -- whose training statistics a table reports.
+
+    Section 72.5's heading was hard-coded to "A 侧". For an A2 arm the
+    ``stat_sem_*`` rows are the A2 arm's OWN training diagnostics, so the
+    heading would misattribute them to A.
+    """
+    if a2 is None:
+        a2 = verdict.a2_readings(run_dir)
+    arm = (a2 or {}).get('arm')
+    return {'A2S': 'A2-S 侧', 'A2R': 'A2-R 侧'}.get(arm, 'A 侧')
+
+
 def saved_epochs(run_dir):
     """Epochs with an actual epoch_<N>.pth on disk (checkpoint availability)."""
     out = []
@@ -939,7 +952,7 @@ def render(run_dir, date_str):
     add('')
 
     # --- train stats ------------------------------------------------------
-    add('### 72.5 A 侧训练期同口径读数（train split，逐 epoch 末值）')
+    add(f'### 72.5 {arm_side_label(run_dir)}训练期同口径读数（train split，逐 epoch 末值）')
     add('')
     add('| ep | ' + ' | '.join(label for _, label in TRAIN_STAT_KEYS) + ' |')
     add('|---:|' + '---:|' * len(TRAIN_STAT_KEYS))
@@ -1249,6 +1262,23 @@ def render(run_dir, date_str):
         add('')
         add(f'> 产物：`{ZCONTRACT_JSON}`（只读探针 '
             '`me_rssm/sanity/probe_semA_zcontract.py`，未改权重、未启动训练）。')
+        add('')
+    else:
+        # Silently dropping the section left a numbering GAP (72.9 -> 72.11) and
+        # said nothing about why the train/val z-contract reconciliation is
+        # absent. Neither is acceptable in a record whose whole point is that a
+        # missing reading is visible: it also matters more for A2, whose live
+        # z-contract question ("does the gap come from sampling z?") is exactly
+        # what this probe answers.
+        add('### 72.10 z 契约对账（训练采样 z vs 部署均值 z，只读）')
+        add('')
+        add(FILL.format(f'z 契约对账（缺 {ZCONTRACT_JSON}；只读探针 '
+                        f'me_rssm/sanity/probe_semA_zcontract.py）'))
+        add('')
+        add('> **该缺口的含义**：§72.10 是在**部署契约**（`mu_q`）下读 M1/M3/M4、'
+            '而门槛先在 **train 契约**（`mu_q + sigma*eps`）下标定这一错配的'
+            '实测对账。缺它时，两契约之间是否有差异**未被测量**——'
+            '不得据此宣称契约无影响，也不得把它读成门禁读数。')
         add('')
 
     add('### 72.11 本节边界')
