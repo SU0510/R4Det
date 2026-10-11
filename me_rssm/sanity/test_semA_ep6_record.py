@@ -862,6 +862,49 @@ class TestSplitAttribution(unittest.TestCase):
         self.assertNotIn('0.9235', src)
         self.assertIn('A 的同口径参照**不可用**', src)
 
+    def test_class_coverage_is_reported_as_the_prereg_requires(self):
+        """§5 requires the window's class coverage as a REPORT field.
+
+        The record never emitted it, so a class that appears in only a few of
+        the frozen clips (Ped in the val contract) was invisible to whoever
+        read the archive. The gate JSON has no per-channel occupation, but the
+        rank probe shares the frozen clip grid, so it is derivable.
+        """
+        val = [2, 2, 2, 1, 1, 3, 2, 2, 2, 2, 2, 3, 3, 4, 3, 1, 1, 2, 2, 2]
+        train = [3, 3, 3, 2, 1, 2, 2, 2, 1, 1, 1, 1, 1, 2, 3, 2, 2, 2, 2, 1]
+
+        def rows(occ):
+            return [{'index': 3 + 100 * i,
+                     'auc_mean_over_occupied_channels': 0.9,
+                     'gt_shuffle_auc': 0.47, 'max_gt_prob': 0.9,
+                     'recall_at_top_k_mean': 0.5,
+                     'occupied_channels': occ[i]} for i in range(20)]
+
+        cfg = '/x/..._semA2S_24e.py'
+        gate = _gate_payload()
+        gate['input_fingerprints']['config_path'] = cfg
+        self.fx.dump(verdict.GATE_JSON, gate)
+        idx = [3 + 100 * i for i in range(20)]
+        self.fx.dump(verdict.A2_RANK_VAL,
+                     {'config': cfg, 'n_clips': 20, 'indices': idx,
+                      'per_clip': rows(val)})
+        self.fx.dump(verdict.A2_RANK_TRAIN,
+                     {'config': cfg, 'n_clips': 20, 'indices': idx,
+                      'per_clip': rows(train)})
+        got = record.class_coverage(self.fx.dir)
+        self.assertEqual(got['val']['hist'], {1: 4, 2: 11, 3: 4, 4: 1})
+        self.assertEqual(got['train']['hist'], {1: 7, 2: 9, 3: 4})
+        text = self.fx.render()
+        self.assertIn('类别覆盖', text)
+        self.assertIn('2 类 ×11', text)
+        self.assertIn('1 类 ×7', text)
+        self.assertIn('不按类别剔除 clip', text)
+
+    def test_coverage_absent_is_not_invented(self):
+        """An A bundle has no rank artifact, so no coverage claim is made."""
+        self.assertIsNone(record.class_coverage(self.fx.dir))
+        self.assertNotIn('类别覆盖', self.fx.render())
+
     def test_generator_does_not_hard_code_the_published_readings(self):
         """Structural pin: the numbers must come from the bundle's JSON. If
         they were pasted as constants, an A2 draft would assert another run's

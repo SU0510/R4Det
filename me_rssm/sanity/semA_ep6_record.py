@@ -525,6 +525,37 @@ def a_rank_gap():
     return out
 
 
+def class_coverage(run_dir, a2=None):
+    """Per-clip class occupancy of the frozen window, or None.
+
+    §5's contract requires "类别覆盖作为**报告字段**给出" precisely because a
+    window with no clip of some class cannot support a class-specific claim
+    (Ped appears in only a few of the 20 clips). The gate JSON does not record
+    the per-channel occupation, but the rank probe's ``occupied_channels`` is
+    the same frozen clip grid, so the coverage is derivable for A2 arms.
+    """
+    if a2 is None:
+        a2 = verdict.a2_readings(run_dir)
+    if a2 is None:
+        return None
+    out = {}
+    for label, name in (('val', verdict.A2_RANK_VAL),
+                        ('train', verdict.A2_RANK_TRAIN)):
+        path = os.path.join(run_dir, name)
+        if not os.path.exists(path):
+            continue
+        rows = (load_json(path).get('per_clip') or [])
+        occ = [r.get('occupied_channels') for r in rows
+               if isinstance(r.get('occupied_channels'), int)]
+        if len(occ) != len(rows) or not occ:
+            continue
+        hist = {}
+        for value in occ:
+            hist[value] = hist.get(value, 0) + 1
+        out[label] = {'n': len(occ), 'hist': hist}
+    return out or None
+
+
 def watch_facts(run_dir):
     """(gate_ts, free_ts, done_ts, signal, exit_code) from the watchdog log."""
     path = os.path.join(run_dir, watch_log_name(run_dir))
@@ -1110,6 +1141,22 @@ def render(run_dir, date_str):
     # --- gate detail ------------------------------------------------------
     add('### 72.6 S1 门明细（逐 clip）')
     add('')
+    # §5 requires the window's class coverage as a REPORT field, not a
+    # selection rule: a window where some class appears in only a few clips
+    # cannot support a class-specific claim, and Ped is exactly that case.
+    cov = class_coverage(run_dir, a2)
+    if cov:
+        for label in ('val', 'train'):
+            if label not in cov:
+                continue
+            hist = ', '.join(f'{k} 类 ×{v}'
+                             for k, v in sorted(cov[label]['hist'].items()))
+            desc = {'val': 'val（冻结 20 clip）', 'train': 'train 同协议'}[label]
+            add(f'> **类别覆盖（{desc}，n={cov[label]["n"]}）**：'
+                f'每 clip 占用通道数分布 {hist}。**不按类别剔除 clip**'
+                f'（§5：覆盖是报告字段，不是选样条件）；某类只覆盖少数 clip 时，'
+                f'该类专属结论在 ep6 只能是**弱证据**。')
+        add('')
     m1_cells = [(c.get('index'), c.get('num_pos_cells'))
                 for c in (m1.get('per_clip') or [])
                 if c.get('num_pos_cells') is not None]
