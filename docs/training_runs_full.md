@@ -15101,6 +15101,59 @@ sample-specific 0.4207 / 特异占比 0.5276）。成因**不是**「归一化�
 **边界**：只读扫描；未改生成器、未改任何 JSON、未改门槛、未重跑 GPU 探针。
 未消费字段的**去留**（渲染 or 删除）是需要拍板的取舍，本次只记录。
 
+#### 73.6.27 `residual_class_map` 把 A2-R 的 **48 通道**残差**静默误读**为 4 类（2026-10-11，A2-R ep6 之前修复）
+
+**这是本代最严重的一处探针缺陷：它会让 A2-R 的 M4 门与预登记 S0-5 读数变成「像读数的垃圾」。**
+
+**两种合法宽度**。`Anchor3DHead._expand_cls_logit_residual`
+（`mmdet3d/models/dense_heads/anchor3d_head.py:213`）**同时接受**两种通道数：
+
+* `num_classes`（4）——候选 A 的 `per_class_slot`：fusion 只发 4 个类 logit，
+  由 head 按 `anchor_class_mapping` 表展开到 48；
+* `cls_out_channels`（48）——**A2-R 的 `anchor_slot`**：fusion 在**自己内部**就把
+  每个类广播到该类的全部 anchor 槽（`me_rssm/semantic_readout_rssm.py:505–518`），
+  送到 head 时已是 48，head 原样透传。
+
+**缺陷**。探针的 `residual_class_map()` 只做
+`_to_sem_grid(r[0]).reshape(num_classes, -1)`，**无条件假设 4 通道**。
+48 通道时它**不报错**（48 能被 4 整除），而是产生**12 倍**多的「格」：
+`.reshape(4, -1)` 把 12 个通道的显存量当成一个类轴，于是用**真实前景格号**去索引时，
+读到的是**别的通道**，类 c 的证据会被记到**别的类**头上。
+这正是本项目反复出现的失效模式：**形状合法、数值有限、无人报错**。
+
+**爆炸半径（A2-R 下会错、A2-S/A 下不会错）**：
+
+| 调用点 | 影响的读数 | 性质 |
+|---|---|---|
+| `probe_semreadout_ep6.py:657–658` | M4 `own_hit`、`donor_transfer` | **门（S1）** |
+| `probe_semA_m4floor.py:99,110` | `own_hit`、`residual_gap_fg_mean`、`residual_absmax_fg_mean`、**`frac_cells_residual_can_flip`** | **A2-R 预登记 S0-5（§5）** |
+
+**未受影响**：`head_swap_to_donor` 走 `head_scores_with_residual()`，把**原始**残差交给
+head，48 通道原样透传 ⇒ 该读数一直是正确的；`conv_cls` 侧（`class_scores_from_head`）
+本来就按 anchor 归约，也不受影响。
+
+**发现时点**：2026-10-11 ~16:10 UTC，A2-R 训练在 ep1 iter≈550。⇒ **ep6 只读电池尚未跑过**，
+没有任何 A2-R 读数是用坏公式算出来的，**不构成对任何已归档判定的重判**。
+
+**修复**：宽形态按 `class_scores_from_head` **同一条 max-over-anchor 规则**归约
+（否则残差与它所对比的 logits 会用两套聚合）；宽度不是 `num_classes` 整数倍时
+**显式抛错**——本缺陷的要害正是「沉默」。
+
+**测试**：`test_probe_semreadout_ep6.py` +3（现 43 条），其中
+`test_anchor_slot_is_not_the_narrow_reshape` 是**显式回归闸**：它复现修复前的误读
+（形状合法、证据落到 class 3 而非 class 1），而不是只断言形状/范围——
+只断言形状的话，坏答案照样能过。
+
+**验证 A2-S 不受影响（同 bundle 内部一致性）**：把 m4floor 逐 clip 表按 `cells` 加权
+重算 pooled `own_hit`，与探针的 `head_hit_residual_forced_max` **六位小数相同**
+（均 **0.690000**）。`×1e6` 会把 head 的 argmax 强制变成残差的 argmax，
+故两者相等**说明 4 通道下残差图被正确读出**。同一组数字也再次印证 §73.6.26 的聚合口径提示：
+**cell-pooled 0.690 vs clip-mean 0.770**，两者都对。
+
+**边界**：只动探针侧（`probe_semreadout_ep6.py` 一个函数 + 测试）；
+**未改模型、未改门槛、未改 JSON、未打断或重启 A2-R 训练**。
+该修复只影响**尚未产生**的 A2-R ep6 读数。
+
 
 ## 74. A2-S ep6 实际完成与进展核验（2026-10-11 15:39 UTC）
 

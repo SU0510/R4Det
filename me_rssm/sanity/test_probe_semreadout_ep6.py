@@ -174,6 +174,59 @@ class TestResidualClassMap(unittest.TestCase):
     def test_missing_residual_returns_none(self):
         self.assertIsNone(probe.residual_class_map({'residual': None}, C))
 
+    def test_anchor_slot_residual_reduces_by_max_over_anchors(self):
+        """A2-R names every conv_cls channel, so the wide form must reduce.
+
+        The head accepts both widths, so the probe sees 48 channels on the
+        ``anchor_slot`` arm against 4 on candidate A. Reading the wide form as
+        narrow cannot raise (``num_anchors * num_classes`` is divisible by
+        ``num_classes``), so it has to be reduced here by the same
+        max-over-anchor rule ``class_scores_from_head`` uses on the logits.
+        """
+        n_anchor = 3
+        residual = torch.zeros(n_anchor * C, W, H)
+        # class 2, anchor 1 carries the only evidence for its class; the other
+        # anchors of class 2 stay at zero, so max-over-anchor must pick 3.0.
+        residual[1 * C + 2, 7, 5] = 3.0     # head (w=7, h=5)
+        out = probe.residual_class_map({'residual': residual}, C)
+        self.assertEqual(tuple(out.shape), (H * W, C))
+        row = 5 * W + 7                     # sem (h=5, w=7)
+        self.assertAlmostEqual(float(out[row, 2]), 3.0, places=6)
+        self.assertAlmostEqual(float(out[row, 0]), 0.0, places=6)
+        self.assertAlmostEqual(float(out[row, 1]), 0.0, places=6)
+        self.assertAlmostEqual(float(out[row, 3]), 0.0, places=6)
+
+    def test_anchor_slot_is_not_the_narrow_reshape(self):
+        """Regression guard: the narrow reshape returns a DIFFERENT answer.
+
+        Reproduces the pre-fix behaviour explicitly. The narrow reading does
+        not raise and is perfectly well-formed -- it just has
+        ``channels / num_classes`` times too many cells, so a true cell index
+        selects the wrong channel and the evidence lands on the wrong class.
+        A shape or range assertion on the reduced reading alone would still
+        pass, so this test pins the misread itself.
+        """
+        n_anchor = 3
+        residual = torch.zeros(n_anchor * C, W, H)
+        # anchor 2, class 1 -> conv_cls channel 2*C + 1 = 9
+        residual[2 * C + 1, 7, 5] = 3.0
+        wide = probe.residual_class_map({'residual': residual}, C)
+        narrow = probe._to_sem_grid(residual).reshape(C, -1).permute(1, 0)
+        row = 5 * W + 7
+        self.assertEqual(narrow.shape[0], n_anchor * H * W,
+                         'the narrow reading is 3x too long, silently')
+        self.assertEqual(wide.shape[0], H * W)
+        self.assertAlmostEqual(float(wide[row, 1]), 3.0, places=6)
+        self.assertAlmostEqual(float(narrow[row, 1]), 0.0, places=6,
+                               msg='narrow reading loses the class-1 evidence')
+        self.assertAlmostEqual(float(narrow[row, 3]), 3.0, places=6,
+                               msg='narrow reading files it under class 3')
+
+    def test_channel_count_not_a_multiple_of_num_classes_raises(self):
+        """Silence is the failure mode: a bogus width must raise, not reshape."""
+        with self.assertRaises(ValueError):
+            probe.residual_class_map({'residual': torch.zeros(5, W, H)}, C)
+
 
 class TestHeadSwap(unittest.TestCase):
     """M4's head-level swap must change ONLY the class residual."""

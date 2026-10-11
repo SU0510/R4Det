@@ -305,12 +305,39 @@ def residual_class_map(run, num_classes):
 
     ``rssm_cls_logit_residual`` is handed to the head already transposed and
     validity-masked; the probe converts it back to the rasteriser's grid.
+
+    The channel axis has one of TWO legitimate widths, because the head accepts
+    both (``Anchor3DHead._expand_cls_logit_residual``):
+
+    * ``num_classes`` -- the candidate-A readout: one logit per class, which
+      the head expands through its ``anchor_class_mapping`` table;
+    * ``num_anchors * num_classes`` -- the A2-R ``anchor_slot`` readout: every
+      ``conv_cls`` channel is already named, so the head passes it through.
+
+    The wide form must be reduced with the SAME max-over-anchor rule as
+    ``class_scores_from_head``, or the residual would be aggregated differently
+    from the logits it is compared against. Reshaping the wide form as if it
+    were narrow does NOT raise -- ``num_anchors * num_classes`` is divisible by
+    ``num_classes`` -- it silently reinterprets ``num_anchors`` channels' worth
+    of memory as one class axis and returns numbers that look like readings and
+    are not. That would corrupt M4 (``own_hit`` / ``donor_transfer``) and
+    A2-R's pre-registered S0-5 ``frac_cells_residual_can_flip``.
     """
     r = run['residual']
     if r is None:
         return None
     r = r[None] if r.dim() == 3 else r
-    return _to_sem_grid(r[0]).reshape(num_classes, -1).permute(1, 0)
+    r = r[0]                                    # (C, Wh, Hh)
+    channels = r.shape[0]
+    if channels % num_classes:
+        raise ValueError(
+            'cls_logit_residual channels '
+            f'({channels}) must be num_classes ({num_classes}) or a multiple '
+            'of it (num_anchors * num_classes for the anchor_slot readout)')
+    if channels != num_classes:
+        n_anchor = channels // num_classes
+        r = r.reshape(n_anchor, num_classes, *r.shape[1:]).amax(dim=0)
+    return _to_sem_grid(r).reshape(num_classes, -1).permute(1, 0)
 
 
 def head_scores_with_residual(model, run, residual):

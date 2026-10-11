@@ -59,6 +59,13 @@
 - [ ] 上条 landmine 的去留需拍板：把 M4 门槛基数渲染进共用 M4 块 ⇒
   会**打破 A 的 §72 逐字节一致性**（需连同 A 归档一起改）；或维持现状只留记录。
   未改代码、未改门槛。
+- [x] **高优先级**：`residual_class_map` 对 A2-R 的 48 通道残差**静默误读**（训练记录 §73.6.27）。
+  会让 M4 门（`own_hit`/`donor_transfer`）与 A2-R 预登记 S0-5
+  `frac_cells_residual_can_flip` 变成垃圾数。已于 A2-R ep6 电池**之前**修复并加回归闸；
+  A2-S 经内部一致性验证不受影响（pooled own_hit == forced-max head hit = 0.690000）。
+- [ ] A2-R ep6 归档时须复核：`semA_m4floor_ep6.json` 的 `frac_cells_residual_can_flip`
+  与 A 的 0.2530 对比（预登记 §5 S0-5，只记录不设线）；并确认 ep6 电池用的是**修复后**的
+  `probe_semreadout_ep6.py`（看门狗已挂，跑的是工作树当前版本）。
 - [ ] 方法成功验收：zt 修复、z 排他性/同容量确定性对照、四类成熟稳定提升、匹配消融、多 seed。
   C/B/D 尚未正式验证。本次仅核查/记录，不启动训练。
 
