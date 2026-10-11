@@ -821,6 +821,35 @@ class TestSplitAttribution(unittest.TestCase):
         self.assertIsNone(record._diff(0.5, None))
         self.assertAlmostEqual(record._diff(0.6, 0.5), 0.1)
 
+    def test_a_missing_zcontract_does_not_suppress_the_attribution(self):
+        """The two blocks come from DIFFERENT probes and must fail separately.
+
+        An A2 bundle genuinely ships without semA_zcontract_ep6.json (the A2
+        watchdog never runs that probe), and the attribution used to be nested
+        inside the z-contract branch -- so on the real A2-S bundle the whole
+        line, including its explicit NOT MEASURED fallback, disappeared and the
+        draft said nothing about whether the train/val gap is the split, which
+        is that arm's own question. Verified against the real run dir before
+        the fix: no '来源归属' anywhere in the rendered section.
+        """
+        os.remove(os.path.join(self.fx.dir, record.ZCONTRACT_JSON))
+        text = self.fx.render()
+        self.assertIn('来源归属：NOT MEASURED', text)
+        self.assertIn('### 72.10', text)     # the stub is still numbered
+
+    def test_the_attribution_table_survives_a_missing_zcontract(self):
+        """Same independence, positive branch: a bundle WITH the split probes
+        must still print their table when the z-contract artifact is absent."""
+        self._splitprobe('semA_splitprobe_val_full_n20.json',
+                         0.128, 0.0417, 0.1173, 0.1375, 20)
+        self._splitprobe('semA_splitprobe_train_full_n20.json',
+                         0.4739, 0.4167, 0.0112, -0.05, 20)
+        os.remove(os.path.join(self.fx.dir, record.ZCONTRACT_JSON))
+        text = self.fx.render()
+        self.assertIn('来源归属（只读补测，n=20 / 20）', text)
+        self.assertIn('0.4739', text)
+        self.assertNotIn('来源归属：NOT MEASURED', text)
+
     def test_a2_watchdog_shape_yields_not_measured(self):
         """Pin the ACTUAL A2 watchdog output shape.
 

@@ -502,7 +502,45 @@ def split_attribution(run_dir):
     return None
 
 
-# The reference arm the A2 drafts compare their train/val rank gap against.
+def _render_split_attribution(attrib, add):
+    """Emit the split-vs-BN attribution block (or its explicit NOT MEASURED).
+
+    Extracted so the SAME text is produced in both render locations: A's
+    in-section placement (unchanged, so its archived section 72 re-renders
+    byte-identically) and the standalone fallback used when the z-contract
+    section itself degrades to a FILL stub. Duplicating the body would let the
+    two drift apart, which is the defect class this generator exists to stop.
+    """
+    if attrib:
+        sv, st = attrib['splits']['val'], attrib['splits']['train']
+        add(f'**来源归属（只读补测，n={attrib["n"]["val"]} / '
+            f'{attrib["n"]["train"]}）**：把 z 契约与 eval 模式都钉死后'
+            f'**只换数据 split**——')
+        add('')
+        add('| split | `thr50` | `hit@1` | 只切 z 路径 4 个 BN 的 Δ`thr50` | '
+            'Δ`hit@1` |')
+        add('|---|---:|---:|---:|---:|')
+        add(f'| train（拟合过） | **{num(st["eval_thr50"])}** | '
+            f'**{num(st["eval_hit1"])}** | '
+            f'{signed(st["bn_delta_thr50"])} | '
+            f'{signed(st["bn_delta_hit1"])} |')
+        add(f'| val（留出） | **{num(sv["eval_thr50"])}** | '
+            f'**{num(sv["eval_hit1"])}** | '
+            f'{signed(sv["bn_delta_thr50"])} | '
+            f'{signed(sv["bn_delta_hit1"])} |')
+        add('')
+        gap_t = _diff(st['eval_thr50'], sv['eval_thr50'])
+        gap_h = _diff(st['eval_hit1'], sv['eval_hit1'])
+        add(f'⇒ 该差距**主要来自数据 split**（thr50 {signed(gap_t)}、'
+            f'hit@1 {signed(gap_h)}），归一化模式是**次要**项。'
+            f'即：train 侧 `stat_sem_*` 是**拟合内**读数，不能当作'
+            f'同一模型在另一口径下的同量测量。')
+        add('')
+    else:
+        add('**来源归属：NOT MEASURED（本包无 split 对照产物）。** '
+            '本节只测得「契约错配不是原因」，**未**测量 split 与 BN 模式'
+            '各占多少；不得据此断言差距来自泛化。')
+        add('')
 # Section 72.11 asserts "未手抄任何读数", so these must NOT be typed constants:
 # they are read from A's own archive, which is the run whose gap the sentence
 # names. When that archive is absent the caller drops the comparison entirely
@@ -1549,37 +1587,7 @@ def render(run_dir, date_str):
         # the eval mode and varying the DATA SPLIT alone. Rendering that answer
         # only when THIS bundle carries the artifact keeps the section from
         # inheriting a number it never measured.
-        attrib = split_attribution(run_dir)
-        if attrib:
-            sv, st = attrib['splits']['val'], attrib['splits']['train']
-            add(f'**来源归属（只读补测，n={attrib["n"]["val"]} / '
-                f'{attrib["n"]["train"]}）**：把 z 契约与 eval 模式都钉死后'
-                f'**只换数据 split**——')
-            add('')
-            add('| split | `thr50` | `hit@1` | 只切 z 路径 4 个 BN 的 Δ`thr50` | '
-                'Δ`hit@1` |')
-            add('|---|---:|---:|---:|---:|')
-            add(f'| train（拟合过） | **{num(st["eval_thr50"])}** | '
-                f'**{num(st["eval_hit1"])}** | '
-                f'{signed(st["bn_delta_thr50"])} | '
-                f'{signed(st["bn_delta_hit1"])} |')
-            add(f'| val（留出） | **{num(sv["eval_thr50"])}** | '
-                f'**{num(sv["eval_hit1"])}** | '
-                f'{signed(sv["bn_delta_thr50"])} | '
-                f'{signed(sv["bn_delta_hit1"])} |')
-            add('')
-            gap_t = _diff(st['eval_thr50'], sv['eval_thr50'])
-            gap_h = _diff(st['eval_hit1'], sv['eval_hit1'])
-            add(f'⇒ 该差距**主要来自数据 split**（thr50 {signed(gap_t)}、'
-                f'hit@1 {signed(gap_h)}），归一化模式是**次要**项。'
-                f'即：train 侧 `stat_sem_*` 是**拟合内**读数，不能当作'
-                f'同一模型在另一口径下的同量测量。')
-            add('')
-        else:
-            add('**来源归属：NOT MEASURED（本包无 split 对照产物）。** '
-                '本节只测得「契约错配不是原因」，**未**测量 split 与 BN 模式'
-                '各占多少；不得据此断言差距来自泛化。')
-            add('')
+        _render_split_attribution(split_attribution(run_dir), add)
         add(f'> 产物：`{ZCONTRACT_JSON}`（只读探针 '
             '`me_rssm/sanity/probe_semA_zcontract.py`，未改权重、未启动训练）。')
         add('')
@@ -1599,6 +1607,26 @@ def render(run_dir, date_str):
             '而门槛先在 **train 契约**（`mu_q + sigma*eps`）下标定这一错配的'
             '实测对账。缺它时，两契约之间是否有差异**未被测量**——'
             '不得据此宣称契约无影响，也不得把它读成门禁读数。')
+        add('')
+        add('> 注意：本条只说明**契约错配未被测量**；下一条「来源归属」用的'
+            '是另一套产物（split 对照探针），二者互相独立，缺一不得掩盖另一。')
+        add('')
+
+    # Source attribution is written by a DIFFERENT probe than the z-contract
+    # reconciliation above, so when that section is rendered as a FILL stub
+    # (an A2 bundle really does ship without semA_zcontract_ep6.json -- the A2
+    # watchdog never runs that probe) the attribution must NOT be suppressed
+    # with it. Nesting it inside the zcontract branch made the whole line --
+    # including its explicit NOT MEASURED fallback -- silently disappear, so
+    # the A2 draft said nothing at all about whether the train/val gap is the
+    # split, which is that arm's own question. When the z-contract section IS
+    # present the attribution keeps its original in-section placement, so A's
+    # archived section 72 stays byte-identical.
+    if not os.path.exists(zc_path):
+        add('##### 来源归属（split 对照探针，独立于上条）')
+        add('')
+        attrib = split_attribution(run_dir)
+        _render_split_attribution(attrib, add)
         add('')
 
     add('### 72.11 本节边界')
