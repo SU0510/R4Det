@@ -836,10 +836,36 @@ class TestSplitAttribution(unittest.TestCase):
         self.assertIsNone(record.split_attribution(self.fx.dir))
         self.assertIn('来源归属：NOT MEASURED', self.fx.render())
 
+    def test_a_reference_gap_is_derived_not_typed(self):
+        """§72.11 promises "未手抄任何读数" -- the A comparison was typed.
+
+        It now comes from A's own archive, computed by the same code path as
+        the arm under test. A typed constant would keep asserting a stale gap
+        after A's bundle is re-probed, and would assert one for a unit whose
+        reference was never measured.
+        """
+        source = _read('me_rssm/sanity/semA_ep6_record.py')
+        for literal in ('0.9994', '0.9235', '0.0759'):
+            self.assertNotIn(literal, source)
+        got = record.a_rank_gap()
+        self.assertIsNotNone(got)
+        self.assertEqual(got['val']['n'], 20)
+        self.assertAlmostEqual(got['val']['auc'], 0.9235, 4)
+        self.assertAlmostEqual(got['train']['auc'], 0.9994, 4)
+        self.assertAlmostEqual(got['train']['recall_median'], 0.3333, 4)
+
+    def test_absent_a_reference_is_reported_rather_than_quoted(self):
+        """If A's archive is unreadable the contrast must be dropped, not
+        silently quoted -- the sentence would otherwise assert a gap for a
+        reference that was never measured."""
+        src = _read('me_rssm/sanity/semA_ep6_record.py')
+        self.assertNotIn('0.9235', src)
+        self.assertIn('A 的同口径参照**不可用**', src)
+
     def test_generator_does_not_hard_code_the_published_readings(self):
         """Structural pin: the numbers must come from the bundle's JSON. If
-        they were pasted as constants, an A2 draft would assert A's split
-        result for a run that never measured it."""
+        they were pasted as constants, an A2 draft would assert another run's
+        split result for a bundle that never measured it."""
         source = _read('me_rssm/sanity/semA_ep6_record.py')
         for literal in ('0.4739', '0.1280', '0.4167', '0.0417', '0.3459'):
             self.assertNotIn(literal, source)

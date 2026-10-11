@@ -493,6 +493,38 @@ def split_attribution(run_dir):
     return None
 
 
+# The reference arm the A2 drafts compare their train/val rank gap against.
+# Section 72.11 asserts "未手抄任何读数", so these must NOT be typed constants:
+# they are read from A's own archive, which is the run whose gap the sentence
+# names. When that archive is absent the caller drops the comparison entirely
+# rather than quoting a number it cannot substantiate.
+A_REFERENCE_RUN = DEFAULT_RUN
+
+
+def a_rank_gap():
+    """A's own train/val rank gap, or None when A's archive is unreadable.
+
+    Returns {'train': {...}, 'val': {...}} with the same aggregates the A2
+    contrast table uses, so both sides are computed by one code path.
+    """
+    out = {}
+    for label, name in (('train', verdict.A2_RANK_TRAIN),
+                        ('val', verdict.A2_RANK_VAL)):
+        path = os.path.join(A_REFERENCE_RUN, name)
+        if not os.path.exists(path):
+            return None
+        payload = load_json(path)
+        rows = payload.get('per_clip') or []
+        if not rows:
+            return None
+        out[label] = {
+            'n': len(rows),
+            'auc': verdict._mean(rows, 'auc_mean_over_occupied_channels'),
+            'recall_median': verdict._median(rows, 'recall_at_top_k_mean'),
+        }
+    return out
+
+
 def watch_facts(run_dir):
     """(gate_ts, free_ts, done_ts, signal, exit_code) from the watchdog log."""
     path = os.path.join(run_dir, watch_log_name(run_dir))
@@ -787,11 +819,31 @@ def render(run_dir, date_str):
                     and va['recall_median'] is not None):
                 gap_rec = tr['recall_median'] - va['recall_median']
             add(f'> train−val 差：`auc` **{signed(gap_auc)}**、'
-                f'`recall@top-k` 中位 **{signed(gap_rec)}**。'
-                f'A 的同口径差为 `auc` 0.9994−0.9235 = **+0.0759**、'
-                f'`recall@top-k` 中位 0.3333−0.0000 = **+0.3333**'
-                f'（A 的 val 端只有 20 clip、其中 11 个为 0）。'
-                f'本行只作机制定位，**不是门槛**。')
+                f'`recall@top-k` 中位 **{signed(gap_rec)}**。')
+            # The A reference is DERIVED from A's own archive: §72.11 promises
+            # no hand-transcribed reading, and a typed constant would silently
+            # keep asserting a stale gap (or assert one for a bundle whose
+            # reference was never measured).
+            ref = a_rank_gap()
+            if ref:
+                ra = None
+                if (ref['train']['auc'] is not None
+                        and ref['val']['auc'] is not None):
+                    ra = ref['train']['auc'] - ref['val']['auc']
+                rr = None
+                if (ref['train']['recall_median'] is not None
+                        and ref['val']['recall_median'] is not None):
+                    rr = (ref['train']['recall_median']
+                          - ref['val']['recall_median'])
+                add(f'> A 的同口径差为 `auc` {num(ref["train"]["auc"])}−'
+                    f'{num(ref["val"]["auc"])} = **{signed(ra)}**、'
+                    f'`recall@top-k` 中位 {num(ref["train"]["recall_median"])}−'
+                    f'{num(ref["val"]["recall_median"])} = **{signed(rr)}**'
+                    f'（A 的 val 端 n={ref["val"]["n"]}）。')
+            else:
+                add('> A 的同口径参照**不可用**（A 的归档排序产物缺一侧）；'
+                    '故本段只报本臂自身的 train−val 差，不与 A 并列。')
+            add('> 本行只作机制定位，**不是门槛**。')
         else:
             add(FILL.format('A2 train/val 排序对照 '
                             f'（{verdict.A2_RANK_TRAIN}）'))
