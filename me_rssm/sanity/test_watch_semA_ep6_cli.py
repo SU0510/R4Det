@@ -450,6 +450,43 @@ class TestA2WatchdogCoversTheWholeBundle(unittest.TestCase):
             self.assertEqual(got, GATE_CLIP_PLAN[arm],
                              f'{arm} gate clip plan drifted: {got}')
 
+    def test_no_artifact_is_produced_twice(self):
+        """Every JSON the battery writes must be written exactly once.
+
+        The A2 watchdog used to call probe_z_utilization_standard.py five times
+        for three distinct outputs -- w3 and w100 each ran twice with identical
+        params on a different GPU (section 73.6.22). The probe seeds torch and
+        numpy, so the second pass only overwrote an identical file; the cost was
+        one wasted forward rollout per duplicate. Counting invocations catches
+        that class of copy-paste accumulation without depending on which script
+        happens to be duplicated.
+        """
+        for arm, rel in WATCHDOGS.items():
+            seen = {}
+            for argv in watchdog_commands(rel):
+                out = argv[argv.index('--output') + 1] if '--output' in argv else None
+                if out:
+                    seen.setdefault(out, []).append(argv[1])
+            # Expand $WORK_DIR-prefixed outputs to their basenames.
+            dupes = {os.path.basename(k): v for k, v in seen.items()
+                     if len(v) > 1}
+            self.assertEqual(dupes, {}, f'{arm} writes the same JSON twice: {dupes}')
+
+    def test_bnmode_uses_the_oom_safe_batch_size(self):
+        """probe_semA_bnmode.py defaults to --batch-size 4, which OOM'd on the
+        first A2-S ep6 run (CUDA OOM in rssm_fusion.kl_loss, 22.6 GiB already
+        allocated). A's archived reading used batch size 2, which is also the
+        only cross-generation-comparable setting: BN train() statistics are
+        estimated over the batch dimension."""
+        for arm, rel in WATCHDOGS.items():
+            matches = [a for a in watchdog_commands(rel)
+                       if a[1] == 'me_rssm/sanity/probe_semA_bnmode.py']
+            if not matches:
+                continue          # A's script predates this probe entirely
+            argv = matches[0]
+            self.assertEqual(argv[argv.index('--batch-size') + 1], '2',
+                             f'{arm} bnmode batch size drifted')
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

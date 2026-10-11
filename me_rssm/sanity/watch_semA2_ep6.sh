@@ -116,37 +116,30 @@ CUDA_VISIBLE_DEVICES=6 python me_rssm/sanity/probe_semA_m4floor.py \
   --output "$WORK_DIR/semA_m4floor_ep6.json" >> "$WATCH_LOG" 2>&1
 
 # --- split attribution (unchanged from A; needed for cross-generation) ---
+# --batch-size 2 (NOT the tool default of 4): the four-arm loop holds every
+# arm's activation graph while it rolls a 10-frame sequence out, and at batch
+# 4 the first A2-S ep6 run died with CUDA OOM inside rssm_fusion.kl_loss
+# (GPU 0, 210 MiB requested, 22.6 GiB already allocated). A's archived run
+# used batch size 2, so this also keeps the reading cross-generation
+# comparable -- at batch size 4 the BN train() statistic is estimated over a
+# different batch dimension, i.e. it would not even be the same reading.
 CUDA_VISIBLE_DEVICES=6 python me_rssm/sanity/probe_semA_bnmode.py \
   --config "$CFG" --checkpoint "$CKPT" \
-  --start-index 3 --stride 100 --limit 20 \
+  --start-index 3 --stride 100 --limit 20 --batch-size 2 \
   --output "$WORK_DIR/semA_bnmode_ep6.json" >> "$WATCH_LOG" 2>&1
 
 # --- family-standard counterfactual readout (cross-generation comparison) -
-CUDA_VISIBLE_DEVICES=7 python me_rssm/sanity/probe_z_utilization_standard.py \
-  --config "$CFG" --checkpoint "$CKPT" \
-  --start-index 3 --limit 4 --batch-size 4 --shuffle-offset 2 \
-  --output "$WORK_DIR/z_util_std_ep6_w3.json" >> "$WATCH_LOG" 2>&1
-CUDA_VISIBLE_DEVICES=7 python me_rssm/sanity/probe_z_utilization_standard.py \
-  --config "$CFG" --checkpoint "$CKPT" \
-  --start-index 100 --limit 4 --batch-size 4 --shuffle-offset 2 \
-  --output "$WORK_DIR/z_util_std_ep6_w100.json" >> "$WATCH_LOG" 2>&1
-
-# --- A2-R only: does writing all 48 channels raise the flip fraction? -----
-if [ "$ARM" = "A2R" ]; then
-  CUDA_VISIBLE_DEVICES=5 python me_rssm/sanity/probe_semA_rank.py \
-    --config "$CFG" --checkpoint "$CKPT" \
-    --start-index 3 --stride 100 --limit 20 \
-    --output "$WORK_DIR/semA_rank_val_ep6_a2r.json" >> "$WATCH_LOG" 2>&1
-fi
-
-# --- family-standard evidence artifacts the verdict/record tools require ----
-# CORRECTION (2026-10-11): the first version of this watchdog stopped after the
-# A2-specific probes and therefore did NOT produce the four artifacts that
-# `semA_ep6_verdict.py` lists as required evidence (three z-utilization windows
-# + one posterior-source attribution), nor did it run the verdict/record tools.
-# The ep6 bundle would have been flagged INCOMPLETE. These blocks restore the
-# exact A-family commands (same windows, same offsets, same scoring) BEFORE the
-# verdict is read, so the bundle stays cross-generation comparable.
+#
+# CORRECTION (2026-10-11, section 73.6.22): the first version of this
+# watchdog stopped after the A2-specific probes and therefore did NOT produce
+# the four artifacts that `semA_ep6_verdict.py` lists as required evidence
+# (three z-utilization windows + one posterior-source attribution), nor did it
+# run the verdict/record tools; the ep6 bundle would have been flagged
+# INCOMPLETE. A later fix appended the A-family command block, which left
+# w3/w100 running TWICE each (identical params, different GPU device) -- a
+# pure waste of a forward rollout per duplicate. The redundant earlier pair has
+# now been deleted; these three windows plus the source probe are the single
+# surviving definition, with the exact A-family windows/offsets/scoring.
 CUDA_VISIBLE_DEVICES=6 python me_rssm/sanity/probe_z_utilization_standard.py \
   --config "$CFG" --checkpoint "$CKPT" \
   --start-index 3 --limit 4 --batch-size 4 --shuffle-offset 2 \
