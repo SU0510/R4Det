@@ -42,6 +42,17 @@ def _load(name, rel):
     return module
 
 
+def _read(rel):
+    """Read a repo file as text (used to pin *structural* properties).
+
+    Some invariants cannot be observed from a rendered section -- e.g. "the
+    train-caliber reading is derived from the log instead of pasted as a
+    constant". Those are pinned by reading the generator source itself.
+    """
+    with open(os.path.join(_REPO, rel), encoding='utf-8') as handle:
+        return handle.read()
+
+
 record = _load('record_ep6', 'me_rssm/sanity/semA_ep6_record.py')
 verdict = record.verdict
 
@@ -120,6 +131,22 @@ class _Fixture:
         self.dump(verdict.GATE_JSON, gate)
         for (_, start, name) in record.WINDOWS:
             self.dump(name, _z_util(range(start, start + 2)))
+        self.dump(record.ZCONTRACT_JSON, {
+            'probe': 'candidate A z-contract reconciliation (read-only)',
+            'indices': [3, 203],
+            'arms': {
+                'deploy_mu_q': {
+                    'mean_thr50': 0.1167, 'mean_hit1': 0.0833,
+                    'mean_hit1_excess_over_chance': 0.0833, 'per_clip': []},
+                'train_sampled_z': {
+                    'mean_thr50': 0.1167, 'mean_hit1': 0.0833,
+                    'mean_hit1_excess_over_chance': 0.0833, 'per_clip': []},
+            },
+            'intervention_check': [
+                {'index': 3, 'rel_delta_z': 0.3535,
+                 'rel_delta_sem_map': 0.0132}],
+            'noise': [{'index': 3, 'sigma_over_mu': 0.3538}],
+        })
         self.dump(record.POST_SOURCE, {
             'indices': [3, 703, 1403],
             'fusion_class': 'SemanticReadoutRSSMFusion',
@@ -319,7 +346,7 @@ class TestRunFactDerivation(unittest.TestCase):
     """The §72.2 run facts are DERIVED from the run's own logs.
 
     They used to be ``<!-- FILL -->`` markers, i.e. hand-typed timestamps.
-    Section 72.10 promises "未手抄任何读数", and hand transcription is the
+    Section 72.11 promises "未手抄任何读数", and hand transcription is the
     error class this generator exists to remove -- so the values come from
     the artifacts whenever the logs are present.
     """
@@ -507,13 +534,20 @@ class TestM2PassIsStatedPositively(unittest.TestCase):
         self.fx = _Fixture()
         self.addCleanup(self.fx.close)
 
-    def test_m2_pass_keeps_the_probabilistic_claim_alive(self):
+    def test_m2_pass_keeps_the_probabilistic_claim_open(self):
+        """M2 passing must be stated SCOPED, not as an endorsement.
+
+        It used to read "未被本次测量否证", which invites the reader to treat
+        an untested claim as a surviving one. The correct statement is that
+        the claim is neither refuted nor confirmed: M2 only shows the head
+        depends on its trained input.
+        """
         gate = self.fx.load(verdict.GATE_JSON)
         gate['gates']['M3'] = False       # force NOT ALL PASS
         self.fx.dump(verdict.GATE_JSON, gate)
         text = self.fx.render()
         self.assertIn('M2 通过', text)
-        self.assertIn('未被本次测量否证', text)
+        self.assertIn('既未被否证、也未被证实', text)
         self.assertNotIn('这一宣称作废', text)
 
     def test_m2_fail_voids_the_probabilistic_claim(self):
@@ -522,8 +556,12 @@ class TestM2PassIsStatedPositively(unittest.TestCase):
         gate['M2_exclusivity']['h_relative'] = -0.1
         self.fx.dump(verdict.GATE_JSON, gate)
         text = self.fx.render()
-        self.assertIn('这一宣称作废', text)
-        self.assertNotIn('未被本次测量否证', text)
+        # Scope to §72.0: the scoped wording legitimately appears in §72.9's
+        # archive-scope sentence in every variant, so a whole-document
+        # assertNotIn would be asserting the wrong thing.
+        section = text.split('### 72.0')[1].split('### 72.1')[0]
+        self.assertIn('这一宣称作废', section)
+        self.assertNotIn('既未被否证、也未被证实', section)
 
 
 class TestClipWeightCaveat(unittest.TestCase):
@@ -583,6 +621,123 @@ class TestNegativeArchiveNamesItsReasons(unittest.TestCase):
         self.fx.dump(verdict.GATE_JSON, gate)
         text = self.fx.render()
         self.assertIn('不是「z 无信息」', text)
+
+
+class TestZContractBlock(unittest.TestCase):
+    """Section 72.10 records the train-vs-deploy z contract reconciliation.
+
+    The archive audit found the gate compared a deployment-contract reading
+    against training-calibrated bars. The block must show BOTH contracts AND
+    must carry the intervention check -- two identical arms are otherwise
+    ambiguous between "the contract makes no difference" and "the switch did
+    nothing", which are opposite conclusions from the same numbers.
+    """
+
+    def setUp(self):
+        self.fx = _Fixture()
+        self.addCleanup(self.fx.close)
+
+    def test_block_renders_both_arms(self):
+        text = self.fx.render()
+        self.assertIn('### 72.10 z 契约对账', text)
+        self.assertIn('部署（`mu_q`', text)
+        self.assertIn('训练（`mu_q + sigma*eps`）', text)
+
+    def test_intervention_check_is_reported(self):
+        text = self.fx.render()
+        self.assertIn('干预检查', text)
+        self.assertIn('确实改变了 z', text)
+
+    def test_noise_ratio_is_reported(self):
+        self.assertIn('噪声占比', self.fx.render())
+
+    def test_missing_artifact_omits_the_block_without_crashing(self):
+        os.remove(os.path.join(self.fx.dir, record.ZCONTRACT_JSON))
+        text = self.fx.render()
+        self.assertNotIn('### 72.10 z 契约对账', text)
+
+
+class TestM2ClaimIsScoped(unittest.TestCase):
+    """M2 feeds an out-of-distribution input to a head trained on z only.
+
+    That makes M2 evidence the head depends on its trained input, NOT that z
+    is the sole carrier of the semantics. The prereg puts the real
+    z-exclusivity test in the C3 arm, which was never run.
+    """
+
+    def setUp(self):
+        self.fx = _Fixture()
+        self.addCleanup(self.fx.close)
+
+    def test_overclaim_is_refused(self):
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['gates']['M1'] = False
+        self.fx.dump(verdict.GATE_JSON, gate)
+        text = self.fx.render()
+        self.assertIn('不得据此宣称', text)
+        self.assertIn('C3', text)
+        self.assertIn('既未被否证、也未被证实', text)
+
+    def test_does_not_claim_z_is_the_only_source(self):
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['gates']['M1'] = False
+        self.fx.dump(verdict.GATE_JSON, gate)
+        text = self.fx.render()
+        self.assertNotIn('语义信号确实由 z 承载', text)
+
+
+class TestM1ExceptionIsCaliberIndependent(unittest.TestCase):
+    """The exception must be adjudicated under both calibers.
+
+    The 0.30/0.60 bars came from a TRAIN-side diagnostic (route-C) while the
+    gate reads VAL, so quoting only one side leaves the conclusion resting on
+    the caliber choice.
+    """
+
+    def setUp(self):
+        self.fx = _Fixture()
+        self.addCleanup(self.fx.close)
+
+    def test_train_caliber_is_derived_from_the_log_not_hardcoded(self):
+        src = _read('me_rssm/sanity/semA_ep6_record.py')
+        self.assertIn('def train_stat_means(', src)
+        self.assertIn('train_stat_means(run_dir).get(6)', src)
+        self.assertNotIn('TRAIN_STAT_EP6 = {', src)
+
+    def test_train_caliber_is_an_epoch_mean_not_the_last_value(self):
+        """§60.5/§61.5 report epoch means; using the last record would mix
+        conventions again. Pinned behaviourally, not just by the docstring.
+        """
+        self.assertIn('epoch MEAN', record.train_stat_means.__doc__)
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['gates']['M1'] = False       # the caliber table is M1-failure-only
+        self.fx.dump(verdict.GATE_JSON, gate)
+        with open(os.path.join(self.fx.dir, 'run.log.json'), 'a') as handle:
+            # A SECOND train record for epoch 6. The 72.5 curve (last-value
+            # convention) moves to 0.9, while the caliber table must stay at
+            # the epoch mean of {0.3, 0.9} = 0.6 for thr50.
+            handle.write(json.dumps({
+                'mode': 'train', 'epoch': 6, 'iter': 1900,
+                'time': 1.5, 'memory': 17106,
+                'stat_sem_hit1': 0.9, 'stat_sem_thr50': 0.9,
+                'loss_rssm_sem': 0.1, 'stat_cls_res_rms': 0.5,
+                'stat_mu_diff_sq': 0.2,
+            }) + '\n')
+        text = self.fx.render()
+        table = text.split('不依赖口径选择')[1].split('### 72.1')[0]
+        self.assertIn('| 0.6000 | 0.7500 |', table)   # epoch means, not last
+        self.assertNotIn('| 0.9000 |', table)        # not the last record
+
+    def test_both_calibers_are_shown(self):
+        gate = self.fx.load(verdict.GATE_JSON)
+        gate['gates']['M1'] = False
+        gate['M1_sem_head']['mean_thr50'] = 0.1167
+        gate['M1_sem_head']['mean_hit1'] = 0.0833
+        self.fx.dump(verdict.GATE_JSON, gate)
+        text = self.fx.render()
+        self.assertIn('不依赖口径选择', text)
+        self.assertIn('val 口径（本门实际读数）', text)
+        self.assertIn('train 口径', text)
 
 
 class TestNoS2Claim(unittest.TestCase):

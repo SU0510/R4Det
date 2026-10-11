@@ -139,8 +139,18 @@ def sample_current_gt(dataset, index):
 
 
 @torch.no_grad()
-def rollout(model, dataset, index, sem_input=None, use_residual=True):
-    """One val rollout of the current frame; returns everything M1-M4 need."""
+def rollout(model, dataset, index, sem_input=None, use_residual=True,
+            rssm_deterministic=None):
+    """One val rollout of the current frame; returns everything M1-M4 need.
+
+    ``rssm_deterministic`` defaults to ``None``, which leaves the detector's
+    own rule in force (``R4Det.extract_feat``: ``not self.training``, i.e. the
+    posterior MEAN in eval). Pass ``False`` to reproduce the TRAINING z
+    contract (``mu_q + sigma * eps``) inside the same eval-mode rollout --
+    the M1-M4 gates were read under the eval contract, and the training-time
+    ``stat_sem_*`` diagnostics under the sampled one, so the two are only
+    comparable once this is varied explicitly.
+    """
     fusion = model.temporal_fusion
     batch = dz.build_batch(dataset, [index], torch.cuda.current_device())
     points, img, metas, valid = dz.build_sequence_frames(batch)
@@ -157,14 +167,16 @@ def rollout(model, dataset, index, sem_input=None, use_residual=True):
             if valid[t].any():
                 model.extract_feat(
                     points[t], img[t], metas[t], is_valid_mask=valid[t],
-                    feat_or_dict=0, curr_frame_supervision=False)
+                    feat_or_dict=0, curr_frame_supervision=False,
+                    rssm_deterministic=rssm_deterministic)
             if (~valid[t]).any():
                 fusion.reset_for_samples(~valid[t])
         last_valid = valid[n - 2] if n >= 2 else torch.ones(
             1, dtype=torch.bool, device=img[n - 1].device)
         out = model.extract_feat(
             points[n - 1], img[n - 1], metas[n - 1],
-            is_valid_mask=last_valid, feat_or_dict=1)
+            is_valid_mask=last_valid, feat_or_dict=1,
+            rssm_deterministic=rssm_deterministic)
         residual = out.get('rssm_cls_logit_residual')
         sem_map = fusion.last_sem_map
         z_t = fusion.z_state

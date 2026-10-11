@@ -81,6 +81,7 @@ WINDOWS = (
     ('远距', 1800, 'z_util_std_ep6_w1800.json'),
 )
 POST_SOURCE = 'post_source_std_ep6_stride700.json'
+ZCONTRACT_JSON = 'semA_zcontract_ep6.json'
 WATCH_LOG = 'watch_semA_ep6.log'
 SIGNAL_NAMES = {1: 'SIGHUP', 2: 'SIGINT', 9: 'SIGKILL', 15: 'SIGTERM'}
 STDOUT_LOG = 'stdout.log'
@@ -150,6 +151,41 @@ def train_stats_by_epoch(run_dir):
     return by_epoch
 
 
+def train_stat_means(run_dir):
+    """{epoch: {'stat_sem_thr50': mean, 'stat_sem_hit1': mean}} over train recs.
+
+    ``train_stats_by_epoch`` keeps only the LAST record of each epoch, which is
+    what the section-72.5 curve reports. The calibration reading the M1 bars
+    came from (section 60.5/61.5) is an epoch MEAN over the split's records, so
+    the same-caliber counterpart has to be an epoch mean too -- taking the last
+    value would silently mix the two conventions again.
+    """
+    sums, counts = {}, {}
+    for path in sorted(glob.glob(os.path.join(run_dir, '*.log.json'))):
+        with open(path, encoding='utf-8') as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get('mode') != 'train' or rec.get('epoch') is None:
+                    continue
+                epoch = int(rec['epoch'])
+                for key in ('stat_sem_thr50', 'stat_sem_hit1'):
+                    value = rec.get(key)
+                    if isinstance(value, (int, float)):
+                        sums.setdefault(epoch, {}).setdefault(key, 0.0)
+                        counts.setdefault(epoch, {}).setdefault(key, 0)
+                        sums[epoch][key] += float(value)
+                        counts[epoch][key] += 1
+    return {epoch: {key: sums[epoch][key] / counts[epoch][key]
+                    for key in sums[epoch]}
+            for epoch in sums}
+
+
 def saved_epochs(run_dir):
     """Epochs with an actual epoch_<N>.pth on disk (checkpoint availability)."""
     out = []
@@ -164,7 +200,7 @@ def saved_epochs(run_dir):
 # --- run facts (wall-clock/log facts the evidence JSONs do not carry) ----
 #
 # These live in the run's own text logs, so they are DERIVED, not hand-filled:
-# section 72.10 claims "未手抄任何读数", and anchoring a hand-typed timestamp
+# section 72.11 claims "未手抄任何读数", and anchoring a hand-typed timestamp
 # is exactly the transcription surface this generator exists to remove. The
 # FILL fallback stays for a bundle whose logs are missing.
 
@@ -436,17 +472,87 @@ def render(run_dir, date_str):
     # "口径未校准", which is exactly the post-hoc escape the prereg forbids.
     if gates_payload is not None and gates.get('M1') is False:
         thr50_v = m1.get('mean_thr50')
+        hit1_v = m1.get('mean_hit1')
         if grid_limited:
             add('**§71.9.3(2) 例外条款：适用**（详见上文聚合判定）。')
         else:
-            add(f'**§71.9.3(2) 例外条款：不适用**——该条款要求 M1 '
-                f'*仅*在 full-res 原始 `hit@1` 上未过，而 `thr50` 与')
-            add(f'`hit1_excess_over_chance` 健康。实测 `thr50` '
-                f'**{num(thr50_v)}**（bar {num(verdict.M1_BAR_THR50, 2)}）与 '
-                f'`excess` **{num(mean_excess)}**（bar '
-                f'{num(verdict.M1_EXCESS_BAR, 4)}）**两项都未达线**，')
-            add('故 M1 是**真实未过**，不是跨网格口径造成的伪失败，')
-            add('不得以「口径未校准」为由豁免。')
+            add('**§71.9.3(2) 例外条款：不适用。** 该条款要求 M1 *仅*在 '
+                'full-res 原始 `hit@1` 上未过，而 `thr50` 与')
+            add('`hit1_excess_over_chance` 都健康（即「头确实找得到目标中心，'
+                '只是单格 argmax 跨不了网格」）。')
+            add('')
+            add('**该判定不依赖口径选择**，两种读法都不满足例外：')
+            add('')
+            # Pass/fail labels are DERIVED from the numbers in the same row,
+            # never typed. A hand-written "未过" next to a passing number is
+            # exactly the transcription error this generator exists to
+            # remove -- and it would make the table contradict its own prose.
+            ep6_train = (train_stat_means(run_dir).get(6) or {})
+            t_thr = ep6_train.get('stat_sem_thr50')
+            t_hit = ep6_train.get('stat_sem_hit1')
+
+            def _kw(value, bar):
+                if not isinstance(value, (int, float)):
+                    return '读数缺失'
+                return '**过**' if value >= bar else '未过'
+
+            add('| 读法 | `thr50` | `hit@1` | vs 门槛 |')
+            add('|---|---:|---:|---|')
+            add(f'| 预登记的 val 口径（本门实际读数） | '
+                f'{num(thr50_v)} | {num(hit1_v)} | '
+                f'`thr50` {_kw(thr50_v, verdict.M1_BAR_THR50)} '
+                f'{num(verdict.M1_BAR_THR50, 2)}、'
+                f'`hit@1` {_kw(hit1_v, verdict.M1_BAR_HIT1)} '
+                f'{num(verdict.M1_BAR_HIT1, 2)} |')
+            add(f'| A 自身 train 口径（`stat_sem_*` ep6 的 '
+                f'**epoch 均值**） | '
+                f'{num(t_thr)} | {num(t_hit)} | '
+                f'`thr50` {_kw(t_thr, verdict.M1_BAR_THR50)} '
+                f'{num(verdict.M1_BAR_THR50, 2)}、'
+                f'`hit@1` {_kw(t_hit, verdict.M1_BAR_HIT1)} '
+                f'{num(verdict.M1_BAR_HIT1, 2)} |')
+            add('')
+            # The gate's operative caliber is val (that is where §5
+            # pre-registers M1). The train side is a robustness check, so it
+            # can only ever *reinforce* the val verdict -- it is never allowed
+            # to be the reason the exception is refused.
+            excess_ok_val = (isinstance(mean_excess, (int, float))
+                             and mean_excess >= verdict.M1_EXCESS_BAR)
+            thr_ok_val = (isinstance(thr50_v, (int, float))
+                          and thr50_v >= verdict.M1_BAR_THR50)
+            add(f'例外条款要求「excess 健康」，val 口径下的对应量是 '
+                f'{num(mean_excess)}（bar {num(verdict.M1_EXCESS_BAR, 4)}）；'
+                f'该口径下 `thr50` 为 {num(thr50_v)}'
+                f'（bar {num(verdict.M1_BAR_THR50, 2)}）。')
+            if not thr_ok_val or not excess_ok_val:
+                add('**两项中至少一项未达线**，故 M1 是**真实未过**，'
+                    '不是跨网格口径造成的伪失败，不得以「口径未校准」豁免。')
+            else:
+                add('**该口径下两项均达线**，例外前提本应成立——'
+                    '此处的判定须以聚合判定段为准，不得据本表单独豁免。')
+            if isinstance(t_hit, (int, float)):
+                # excess = hit@1 - chance <= hit@1, so a train-side hit@1
+                # below the excess bar is a *conservative* bound showing the
+                # train caliber cannot rescue the exception either.
+                add('')
+                add(f'旁证（不是判据）：train 口径只记 `stat_sem_hit1`、'
+                    f'未单独记 excess，而 `excess <= hit@1`，'
+                    f'故 hit@1 = {num(t_hit)} 是该口径下 excess 的**上界**。')
+                if t_hit < verdict.M1_EXCESS_BAR:
+                    add(f'该上界 < bar {num(verdict.M1_EXCESS_BAR, 4)} ⇒ '
+                        f'train 口径同样不满足例外，**该结论不建立在口径选择上**。')
+                else:
+                    add(f'该上界 ≥ bar {num(verdict.M1_EXCESS_BAR, 4)} ⇒ '
+                        f'train 口径的上界不足以排除该口径下的例外，'
+                        f'故**只有 val 口径的读数构成判定依据**。')
+            add('')
+            add('> **口径出处须与上表并读**（AGENTS 记录纪律）：'
+                '`0.30 / 0.60` 这组门槛的先例 §59 route-C 报的是'
+                '**train 侧 epoch 均值**（§60.5/§61.5，38 条 train 记录），'
+                '而本门按 §5 预登记在 **val** 上测量，两者之间隔了一层清样；'
+                '上表因此把两种读法并列，而不是拿 val 数字直接比 train 门槛。')
+            add('> 上表两种读法是**稳健性并列**：val 是预登记的判据口径，'
+                'train 只是旁证。若两者结论不一致，以 val 为准并显式记录分歧。')
         add('')
 
     if not evidence_ok:
@@ -469,13 +575,19 @@ def render(run_dir, date_str):
             add('M2 未过 ⇒ **“概率状态”这一宣称作废**：语义来自 h/观测，')
             add('z 只是被穿过的通路。')
         else:
-            add('**M2 通过 ⇒ “概率状态”这一主张未被本次测量否证。**')
+            add('**M2 通过：语义头对输入**敏感**，但它的证据强度到此为止。**')
             add(f'h 臂与 feat 臂的 `thr50` 均为 '
                 f'{num(m2.get("h_mean_thr50"))}/'
                 f'{num(m2.get("feat_mean_thr50"))}，而 z 臂为 '
-                f'{num(m2.get("z_mean_thr50"))}：语义信号确实由 z 承载，')
-            add('不是从 h 或当前观测穿透过来的。该主张的瓶颈在读出与任务')
-            add('收益（M1/M3/M4），不在「z 有没有信息」这一步。')
+                f'{num(m2.get("z_mean_thr50"))}。')
+            add('')
+            add('> **不得据此宣称「语义只存在于 z」**：M2 是拿**只被 z 监督过**的 '
+                'head 去喂 h/feat，属于分布外输入——即使 h 或观测里含有同样的'
+                '对象信息，这个 head 也读不出来。因此 M2 只证明'
+                '「该 head 依赖它训练时的输入」，**不能证明** z 是唯一信息源。')
+            add('> 预登记把真正的 z 排他性检验放在 **C3 臂**（`sem_head_input='
+                '\'feat\'` 从零训练、同日程对照），本次**未执行**——'
+                '故「概率状态」这一主张在本次测量中**既未被否证、也未被证实**。')
     add('')
 
     # --- config ----------------------------------------------------------
@@ -785,13 +897,85 @@ def render(run_dir, date_str):
         if reasons:
             add('   实测原因：' + '；'.join(reasons) + '。')
         add('   归档的是**本次候选 A 的读出/监督设计**，不是「z 无信息」'
-            '（M2 已证明 z 承载语义），也不是「所有语义监督/残差读出方向」'
+            '（M2 只证明该语义头依赖其训练输入；z 的排他性**既未被否证、'
+            '也未被证实**，见 §72.0 与 §71.9.17(3)），也不是'
+            '「所有语义监督/残差读出方向」'
             '（§7 只据此否定本设计，未否定候选 A/B 所代表的方向）。')
     add('2. 任意 Ped/Cyc 触到非劣线 ⇒ 停止，记为家族副作用第 6 次复现。')
     add('3. **不做**权重/KL 扫描，**不做** ep24 抢救，不靠放大系数救活机制。')
     add('')
 
-    add('### 72.10 本节边界')
+    # --- z-contract reconciliation ---------------------------------------
+    # Added after the archive audit found that M1/M3/M4 were read under the
+    # DEPLOYMENT z contract while the bars came from a TRAINING-contract
+    # diagnostic. The reconciliation probe re-reads the same checkpoint under
+    # both contracts, so the difference is measured instead of argued.
+    zc_path = os.path.join(run_dir, ZCONTRACT_JSON)
+    if os.path.exists(zc_path):
+        zc = load_json(zc_path)
+        arms = zc.get('arms') or {}
+        dep = arms.get('deploy_mu_q') or {}
+        trn = arms.get('train_sampled_z') or {}
+        add('### 72.10 z 契约对账（训练采样 z vs 部署均值 z，只读）')
+        add('')
+        add('归档审计发现：M1/M3/M4 是在**部署契约**下读的，而 `0.30/0.60` '
+            '门槛来自 **train 契约**下的诊断。两者差一个状态采样：')
+        add('')
+        add('```')
+        add('R4Det.extract_feat:  rssm_deterministic = not self.training')
+        add('rssm_fusion.forward:  z_t = mu_q if deterministic '
+            'else self.sample(mu_q, logstd_q)')
+        add('```')
+        add('')
+        add('即训练时语义头吃 `mu_q + sigma*eps`、eval 探针吃 `mu_q`。'
+            '故用同一 checkpoint、同一 val clip、同一评分函数，'
+            '只切换 z 契约重测一次：')
+        add('')
+        add('| z 契约 | `thr50` | `hit@1` | `hit1_excess_over_chance` |')
+        add('|---|---:|---:|---:|')
+        add(f'| 部署（`mu_q`，即 M1 实际读数） | '
+            f'{num(dep.get("mean_thr50"))} | {num(dep.get("mean_hit1"))} | '
+            f'{num(dep.get("mean_hit1_excess_over_chance"))} |')
+        add(f'| 训练（`mu_q + sigma*eps`） | '
+            f'{num(trn.get("mean_thr50"))} | {num(trn.get("mean_hit1"))} | '
+            f'{num(trn.get("mean_hit1_excess_over_chance"))} |')
+        add('')
+        add('**干预检查**（否则「两臂相同」既可能是契约真无影响，'
+            '也可能是切换没生效——结论相反、数字相同）：')
+        add('')
+        mv = zc.get('intervention_check') or []
+        rz = [m.get('rel_delta_z') for m in mv
+              if isinstance(m.get('rel_delta_z'), (int, float))]
+        rs = [m.get('rel_delta_sem_map') for m in mv
+              if isinstance(m.get('rel_delta_sem_map'), (int, float))]
+        add(f'* `z` 相对变化均值 **{pct(statistics.mean(rz), 3) if rz else "n/a"}**'
+            f' —— 契约切换**确实改变了 z**；')
+        add(f'* 语义热图相对变化均值 '
+            f'**{pct(statistics.mean(rs), 3) if rs else "n/a"}**'
+            f' —— 经 `sem_head` 后幅度被大幅吸收。')
+        add('')
+        nz = [n.get('sigma_over_mu') for n in (zc.get('noise') or [])
+              if isinstance(n.get('sigma_over_mu'), (int, float))]
+        if nz:
+            add(f'噪声占比 `sigma/mu`：均值 **{num(statistics.mean(nz))}**'
+                f'（min {num(min(nz))} / max {num(max(nz))}），'
+                f'即噪声项确实与被解释量同量级。')
+            add('')
+        d_thr, t_thr = dep.get('mean_thr50'), trn.get('mean_thr50')
+        delta = (t_thr - d_thr
+                 if (t_thr is not None and d_thr is not None) else None)
+        add('**结论**：契约切换确实移动了 z，但**两项门控读数完全不变**'
+            f'（Δ`thr50` = {signed(delta)}）——')
+        add('故 train/val 的 4.3× 差距**不能**由 z 采样解释，'
+            '该差距的来源仍未定位。这**不改变** S1 判定'
+            '（§72.0 已按两种口径分别核过），但把「契约错配」从'
+            '嫌疑名单上划掉。')
+        add('')
+        add(f'> 产物：`{ZCONTRACT_JSON}`（只读探针 '
+            '`me_rssm/sanity/probe_semA_zcontract.py`，未改权重、未启动训练）。')
+        add('')
+
+    add('### 72.11 本节边界')
     add('')
     add('* 无 S2 性能宣称；§72.0/72.4 的均值是 ep6 早期上下文。')
     add('* 未改模型、未改判据数值、未动重建目标/KL/权重/日程。')
