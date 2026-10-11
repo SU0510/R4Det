@@ -13383,6 +13383,77 @@ FAIL 是由 `donor_transfer` 0.3818 判的，与 `own_hit` 无关。归档中「
 新增 `test_probe_semA_m4floor.py`（8 条）与 `_Sel` 的向后兼容 `stride` 参数。
 §72 的 M4 判定（FAIL）**不变**，变的只是它的解释强度。
 
+#### 71.9.19 语义头 train/val 差距的来源定位：**split，不是 BN 模式**（只读，§72.10 遗留项闭环）
+
+§71.9.17 发现同一 checkpoint 在**训练口径**（train split、模型 train()）读
+**0.4923/0.3586**、在**部署口径**（val split、模型 eval()）读 **0.1167/0.0833**，
+差约 4.3×。§72.10 已排除 z 采样契约（切到 `mu_q+sigma*eps` 时 z 动 35.26%、
+两项读数 **Δ=0.0000**）。剩余混淆项有两个且此前**从未分开测量**：
+
+1. **数据 split**：train logger 读 train info、门控读 val info；
+2. **归一化模式**：train logger 在 `model.train()` 下，z 路径的 4 个 BN
+   （`temporal_fusion.encoder.0/1.bn`、`decoder.0/1.bn`）走 **batch 统计**；
+   门控在 `eval()` 下走 checkpoint 的 **running 统计**。
+
+本次新增只读探针 `me_rssm/sanity/probe_semA_bnmode.py`，把两者拆成独立可测的臂
+（z 契约在所有臂都钉死为部署 `mu_q`）：**用同一条 val pipeline、同一个 eval 模式模型，
+只替换 info 文件**，得到 split 的净效应；再在同一 split 内只把 BN 切到 batch 统计，
+得到归一化模式的净效应（batch 统计按 batch 估计，故 batch 统计臂必须以真实 batch
+运行；本组用 `batch-size=2`，与训练 `samples_per_gpu=2` 一致）。
+
+**校准检查（否则探针的数字不能自证）**：
+
+- eval 臂在 val split、n=10 复现冻结门控 **0.1167/0.0833**（逐位一致）；
+- batch 中立性：eval 臂 bs=1 与 bs=2 读数**完全相同**（val 0.1167/0.0833、
+  train 0.4480/0.5500），符合 eval 下 BN 用 running 统计的预期，说明**批量 rollout
+  本身不是变量**。
+
+**主对照（n=20，stride=100；两 split 各自跨 ~20 个独立场景块）**：
+
+| split | 条件 | `thr50` | `hit@1` |
+|---|---|---:|---:|
+| train（**拟合过**） | eval / running stats | **0.4739** | **0.4167** |
+| train | z 路径 BN → batch stats | 0.4851 | 0.3667 |
+| val（**留出**） | eval / running stats（= M1 口径） | **0.1280** | **0.0417** |
+| val | z 路径 BN → batch stats | 0.2452 | 0.1792 |
+
+- **split 净效应**：同 pipeline、同 eval 模式，train 比 val 高 **+0.3459 `thr50` /
+  +0.3750 `hit@1`**，train 侧读数已落到 train logger 自己那个数
+  （0.4923/0.3586，后者是 train split + train()、且是 38 个窗口的 epoch 均值）附近。
+- **归一化模式净效应（val 侧）**：只切 z 路径 4 个 BN，`thr50` +0.1173、
+  `hit@1` +0.1375——**方向确实存在、幅度远不足以解释 4.3×**，且在 train 侧
+  几乎不再移动（`thr50` +0.0112、`hit@1` −0.0500）。
+- **范围对照（n=20，val）**：把 z 路径以外**同样 4 个** BN 切到 batch 统计，
+  移动量接近零（−0.0012 / +0.0375）⇒ val 侧那个 +0.1173 是 z 路径局部的，
+  不是「任何归一化扰动都会推动读数」（n=10 时这个范围对照曾给 −0.0167/+0.0500）。
+- **干预检查**：所有臂都记录了「有多少 clip 的读数移动」；非零 ⇒ 切换确实生效，
+  「两臂相同」不能反过来被读成「机制无关」。
+
+**GT-shuffle 地板（防止把位置先验读成对象对齐）**：用**另一 clip** 的 GT 目标去评
+本 clip 的语义图。两侧地板都塌到近零（val 三个臂全为 0.0000；train eval 臂
+0.0213/0.0167，约为自身的 4.5%/4.0%）。⇒ **被测量的是对象对齐，而不是「图总在
+BEV 常见区域起峰」**；这也说明上表的 split 差不是目标密度或空间先验造成的。
+
+**结论（替换 §72.10 的「来源仍未定位」）**：train/val 两项读数的 4.3× 差距**主要由
+数据 split 解释**（同权重、同 pipeline、同模式，train split 即近乎复现 train logger
+读数），BN 归一化模式是**次要**因素，z 采样契约已排除。因此：
+
+- train split 上的 `stat_sem_*` **不能**再被当作「同一模型在另一口径下的同量测量」；
+  它是**拟合内**读数。§71.9.17 已据此把 M1 判为「真实未过」，本节的机制归属
+  进一步说明：语义头在**训练见过的场景**上确实能找到 GT 中心，在**留出场景**上
+  明显掉档。
+- 这不改变 S1 判定（M1/M3/M4 FAIL ⇒ 归档、不进 ep16），也**不**证明 head 设计正确；
+  它把「为什么 train 好 val 差」从**未定位**推进为**定位到泛化/留出场景**，
+  给下一步重预登记一个明确的可测轴（跨场景泛化 vs 读出耦合），而不是继续
+  扫增益、调 KL 或续训抢救。
+
+**边界**：只读探针（GPU 5/6，未训练、未写 checkpoint、未改权重/判据）；n=20 的
+两 split 各有 20 个独立场景块，但**不是**全 split 统计，也不构成多 seed 证据。
+新增 `test_probe_semA_bnmode.py`（19 条，含范围对照「同数量 out-of-scope BN」、
+batch 中立性、GT-shuffle 地板、以及只在 val split 才声称复现冻结门控的守卫）。
+产物：`semA_bnmode_ep6.json`（n=10，四臂）、`semA_bnmode_ep6_trainsplit.json`（n=10）、
+`semA_splitprobe_val_full_n20.json` / `semA_splitprobe_train_full_n20.json`（n=20，三臂）。
+
 ## 72. 候选 A ep6 机制门（S1）：未全门通过（2026-10-10）
 本节执行 `docs/rssm_candidate_A_prereg_20261010.md` §5 预登记的 S1 ep6
 机制门。训练从零起（3 卡 GPU5/6/7、seed0、deterministic、24e 余弦日程），
@@ -13653,7 +13724,13 @@ rssm_fusion.forward:  z_t = mu_q if deterministic else self.sample(mu_q, logstd_
 噪声占比 `sigma/mu`：均值 **0.3637**（min 0.3473 / max 0.3816），即噪声项确实与被解释量同量级。
 
 **结论**：契约切换确实移动了 z，但**两项门控读数完全不变**（Δ`thr50` = +0.0000）——
-故 train/val 的 4.3× 差距**不能**由 z 采样解释，该差距的来源仍未定位。这**不改变** S1 判定（§72.0 已按两种口径分别核过），但把「契约错配」从嫌疑名单上划掉。
+故 train/val 的 4.3× 差距**不能**由 z 采样解释。这**不改变** S1 判定（§72.0 已按两种口径分别核过），但把「契约错配」从嫌疑名单上划掉。
+
+> **⚠ 本节「来源仍未定位」已被 §71.9.19 取代（只读补测）**：把 split 与归一化模式
+> 拆开后，该差距**主要来自数据 split**（同 pipeline、同 eval 模式，train split 读
+> **0.4739/0.4167**、val split **0.1280/0.0417**，n=20），BN 模式是次要因素
+> （val 侧只切 z 路径 4 个 BN：`thr50` +0.1173、`hit@1` +0.1375）。结论方向不变，
+> 变的是归属与强度。
 
 > 产物：`semA_zcontract_ep6.json`（只读探针 `me_rssm/sanity/probe_semA_zcontract.py`，未改权重、未启动训练）。
 
@@ -13692,6 +13769,11 @@ rssm_fusion.forward:  z_t = mu_q if deterministic else self.sample(mu_q, logstd_
   分类贡献，但简单放大 2–8 倍没有改善所测分类命中。
 - 未完成：A 的 C1/C2/C3 匹配训练消融、真正 z 信息排他性、同容量确定性对照、
   标准 ep12–16 性能窗、多 seed 四类稳定提升。C/B/D 仍研究建议，未进入正式验证。
+- **（2026-10-11 追加）**语义头 train/val 4.3× 差距的归属已闭环（§71.9.19，只读）：
+  主要来自**数据 split**（同 pipeline/同 eval 模式：train 0.4739/0.4167 vs
+  val 0.1280/0.0417，n=20），BN 归一化模式是次要因素，z 采样契约早已排除。
+  即上表「语义监督为什么 train 好 val 差」不再列为未定位项；剩余的是**设计层面**
+  的「留出场景泛化不足与 anchor/readout 耦合」，仍待重预登记后的新实验。
 - 检查时未发现本项目 semA/DC 续训进程；其他用户训练进程不属于本任务。
 
 ### 73.2 数值上下文与公平的早期对照
