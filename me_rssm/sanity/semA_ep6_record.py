@@ -226,6 +226,15 @@ def a2_split_contrast(run_dir, a2=None):
             'max_gt_prob': verdict._mean(rows, 'max_gt_prob'),
             'recall_median': verdict._median(rows, 'recall_at_top_k_mean'),
             'recall_mean': verdict._mean(rows, 'recall_at_top_k_mean'),
+            # Prereg section 5 fixes these as supplementary REPORT readings
+            # ("mean_gt_prob / argmax 距离: 逐 clip → clip 等权均值"). The rank
+            # probe has always written them per clip; until now nothing read
+            # them, so the draft could not state the scale/localisation half of
+            # the failure -- exactly the "measured but not reported is
+            # indistinguishable from unmeasured" gap of sections 73.6.20/21.
+            'mean_gt_prob': verdict._mean(rows, 'mean_gt_prob'),
+            'mean_bg_prob': verdict._mean(rows, 'mean_bg_prob'),
+            'argmax_dist': verdict._mean(rows, 'argmax_cityblock_dist_cells'),
             'n_maxgt_ge_0.5': sum(
                 1 for r in rows
                 if verdict._finite(r.get('max_gt_prob'))
@@ -864,6 +873,21 @@ def render(run_dir, date_str):
                     f'{num(r["shuffle"])} | {num(r["max_gt_prob"])} | '
                     f'{num(r["recall_median"])} | {num(r["recall_mean"])} | '
                     f'{r["n_maxgt_ge_0.5"]}/{r["n"]} |')
+            add('')
+            # Same table's scale/localisation half (prereg section 5 lists
+            # these as supplementary report readings, aggregated clip-equal).
+            add('| split | `mean_gt_prob` | `mean_bg_prob` | `max_gt_prob` | '
+                'argmax 距离（格，均值）|')
+            add('|---|---:|---:|---:|---:|')
+            for name, r in (('train', tr), ('val', va)):
+                add(f'| {name} | {num(r["mean_gt_prob"])} | '
+                    f'{num(r["mean_bg_prob"])} | {num(r["max_gt_prob"])} | '
+                    f'{num(r["argmax_dist"], 2)} |')
+            add('')
+            add('> 上表 `argmax 距离` 是该 clip 各占用通道「唯一 argmax 格到最近 GT 格」的')
+            add('> 曼哈顿距离，逐通道后按 clip 等权取均值（§5 的补充读数口径）；')
+            add('> 它与 `recall@top-k` 是两个现象：前者量**峰漂多远**，后者量')
+            add('> **峰预算是否被背景占满**。二者都只作机制定位，不是门槛。')
             add('')
             gap_auc = None
             if tr['auc'] is not None and va['auc'] is not None:

@@ -1471,11 +1471,15 @@ class TestA2SplitContrast(unittest.TestCase):
         with open(os.path.join(self.tmp, name), 'w') as fh:
             json.dump(payload, fh)
 
-    def _rank(self, name, auc, recall, maxgt=0.9, shuffle=0.47):
+    def _rank(self, name, auc, recall, maxgt=0.9, shuffle=0.47,
+              mean_gt=0.1895, mean_bg=0.0014, argmax_dist=34.43):
         rows = [{'index': 3 + 100 * i,
                  'auc_mean_over_occupied_channels': auc,
                  'gt_shuffle_auc': shuffle,
                  'max_gt_prob': maxgt,
+                 'mean_gt_prob': mean_gt,
+                 'mean_bg_prob': mean_bg,
+                 'argmax_cityblock_dist_cells': argmax_dist,
                  'recall_at_top_k_mean': recall} for i in range(20)]
         self._write(name, {'config': '/x/..._semA2S_24e.py', 'n_clips': 20,
                            'indices': [r['index'] for r in rows],
@@ -1515,6 +1519,50 @@ class TestA2SplitContrast(unittest.TestCase):
         rows, ok = verdict.check_a2_evidence(self.tmp)
         self.assertFalse(ok)
         self.assertEqual([r[2] for r in rows], ['OK', 'MISSING'])
+
+    def test_supplementary_scale_and_localisation_readings_are_aggregated(self):
+        """Prereg section 5 lists mean_gt_prob / mean_bg_prob / argmax 距离 as
+        REPORT readings with a fixed aggregation (clip-equal mean). The rank
+        probe has always written them; nothing read them, so the draft could
+        not state the scale/localisation half of the failure -- the same
+        "measured but unreported" gap as sections 73.6.20/21."""
+        self._gate()
+        self._rank(verdict.A2_RANK_VAL, 0.92, 0.0)
+        self._rank(verdict.A2_RANK_TRAIN, 0.99, 0.50,
+                   mean_gt=0.4447, mean_bg=0.0022, argmax_dist=1.88)
+        got = record.a2_split_contrast(self.tmp)
+        self.assertAlmostEqual(got['val']['argmax_dist'], 34.43, places=4)
+        self.assertAlmostEqual(got['val']['mean_gt_prob'], 0.1895, places=4)
+        self.assertAlmostEqual(got['train']['argmax_dist'], 1.88, places=4)
+        self.assertAlmostEqual(got['val']['mean_bg_prob'], 0.0014, places=4)
+
+    def test_draft_renders_the_scale_and_localisation_table(self):
+        self._gate()
+        self._rank(verdict.A2_RANK_VAL, 0.92, 0.0)
+        self._rank(verdict.A2_RANK_TRAIN, 0.99, 0.50)
+        for name in ('z_util_std_ep6_w3.json', 'z_util_std_ep6_w100.json',
+                     'z_util_std_ep6_w1800.json'):
+            self._write(name, _z_util([3, 203]))
+        self._write(record.POST_SOURCE,
+                    {'indices': [3], 'fusion_class': 'X', 'mu_q': {},
+                     'h_t': {}, 'e_pooled': {}})
+        with open(os.path.join(self.tmp, 'run.log.json'), 'w') as fh:
+            for e in range(1, 7):
+                fh.write(json.dumps({
+                    'mode': 'val', 'epoch': e, 'iter': 1,
+                    'pts_bbox/KITTI/Overall_3D_moderate': 30.0 + e}) + '\n')
+        text = record.render(self.tmp, '2026-10-11')
+        self.assertIn('argmax 距离', text)
+        self.assertIn('`mean_gt_prob`', text)
+        self.assertIn('34.43', text)
+
+    def test_the_rank_probe_really_writes_the_keys_the_draft_reads(self):
+        """Producer/consumer contract: synthesising the keys in a test cannot
+        prove the real probe writes them, so pin the producer side too."""
+        source = _read(os.path.join('me_rssm', 'sanity', 'probe_semA_rank.py'))
+        for key in ('mean_gt_prob', 'mean_bg_prob',
+                    'argmax_cityblock_dist_cells'):
+            self.assertIn(f"'{key}'", source)
 
     def test_a_generation_is_not_gated_on_a2_artifacts(self):
         self._write(verdict.GATE_JSON, _gate_payload())
