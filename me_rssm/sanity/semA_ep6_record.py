@@ -186,6 +186,49 @@ def train_stat_means(run_dir):
             for epoch in sums}
 
 
+def a2_split_contrast(run_dir, a2=None):
+    """Train-vs-val rank readings for an A2 arm, or None.
+
+    H-A2 is a claim about the TRAIN/VAL GAP: the arm's ranking target is
+    supposed to make the peak budget survive a held-out scene. The M1' gate is
+    measured on val only, so a val-only table cannot show whether the gap
+    closed, stayed, or widened. The watchdog already runs the identical probe
+    on the train split into ``semA_rank_train_ep6.json``; reading it here keeps
+    the contrast derived instead of hand-transcribed.
+
+    Returns None when this is not an A2 arm or when the train artifact is
+    absent (absent is rendered as a FILL marker by the caller, not as zero).
+    """
+    if a2 is None:
+        a2 = verdict.a2_readings(run_dir)
+    if a2 is None:
+        return None
+    path = os.path.join(run_dir, verdict.A2_RANK_TRAIN)
+    if not os.path.exists(path):
+        return None
+    train = load_json(path)
+    val = load_json(os.path.join(run_dir, verdict.A2_RANK_VAL)) or {}
+
+    def _agg(payload):
+        rows = payload.get('per_clip') or []
+        if not rows:
+            return None
+        return {
+            'n': len(rows),
+            'auc': verdict._mean(rows, 'auc_mean_over_occupied_channels'),
+            'shuffle': verdict._mean(rows, 'gt_shuffle_auc'),
+            'max_gt_prob': verdict._mean(rows, 'max_gt_prob'),
+            'recall_median': verdict._median(rows, 'recall_at_top_k_mean'),
+            'recall_mean': verdict._mean(rows, 'recall_at_top_k_mean'),
+            'n_maxgt_ge_0.5': sum(
+                1 for r in rows
+                if verdict._finite(r.get('max_gt_prob'))
+                and r['max_gt_prob'] >= 0.5),
+        }
+
+    return {'train': _agg(train), 'val': _agg(val)}
+
+
 def saved_epochs(run_dir):
     """Epochs with an actual epoch_<N>.pth on disk (checkpoint availability)."""
     out = []
@@ -333,6 +376,39 @@ def prereg_doc(run_dir, a2=None):
     return 'docs/rssm_candidate_A_prereg_20261010.md'
 
 
+def arm_single_variable(run_dir, a2=None):
+    """The arm's ONE changed knob, as a (label, value) pair.
+
+    The A generation changed two things at once relative to the plain
+    `no2d_igdr` base (`sem_head` supervision + the `z_cls_logits` residual
+    readout), which is why A cannot separate them. The A2 arms were
+    pre-registered specifically to move ONE knob at a time, so printing A's
+    two-knob sentence into an A2-S draft would describe a different experiment
+    -- and would also hide the fact that A2-R never touched supervision.
+    """
+    if a2 is None:
+        a2 = verdict.a2_readings(run_dir)
+    arm = (a2 or {}).get('arm')
+    if arm == 'A2S':
+        return ('`sem_target_mode`（z 的语义监督目标：逐格高斯 → 逐通道排序）',
+                '`channel_contrastive`（`sem_rank_q`/`sem_rank_margin`/'
+                '`sem_rank_weight` 见 §4.1）')
+    if arm == 'A2R':
+        return ('`cls_readout_mode`（分类残差到 anchor 通道的写入方式）',
+                '`anchor_slot`（同 predictor、同参数量，不改监督）')
+    return ('`sem_head`（z 排他语义监督）+ `z_cls_logits`（零初始化分类残差读出）',
+            '——')
+
+
+def arm_comparator(run_dir, a2=None):
+    """The reference config this arm is a single-variable change against."""
+    if a2 is None:
+        a2 = verdict.a2_readings(run_dir)
+    if a2 is not None:
+        return '`..._no2d_igdr_semreadout.py`（A 底座；不重跑 A）'
+    return '`..._no2d_igdr.py`（`MotionAlignedRSSMFusion`, seed0）'
+
+
 def watch_facts(run_dir):
     """(gate_ts, free_ts, done_ts, signal, exit_code) from the watchdog log."""
     path = os.path.join(run_dir, watch_log_name(run_dir))
@@ -405,9 +481,22 @@ def render(run_dir, date_str):
     other_pass = all(gates.get(k) is True for k in verdict.REQUIRED_GATES
                      if k != 'M1')
     mean_excess = verdict.m1_excess_mean(m1)
-    grid_limited = (verdict.m1_grid_limited(
-        m1.get('mean_thr50'), m1.get('mean_hit1'), mean_excess)
-        and other_pass and gates.get('M1') is False)
+    # The exception's scope is owned by the verdict module (single source of
+    # truth): it requires M1 to be the ONLY failing gate of A's M1-M4 set AND,
+    # for an A2 arm, the arm's own pre-registered added gates to have passed.
+    # Re-deriving it here with the older two-clause expression would let the
+    # draft soften an A2 mechanism failure into an instrumentation complaint.
+    a2 = verdict.a2_readings(run_dir)
+    a2_gates_pre = (a2 or {}).get('gates') or {}
+    a2_measured_pre = bool(a2_gates_pre) and all(
+        v is not None for v in a2_gates_pre.values())
+    a2_added_pass_pre = (a2 is None
+                         or (a2_measured_pre
+                             and all(v is True for v in a2_gates_pre.values())))
+    grid_limited = verdict.grid_limited_applies(
+        m1.get('mean_thr50'), m1.get('mean_hit1'), mean_excess,
+        other_pass, gates.get('M1') is False,
+        added_pass=a2_added_pass_pre)
 
     lines = []
     add = lines.append
@@ -579,6 +668,43 @@ def render(run_dir, date_str):
             add('')
             add(f'> **A2 增补门 BLOCKER**：{note}（该门按 NOT MEASURED，'
                 f'不得当失败或通过）。')
+        # H-A2 is a train/val GAP claim; a val-only table cannot show whether
+        # the gap closed. The identical train-split probe is already run by the
+        # watchdog, so render both sides side by side.
+        split = a2_split_contrast(run_dir, a2=a2)
+        add('')
+        add(f"**{arm_label(run_dir, a2)} 的 train/val 对照（同一探针、"
+            f"同一 20-clip 契约；本臂假设正是『峰预算能否离开训练场景』）：**")
+        add('')
+        if split and split.get('train') and split.get('val'):
+            tr, va = split['train'], split['val']
+            add('| split | n | `auc` | `gt_shuffle_auc` | `max_gt_prob` | '
+                '`recall@top-k` 中位 | `recall@top-k` 均值 | '
+                '`max_gt_prob ≥ 0.5` 的 clip |')
+            add('|---|---:|---:|---:|---:|---:|---:|---:|')
+            for name, r in (('train', tr), ('val', va)):
+                add(f'| {name} | {r["n"]} | {num(r["auc"])} | '
+                    f'{num(r["shuffle"])} | {num(r["max_gt_prob"])} | '
+                    f'{num(r["recall_median"])} | {num(r["recall_mean"])} | '
+                    f'{r["n_maxgt_ge_0.5"]}/{r["n"]} |')
+            add('')
+            gap_auc = None
+            if tr['auc'] is not None and va['auc'] is not None:
+                gap_auc = tr['auc'] - va['auc']
+            gap_rec = None
+            if (tr['recall_median'] is not None
+                    and va['recall_median'] is not None):
+                gap_rec = tr['recall_median'] - va['recall_median']
+            add(f'> train−val 差：`auc` **{signed(gap_auc)}**、'
+                f'`recall@top-k` 中位 **{signed(gap_rec)}**。'
+                f'A 的同口径差为 `auc` 0.9994−0.9235 = **+0.0759**、'
+                f'`recall@top-k` 中位 0.3333−0.0000 = **+0.3333**'
+                f'（A 的 val 端只有 20 clip、其中 11 个为 0）。'
+                f'本行只作机制定位，**不是门槛**。')
+        else:
+            add(FILL.format('A2 train/val 排序对照 '
+                            f'（{verdict.A2_RANK_TRAIN}）'))
+        add('')
     add('')
     chance_vals = [c['hit1_chance'] for c in (m1.get('per_clip') or [])
                    if c.get('hit1_chance') is not None]
@@ -716,12 +842,16 @@ def render(run_dir, date_str):
     # --- config ----------------------------------------------------------
     add('### 72.1 配置与唯一变量')
     add('')
+    sv_label, sv_value = arm_single_variable(run_dir)
     add('| 项 | 值 |')
     add('|---|---|')
     add(f'| 配置 | `{os.path.relpath((gates_payload or {}).get("config", "n/a"), _REPO) if (gates_payload or {}).get("config") else "n/a"}` |')
-    add('| 对照 | `..._no2d_igdr.py`（`MotionAlignedRSSMFusion`, seed0） |')
-    add('| 唯一变量 | `sem_head`（z 排他语义监督）+ `z_cls_logits`'
-        '（零初始化分类残差读出） |')
+    add(f'| 对照 | {arm_comparator(run_dir)} |')
+    add(f'| 唯一变量 | {sv_label} |')
+    if sv_value != '——':
+        # Only the A2 arms are single-knob experiments; for A this row would
+        # carry no information, and emitting it would churn A's frozen draft.
+        add(f'| 变量取值 | {sv_value} |')
     add('| 未改动 | 重建目标、posterior/prior、KL/free-nats、`output_proj`、'
         'backbone、head 几何、优化器、日程、数据管线 |')
     add(f'| 权重指纹 | `sha256={str(fingerprints.get("checkpoint_sha256"))[:16]}...`、'

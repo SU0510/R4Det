@@ -1098,6 +1098,215 @@ class TestA2RunIdentity(unittest.TestCase):
         self.assertEqual(facts[2], '2026-10-11 09:05:00')
 
 
+class TestCrossGridExceptionScope(unittest.TestCase):
+    """Section 71.9.3(2) was written for A's M1-M4 set.
+
+    An A2 arm carries ADDITIONAL pre-registered gates (M1' / M1-loc). If one of
+    those FAILED while M1 happened to miss in the cross-grid shape, the old
+    two-clause test would report "INSUFFICIENT EVIDENCE -- add a full-res
+    matched control", i.e. it would soften a measured mechanism refutation into
+    an instrumentation complaint. The exception must be scoped to the arm whose
+    gate set it was written for.
+    """
+
+    def test_m1_shape_alone_is_not_the_verdict_rule(self):
+        verdict_mod = record.verdict
+        self.assertTrue(verdict_mod.m1_grid_limited(0.45, 0.05, 0.60))
+
+    def test_a_generation_exception_still_applies(self):
+        verdict_mod = record.verdict
+        self.assertTrue(verdict_mod.grid_limited_applies(
+            0.45, 0.05, 0.60, other_pass=True, m1_failed=True,
+            added_pass=True))
+
+    def test_a2_failed_added_gate_blocks_the_exception(self):
+        verdict_mod = record.verdict
+        self.assertFalse(verdict_mod.grid_limited_applies(
+            0.45, 0.05, 0.60, other_pass=True, m1_failed=True,
+            added_pass=False))
+
+    def test_a2_unmeasured_added_gate_also_blocks_it(self):
+        """NOT MEASURED must not silently count as "passed"."""
+        verdict_mod = record.verdict
+        a2_bundle_would_report = None      # unmeasured -> a2_all_pass False
+        self.assertFalse(verdict_mod.grid_limited_applies(
+            0.45, 0.05, 0.60, other_pass=True, m1_failed=True,
+            added_pass=bool(a2_bundle_would_report)))
+
+    def test_another_failing_m1_m4_gate_blocks_the_exception(self):
+        verdict_mod = record.verdict
+        self.assertFalse(verdict_mod.grid_limited_applies(
+            0.45, 0.05, 0.60, other_pass=False, m1_failed=True,
+            added_pass=True))
+
+    def test_renderer_uses_the_shared_scoped_rule(self):
+        """Source guard: the draft must not re-derive the old two-clause form."""
+        source = _read(os.path.join('me_rssm', 'sanity',
+                                    'semA_ep6_record.py'))
+        self.assertIn('verdict.grid_limited_applies(', source)
+        self.assertIn('added_pass=a2_added_pass_pre', source)
+        self.assertNotIn('grid_limited = (verdict.m1_grid_limited(', source)
+
+    def test_verdict_folds_added_gates_into_the_exception(self):
+        source = _read(os.path.join('me_rssm', 'sanity',
+                                    'semA_ep6_verdict.py'))
+        self.assertIn('added_pass=a2_all_pass', source)
+        self.assertIn('a2_all_pass = True', source)
+
+
+class TestA2SplitContrast(unittest.TestCase):
+    """H-A2 is a train/val GAP claim.
+
+    The M1' gate is measured on val only, so a val-only table cannot show
+    whether the arm's ranking target closed the gap that motivated the arm.
+    The watchdog already runs the identical probe on the train split; the draft
+    must render both sides rather than leaving the contrast to prose.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='splitcontrast_')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write(self, name, payload):
+        with open(os.path.join(self.tmp, name), 'w') as fh:
+            json.dump(payload, fh)
+
+    def _rank(self, name, auc, recall, maxgt=0.9, shuffle=0.47):
+        rows = [{'index': 3 + 100 * i,
+                 'auc_mean_over_occupied_channels': auc,
+                 'gt_shuffle_auc': shuffle,
+                 'max_gt_prob': maxgt,
+                 'recall_at_top_k_mean': recall} for i in range(20)]
+        self._write(name, {'config': '/x/..._semA2S_24e.py', 'n_clips': 20,
+                           'indices': [r['index'] for r in rows],
+                           'input_fingerprints': {'checkpoint_sha256': 'a' * 64},
+                           'per_clip': rows})
+
+    def _gate(self):
+        gate = _gate_payload()
+        gate['input_fingerprints']['config_path'] = '/x/..._semA2S_24e.py'
+        self._write(verdict.GATE_JSON, gate)
+
+    def test_none_for_the_a_generation(self):
+        self._write(verdict.GATE_JSON, _gate_payload())   # A config path
+        self.assertIsNone(record.a2_split_contrast(self.tmp))
+
+    def test_none_when_the_train_artifact_is_absent(self):
+        self._gate()
+        self._rank(verdict.A2_RANK_VAL, 0.92, 0.0)
+        self.assertIsNone(record.a2_split_contrast(self.tmp))
+
+    def test_both_splits_are_aggregated_from_the_artifacts(self):
+        self._gate()
+        self._rank(verdict.A2_RANK_VAL, 0.92, 0.0)
+        self._rank(verdict.A2_RANK_TRAIN, 0.99, 0.50)
+        got = record.a2_split_contrast(self.tmp)
+        self.assertAlmostEqual(got['train']['auc'], 0.99)
+        self.assertAlmostEqual(got['train']['recall_median'], 0.50)
+        self.assertAlmostEqual(got['val']['auc'], 0.92)
+        self.assertAlmostEqual(got['val']['recall_median'], 0.0)
+
+    def test_missing_train_split_is_reported_but_does_not_hide_a_gate_failure(self):
+        """A missing DIAGNOSTIC must not turn a measured gate failure into
+        "NOT EVALUABLE". The rank val artifact alone decides whether the added
+        gates can be judged (via a2_readings blockers)."""
+        self._gate()
+        self._rank(verdict.A2_RANK_VAL, 0.92, 0.0)
+        rows, ok = verdict.check_a2_evidence(self.tmp)
+        self.assertFalse(ok)
+        self.assertEqual([r[2] for r in rows], ['OK', 'MISSING'])
+
+    def test_a_generation_is_not_gated_on_a2_artifacts(self):
+        self._write(verdict.GATE_JSON, _gate_payload())
+        rows, ok = verdict.check_a2_evidence(self.tmp)
+        self.assertTrue(ok)
+        self.assertEqual(rows, [])
+
+    def test_draft_renders_the_contrast_and_the_gap(self):
+        self._gate()
+        self._rank(verdict.A2_RANK_VAL, 0.92, 0.0)
+        self._rank(verdict.A2_RANK_TRAIN, 0.99, 0.50)
+        for name in ('z_util_std_ep6_w3.json', 'z_util_std_ep6_w100.json',
+                     'z_util_std_ep6_w1800.json'):
+            self._write(name, _z_util([3, 203]))
+        self._write(record.POST_SOURCE,
+                    {'indices': [3], 'fusion_class': 'X', 'mu_q': {},
+                     'h_t': {}, 'e_pooled': {}})
+        with open(os.path.join(self.tmp, 'run.log.json'), 'w') as fh:
+            for e in range(1, 7):
+                fh.write(json.dumps({
+                    'mode': 'val', 'epoch': e, 'iter': 1,
+                    'pts_bbox/KITTI/Overall_3D_moderate': 30.0 + e}) + '\n')
+        text = record.render(self.tmp, '2026-10-11')
+        self.assertIn('train/val 对照', text)
+        self.assertIn('train−val 差', text)
+        self.assertNotIn('FILL: A2 train/val', text)
+
+
+class TestArmAwareSingleVariable(unittest.TestCase):
+    """Section 72.1 must describe THIS arm's single variable.
+
+    A changed two knobs at once (`sem_head` supervision + the `z_cls_logits`
+    residual readout), which is why A cannot separate them. The A2 arms were
+    pre-registered to move exactly one knob, so printing A's two-knob sentence
+    into an A2 draft would describe a different experiment -- and would hide
+    that A2-R never touched supervision at all.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='singlevar_')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _set_arm(self, cfg, with_rank=True):
+        gate = _gate_payload()
+        gate['input_fingerprints']['config_path'] = cfg
+        with open(os.path.join(self.tmp, verdict.GATE_JSON), 'w') as fh:
+            json.dump(gate, fh)
+        if with_rank:
+            rows = [{'index': 3 + 100 * i,
+                     'auc_mean_over_occupied_channels': 0.9,
+                     'gt_shuffle_auc': 0.47, 'max_gt_prob': 0.9,
+                     'recall_at_top_k_mean': 0.4} for i in range(20)]
+            with open(os.path.join(self.tmp, verdict.A2_RANK_VAL), 'w') as fh:
+                json.dump({'config': cfg, 'n_clips': 20,
+                           'indices': [r['index'] for r in rows],
+                           'per_clip': rows}, fh)
+
+    def test_a_keeps_its_two_knob_wording(self):
+        self._set_arm('/x/..._semA_seed0.py', with_rank=False)
+        label, value = record.arm_single_variable(self.tmp)
+        self.assertIn('sem_head', label)
+        self.assertIn('z_cls_logits', label)
+        self.assertEqual(value, '——')
+        self.assertIn('no2d_igdr.py', record.arm_comparator(self.tmp))
+
+    def test_a2s_names_only_the_supervision_knob(self):
+        self._set_arm('/x/..._semA2S_24e.py')
+        label, value = record.arm_single_variable(self.tmp)
+        self.assertIn('sem_target_mode', label)
+        self.assertNotIn('cls_readout_mode', label)
+        self.assertIn('channel_contrastive', value)
+
+    def test_a2r_names_only_the_readout_knob(self):
+        self._set_arm('/x/..._semA2R_24e.py')
+        label, value = record.arm_single_variable(self.tmp)
+        self.assertIn('cls_readout_mode', label)
+        self.assertNotIn('sem_target_mode', label)
+        self.assertIn('anchor_slot', value)
+
+    def test_a2_comparator_is_the_a_base_not_a_rerun(self):
+        self._set_arm('/x/..._semA2S_24e.py')
+        self.assertIn('semreadout.py', record.arm_comparator(self.tmp))
+
+    def test_a_draft_does_not_gain_the_value_row(self):
+        self._set_arm('/x/..._semA_seed0.py', with_rank=False)
+        self.assertEqual(record.arm_single_variable(self.tmp)[1], '——')
+
+
 class TestArmAwareProse(unittest.TestCase):
     """The heading and the archive paragraph must name the actual arm.
 

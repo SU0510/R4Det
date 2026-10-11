@@ -209,6 +209,54 @@ def load_json(path):
         return json.load(handle)
 
 
+def check_a2_evidence(run_dir, a2=None):
+    """Report the A2-only artifacts; ([], True) when this is not an A2 arm.
+
+    The M1'/M1-loc gates are read from ``semA_rank_val_ep6.json`` and the
+    train/val gap from ``semA_rank_train_ep6.json``. They are deliberately NOT
+    in the shared ``EVIDENCE`` tuple: that tuple describes A's bundle, and A's
+    archived run has already been judged against it.
+
+    IMPORTANT -- this is a REPORT, not a gate. Its ``ok`` must not be folded
+    into the gate-evidence notion: a missing train/val contrast makes the
+    RECORD thinner (the draft renders an explicit FILL stub for that block),
+    but the S1 gates stay perfectly measurable. Folding it in would downgrade a
+    measured gate FAILURE to "NOT EVALUABLE", i.e. it would hide a negative
+    result -- the opposite of the safe direction. Whether the added gates can
+    be judged at all is decided by ``a2_readings``, which already turns a
+    missing/mis-sized rank artifact into blockers.
+    """
+    if a2 is None:
+        a2 = arm_of_bundle(run_dir)
+    if a2 is None:
+        return [], True
+    rows = []
+    ok = True
+    for label, name, keys in (
+            ("A2 M1'/M1-loc rank (val)", A2_RANK_VAL,
+             ('per_clip', 'indices', 'input_fingerprints')),
+            ('A2 train/val rank contrast', A2_RANK_TRAIN,
+             ('per_clip', 'indices', 'input_fingerprints'))):
+        path = os.path.join(run_dir, name)
+        if not os.path.exists(path):
+            rows.append((label, name, 'MISSING', 'probe wrote no JSON'))
+            ok = False
+            continue
+        payload = load_json(path)
+        if not isinstance(payload, dict):
+            rows.append((label, name, 'MALFORMED', 'top level is not an object'))
+            ok = False
+            continue
+        missing = [k for k in keys if k not in payload]
+        if missing:
+            rows.append((label, name, 'INCOMPLETE',
+                         'missing keys: ' + ', '.join(missing)))
+            ok = False
+            continue
+        rows.append((label, name, 'OK', ''))
+    return rows, ok
+
+
 def check_evidence(run_dir):
     """(rows, ok) -- does the battery bundle exist and carry its schema?
 
@@ -294,6 +342,31 @@ def m1_grid_limited(mean_thr50, mean_hit1, mean_excess):
     return mean_excess >= M1_EXCESS_BAR
 
 
+def grid_limited_applies(m1_thr50, m1_hit1, mean_excess, other_pass,
+                         m1_failed, added_pass=True):
+    """Does section 71.9.3(2)'s cross-grid exception actually govern here?
+
+    Three conditions, all required:
+      * M1 is measured and failed;
+      * every OTHER gate in A's M1-M4 set passed (otherwise the miss is not
+        "solely the full-res raw rate");
+      * the M1 reading itself meets the exception's shape;
+      * ``added_pass`` -- for an A2 arm, its own pre-registered added gates
+        (M1' / M1-loc) all passed.
+
+    The last condition is the one that is easy to get wrong. The exception was
+    written for A's M1-M4 set. An A2 arm has ADDITIONAL pre-registered gates,
+    and those are the ones the arm's hypothesis stands on. Without this guard,
+    an A2-S run whose M1' (or M1-loc) FAILED but whose M1 happened to miss in
+    the exception's shape would be reported as "INSUFFICIENT EVIDENCE -- add a
+    full-res matched control", i.e. its real, measured mechanism refutation
+    would be softened into an instrumentation complaint. That is exactly the
+    post-hoc escape the exception must never become.
+    """
+    return bool(m1_failed and other_pass and added_pass
+                and m1_grid_limited(m1_thr50, m1_hit1, mean_excess))
+
+
 def val_by_epoch(run_dir):
     out = {}
     for path in sorted(glob.glob(os.path.join(run_dir, '*.log.json'))):
@@ -349,6 +422,14 @@ def main():
     print('EVIDENCE BUNDLE COMPLETENESS (a dead probe writes no JSON)')
     print('=' * 72)
     rows, evidence_ok = check_evidence(run)
+    # A2-only artifacts are REPORTED here but are not part of the gate-bundle
+    # completeness notion: a missing train/val contrast thins the record, while
+    # a missing/mis-sized rank artifact already surfaces as an A2 gate BLOCKER
+    # (NOT MEASURED). Folding the report's ok into evidence_ok would let a
+    # missing diagnostic downgrade a measured gate FAILURE to "NOT EVALUABLE",
+    # i.e. hide a negative result.
+    a2_rows, _ = check_a2_evidence(run)
+    rows.extend(a2_rows)
     for label, name, status, detail in rows:
         line = f'  [{status:10s}] {label:22s} {name}'
         if detail:
@@ -401,20 +482,21 @@ def main():
                   if c.get('hit1_excess_over_chance') is not None]
             if ch:
                 mean_excess = statistics.mean(ex) if ex else None
+                decision['_m1_mean_excess'] = mean_excess
                 print(f'   [supplement, NOT gated] hit1_chance mean='
                       f'{statistics.mean(ch):.6f}  '
                       f'excess_over_chance mean={mean_excess}')
                 decision["m1_grid_limited"] = m1_grid_limited(
                     m1.get('mean_thr50'), m1.get('mean_hit1'), mean_excess)
+                # NOTE: m1_grid_limited is only the READING's shape. Whether
+                # the exception actually governs the verdict also requires
+                # every other gate (and, for A2, the arm's added gates) to
+                # pass; that is decided once, below, by grid_limited_applies.
                 if decision["m1_grid_limited"]:
-                    print(f'   -> PRE-REGISTERED RULE APPLIES (section '
-                          f'71.9.3(2)): thr50 cleared {M1_BAR_THR50} and the '
-                          f'excess reading {mean_excess:.4f} reaches the '
-                          f'{M1_EXCESS_BAR:.4f} the calibrated bar implies. '
-                          f'M1\'s miss is on the FULL-RES raw rate only '
-                          f'-> INSUFFICIENT EVIDENCE, not a mechanism '
-                          f'refutation. Add a full-res matched control '
-                          f'before any verdict.')
+                    print(f'   -> M1\'s reading has the cross-grid SHAPE (thr50 '
+                          f'cleared {M1_BAR_THR50}, excess {mean_excess:.4f} >= '
+                          f'{M1_EXCESS_BAR:.4f}). The exception applies only if '
+                          f'every other gate passes; see the aggregate below.')
                 else:
                     print('   NOTE: bars were calibrated on route-C 16x16; A '
                           'runs 216x248. If M1 misses on the raw full-res '
@@ -518,11 +600,21 @@ def main():
                 print(f'   BLOCKER: {note} -> A2 gates read NOT MEASURED')
             decision['a2_gates'] = g2
             a2_unmeasured = any(v is None for v in g2.values())
+
+        # The exception is scoped to A's M1-M4 set: for an A2 arm it may only
+        # apply when the arm's OWN pre-registered added gates passed. An A2-S
+        # run whose M1' failed has a measured mechanism refutation in hand, and
+        # reporting that as "the bars were calibrated on another grid" would
+        # bury the actual finding.
+        a2_all_pass = True
+        if a2 is not None:
             a2_all_pass = (not a2_unmeasured
                            and all(v is True for v in g2.values()))
 
-        grid_limited = (decision.get('m1_grid_limited') and other_pass
-                        and gates.get('M1') is False)
+        grid_limited = grid_limited_applies(
+            m1.get('mean_thr50'), m1.get('mean_hit1'),
+            decision.get('_m1_mean_excess'), other_pass,
+            gates.get('M1') is False, added_pass=a2_all_pass)
         print()
         if all_pass and not evidence_ok:
             print('S1 AGGREGATE: ALL GATES PASS but the evidence bundle is '
