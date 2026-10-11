@@ -362,6 +362,34 @@ class TestA2WatchdogCoversTheWholeBundle(unittest.TestCase):
                           '--load-from'):
             self.assertNotIn(forbidden, text)
 
+    def test_watchdog_training_log_is_derived_not_guessed_from_arm(self):
+        """The watchdog had the same LOG trap the finisher had.
+
+        It defaulted to /tmp/sem${ARM}_24e.log = /tmp/semA2S_24e.log, which
+        nothing creates. The live A2-S watchdog only worked because LOG was
+        exported by hand; an A2-R watchdog launched without it would have spun
+        forever and never produced the gate/rank/m4floor artifacts -- and those
+        exist ONLY in the watchdog. A's script was never affected because there
+        the guessed name happened to be right.
+        """
+        text = _read('me_rssm/sanity/watch_semA2_ep6.sh')
+        self.assertNotIn('LOG="${LOG:-/tmp/sem${ARM}_24e.log}"', text)
+        self.assertIn('LOG_DERIVED=$(ls -1t "$WORK_DIR"/[0-9]*.log', text)
+        # an explicit override must still win (the live instance relies on it
+        # being honored on restart paths)
+        self.assertIn('LOG="${LOG:-${LOG_DERIVED:-', text)
+
+    def test_both_a2_scripts_derive_the_log_the_same_way(self):
+        """One convention, checked in both places: a guessed /tmp path is a
+        hang, so neither script may reintroduce it as the primary source."""
+        for rel in ('me_rssm/sanity/watch_semA2_ep6.sh',
+                    'me_rssm/sanity/finish_semA2_ep6.sh'):
+            text = _read(rel)
+            self.assertIn('[0-9]*.log', text,
+                          f'{rel} no longer derives the training log')
+            self.assertNotIn('LOG="${LOG:-/tmp/sem${ARM}_24e.log}"', text,
+                             f'{rel} reintroduced the guessed /tmp default')
+
     def test_finisher_watchdog_guard_matches_the_real_script_name(self):
         """A dead guard let the finisher race the watchdog into an OOM.
 

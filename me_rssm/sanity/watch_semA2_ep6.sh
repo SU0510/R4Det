@@ -25,8 +25,20 @@ case "$ARM" in
 esac
 
 WORK_DIR="${WORK_DIR:-/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_sem${ARM}_seed0}"
-LOG="${LOG:-/tmp/sem${ARM}_24e.log}"
 CFG="${CFG:-$CFG_DEFAULT}"
+
+# The training log is DERIVED from the run dir, not guessed from $ARM.
+#
+# It used to default to /tmp/sem${ARM}_24e.log, i.e. /tmp/semA2S_24e.log -- a
+# path nothing creates (the A2-S job logs to /tmp/a2s_24e.log; the run's own
+# log is $WORK_DIR/YYYYmmdd_HHMMSS.log). The wait loop greps that path, so an
+# A2 watchdog started WITHOUT an explicit LOG override would spin forever and
+# never run its battery. The live A2-S instance only worked because LOG was
+# exported by hand; A2-R would have failed silently. The A generation never hit
+# this because there `sem${ARM}_24e.log` happened to equal the real name.
+LOG_DERIVED=$(ls -1t "$WORK_DIR"/[0-9]*.log 2>/dev/null | head -n1)
+LOG="${LOG:-${LOG_DERIVED:-/tmp/sem${ARM}_24e.log}}"
+
 CKPT="$WORK_DIR/epoch_6.pth"
 WATCH_LOG="$WORK_DIR/watch_sem${ARM}_ep6.log"
 STOP_TIMEOUT_SEC="${STOP_TIMEOUT_SEC:-1800}"
