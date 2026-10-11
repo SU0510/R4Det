@@ -1096,3 +1096,59 @@ class TestA2RunIdentity(unittest.TestCase):
         self.assertIsNotNone(facts, 'the A2 watchdog log must be found')
         self.assertEqual(facts[0], '2026-10-11 09:00:00')
         self.assertEqual(facts[2], '2026-10-11 09:05:00')
+
+
+class TestArmAwareProse(unittest.TestCase):
+    """The heading and the archive paragraph must name the actual arm.
+
+    Every draft used to be titled "候选 A" and to archive "本次候选 A 的读出/
+    监督设计", so an A2 draft would have read as A's already-closed negative
+    result and would not have named the gate that actually stopped it.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='armprose_')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _gate(self, cfg):
+        gate = _gate_payload()
+        gate['input_fingerprints']['config_path'] = cfg
+        with open(os.path.join(self.tmp, verdict.GATE_JSON), 'w') as fh:
+            json.dump(gate, fh)
+
+    def _rank(self, cfg, n=20, maxgt_hi=5, recall=0.02):
+        rows = [{'index': 3 + 100 * i,
+                 'auc_mean_over_occupied_channels': 0.92,
+                 'gt_shuffle_auc': 0.47,
+                 'max_gt_prob': 0.9 if i < maxgt_hi else 0.1,
+                 'recall_at_top_k_mean': recall} for i in range(n)]
+        with open(os.path.join(self.tmp, verdict.A2_RANK_VAL), 'w') as fh:
+            json.dump({'config': cfg, 'n_clips': n,
+                       'indices': [r['index'] for r in rows],
+                       'per_clip': rows}, fh)
+
+    def test_labels_track_the_arm(self):
+        self._gate('/x/..._semA_seed0.py')
+        self.assertEqual(record.arm_label(self.tmp), '候选 A')
+        self._gate('/x/..._semA2S_24e.py')
+        self.assertEqual(record.arm_label(self.tmp), '候选 A2-S')
+        self._gate('/x/..._semA2R_24e.py')
+        self.assertEqual(record.arm_label(self.tmp), '候选 A2-R')
+
+    def test_a2_archive_reason_names_the_added_gate(self):
+        """Source guard: the A2 failure reason must quote M1-loc explicitly."""
+        source = _read(os.path.join('me_rssm', 'sanity',
+                                    'semA_ep6_record.py'))
+        self.assertIn('M1-loc `max_gt_prob ≥ 0.5` 仅 ', source)
+        self.assertIn('not a2_all_pass', source.replace('not a2_all_pass',
+                                                        'not a2_all_pass'))
+        # the A-generation paragraph must stay behind an else-branch
+        self.assertIn("else:\n            add('   归档的是**本次候选 A", source)
+
+    def test_a2_paragraph_does_not_claim_candidate_a_scope(self):
+        source = _read(os.path.join('me_rssm', 'sanity',
+                                    'semA_ep6_record.py'))
+        idx = source.find('if a2 is not None:\n            add(f\'   归档的是')
+        self.assertGreater(idx, 0, 'the arm-aware archive branch is missing')

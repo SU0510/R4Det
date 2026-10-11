@@ -279,6 +279,21 @@ def train_throughput(run_dir):
             len(times))
 
 
+def arm_label(run_dir, a2=None):
+    """Human label for the bundle's arm, used in the section heading.
+
+    '候选 A' for the A generation; '候选 A2-S'/'候选 A2-R' for the A2 arms.
+    Leaving the A label in place would make an A2 draft read as A's archived
+    (already-closed) negative result.
+    """
+    if a2 is None:
+        a2 = verdict.a2_readings(run_dir)
+    if a2 is None:
+        return '候选 A'
+    arm = (a2 or {}).get('arm')
+    return {'A2S': '候选 A2-S', 'A2R': '候选 A2-R'}.get(arm, '候选 A2')
+
+
 def watch_log_name(run_dir):
     """Which watchdog log this bundle belongs to.
 
@@ -425,7 +440,7 @@ def render(run_dir, date_str):
     else:
         headline = '未全门通过'
 
-    add(f'## 72. 候选 A ep6 机制门（S1）：{headline}（{date_str}）')
+    add(f'## 72. {arm_label(run_dir, a2)} ep6 机制门（S1）：{headline}（{date_str}）')
     add('')
     add(f'本节执行 `{prereg_doc(run_dir, a2=a2)}` §5 预登记的 S1 ep6')
     add('机制门。训练从零起（3 卡 GPU5/6/7、seed0、deterministic、24e 余弦日程），')
@@ -1002,14 +1017,36 @@ def render(run_dir, date_str):
             reasons.append(
                 f'M4 `donor_transfer` {num(m4.get("mean_donor_transfer"))}'
                 f'（bar {num(m4.get("bar"), 2) if m4.get("bar") is not None else "n/a"}）')
+        # A2's added gates are part of the arm's S1, so a failure there must
+        # appear in the archive reasons -- otherwise the draft would archive an
+        # A2 arm without naming the gate that actually stopped it.
+        if a2 is not None and not a2_all_pass:
+            a2r = a2.get('readings') or {}
+            if a2_gates.get('M1p') is not True:
+                reasons.append(f"M1' `auc` {num(a2r.get('auc'))}"
+                               f"（margin {num(a2r.get('auc_margin'))}）")
+            if a2_gates.get('M1loc') is False:
+                reasons.append(
+                    f"M1-loc `max_gt_prob ≥ 0.5` 仅 "
+                    f"{a2r.get('n_max_gt_prob_ge_0.5')}/{verdict.A2_FROZEN_N}、"
+                    f"`recall@top-k` 中位 "
+                    f"{num(a2r.get('recall_at_top_k_median'))}")
         add('1. S1 未全过 ⇒ 按负结果归档，读数写进 Analysis，不投 ep16。')
         if reasons:
             add('   实测原因：' + '；'.join(reasons) + '。')
-        add('   归档的是**本次候选 A 的读出/监督设计**，不是「z 无信息」'
-            '（M2 只证明该语义头依赖其训练输入；z 的排他性**既未被否证、'
-            '也未被证实**，见 §72.0 与 §71.9.17(3)），也不是'
-            '「所有语义监督/残差读出方向」'
-            '（§7 只据此否定本设计，未否定候选 A/B 所代表的方向）。')
+        if a2 is not None:
+            add(f'   归档的是**本次 {arm_label(run_dir, a2)} 的单一变量对照**'
+                f'（A2-S 为监督侧排序压力、A2-R 为通道覆盖），不是「z 无信息」，'
+                f'也不是「所有语义监督/残差读出/通道覆盖方向」；'
+                f'转下一候选按 §7 的分叉表（M1-loc 不过 ⇒ 转「z 的对象信息'
+                f'是否只够支撑对象级读出」；M3 不过 ⇒ 转「分类读出是否应走'
+                f'独立分支」），不靠调权重/增益/KL 抢救。')
+        else:
+            add('   归档的是**本次候选 A 的读出/监督设计**，不是「z 无信息」'
+                '（M2 只证明该语义头依赖其训练输入；z 的排他性**既未被否证、'
+                '也未被证实**，见 §72.0 与 §71.9.17(3)），也不是'
+                '「所有语义监督/残差读出方向」'
+                '（§7 只据此否定本设计，未否定候选 A/B 所代表的方向）。')
     add('2. 任意 Ped/Cyc 触到非劣线 ⇒ 停止，记为家族副作用第 6 次复现。')
     add('3. **不做**权重/KL 扫描，**不做** ep24 抢救，不靠放大系数救活机制。')
     add('')
