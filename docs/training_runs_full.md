@@ -15226,6 +15226,38 @@ head，48 通道原样透传 ⇒ 该读数一直是正确的；`conv_cls` 侧（
 两者都不是本节正文）。未改判据、未改任何 JSON、未打断或重启 A2-R 训练。
 **合成捆绑只用来彩排**：它不产生任何性能或机制读数，不得引用为证据。
 
+#### 73.6.29 M4 的一个**靠数据成立、代码不设防**的隐含前提（2026-10-11，只读核验）
+
+**机制**：`SemanticReadoutRSSMFusion.detection_cls_logit_residual(is_valid_mask)`
+（`me_rssm/semantic_readout_rssm.py:301`）对**无效样本把整张残差清零**。
+而探针 `rollout()` 传的 mask 是 `valid[n-2]`（前一帧是否有效）。
+若某个被选中的 clip 在该位置为假，它的残差会**恒为全零** ⇒ `argmax` 恒为 **class 0**，
+而 M4 的 `own_hit` / `donor_transfer` 会把这些**人造**格**当作真实预测计入**。
+探针目前只挡 `run['residual'] is None`，**不挡全零**。
+
+**实测前提在本代成立**（两个已归档捆绑都查过）：
+
+| bundle | clip 数 | `residual_absmax_fg_mean` 范围 | 全零 clip | `own_hit==0` 的 clip |
+|---|---:|---|---:|---:|
+| A2-S | 20 | 0.9232 – 2.9314 | **0** | 0 |
+| A | 10 | 0.6975 – 2.5069 | **0** | 0 |
+
+⇒ 本代 M4 读数**没有**被这个机制污染；但这是一条**只靠数据成立**的保证，
+**换一个窗口或换一条臂就可能不成立**。
+
+**并发现在原处的过时注释**：`probe_semreadout_ep6.py:663–665` 写
+「The donor residual must be resized/masked onto this clip's grid the same way
+the detector does」，而紧接着的代码**直接透传** `donor_run['residual']`，
+并未 resize/mask。严格讲，这一步同时换了 **donor 的 z 与 donor 的 mask**；
+实测两边的 mask 都为全真（上表「全零 clip = 0」即其证据）⇒ **不构成混杂**，
+但注释描述的是**意图**而非实现，容易让读者以为该步骤已经做过。
+
+**行动**：不设防、不改代码（本代两个捆绑都已实测通过）。
+**A2-R 的 ep6 归档时须复核同一读数**：`residual_absmax_fg_mean` 的最小值是否 > 0
+即可当哨兵；若出现 0，该 clip 的 M4 格必须判为**无效**而不是计入。
+
+**边界**：只读核验 + 记录；未改探针、未改门槛、未改任何 JSON、未打断 A2-R 训练。
+
 
 ## 74. A2-S ep6 实际完成与进展核验（2026-10-11 15:39 UTC）
 
