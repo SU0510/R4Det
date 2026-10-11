@@ -673,6 +673,165 @@ class TestZContractBlock(unittest.TestCase):
         self.assertNotIn('未被测量', text)
 
 
+    def test_a2_blocked_aggregate_matches_the_heading(self):
+        """An A2 arm whose OWN added gates failed must not be told "ALL PASS".
+
+        §72.0/§72.9 decide the aggregate and authorise ep16. They were still
+        testing M1-M4 alone while the heading already required the added gates,
+        so a bundle with M1-M4 green and M1'/M1-loc RED rendered the heading
+        "未全门通过" NEXT TO "S1 聚合判定：ALL PASS ... 请求用户批准" -- the
+        draft would have authorised ep16 for a refuted arm.
+        """
+        gate = _gate_payload()          # M1-M4 all PASS
+        gate['input_fingerprints']['config_path'] = '/x/..._semA2S_24e.py'
+        self.fx.dump(verdict.GATE_JSON, gate)
+        rows = [{'index': 3 + 100 * i,
+                 'auc_mean_over_occupied_channels': 0.60,   # M1' bar 0.80
+                 'gt_shuffle_auc': 0.47,
+                 'max_gt_prob': 0.2,                        # M1-loc needs >=0.5
+                 'recall_at_top_k_mean': 0.0} for i in range(20)]
+        self.fx.dump(verdict.A2_RANK_VAL, {
+            'config': '/x/..._semA2S_24e.py', 'n_clips': 20,
+            'indices': [r['index'] for r in rows], 'per_clip': rows})
+
+        text = self.fx.render()
+        head = [l for l in text.split('\n') if l.startswith('## 72.')][0]
+        self.assertIn('未全门通过', head)
+        sec0 = text.split('### 72.0')[1].split('### 72.1')[0]
+        self.assertIn('NOT ALL PASS', sec0)
+        self.assertNotIn('聚合判定：ALL PASS', sec0)
+        sec9 = text.split('### 72.9')[1].split('### 72.10')[0]
+        self.assertNotIn('请求用户批准', sec9)
+        # the added gate responsible must be NAMED, not silently folded in
+        self.assertIn("M1'", sec0)
+
+    def test_a2_all_gates_green_still_reaches_the_s2_request(self):
+        """The guard must not dead-lock a genuine pass."""
+        gate = _gate_payload()
+        gate['input_fingerprints']['config_path'] = '/x/..._semA2S_24e.py'
+        self.fx.dump(verdict.GATE_JSON, gate)
+        rows = [{'index': 3 + 100 * i,
+                 'auc_mean_over_occupied_channels': 0.95,
+                 'gt_shuffle_auc': 0.47,
+                 'max_gt_prob': 0.9,
+                 'recall_at_top_k_mean': 0.6} for i in range(20)]
+        self.fx.dump(verdict.A2_RANK_VAL, {
+            'config': '/x/..._semA2S_24e.py', 'n_clips': 20,
+            'indices': [r['index'] for r in rows], 'per_clip': rows})
+        text = self.fx.render()
+        head = [l for l in text.split('\n') if l.startswith('## 72.')][0]
+        self.assertIn('全门通过', head)
+        sec9 = text.split('### 72.9')[1].split('### 72.10')[0]
+        self.assertIn('请求用户批准', sec9)
+
+
+class TestSplitAttribution(unittest.TestCase):
+    """§72.10's remaining question ("then what explains the gap?") is answered
+    by re-reading one checkpoint on BOTH splits with the z contract and the
+    eval mode pinned.
+
+    The canonical doc carried that answer as HAND-WRITTEN prose in §71.9.19,
+    while the generator still printed "来源仍未定位" -- so re-rendering §72
+    would have silently DELETED the attribution. It is now derived, but the
+    artifact set differs per arm (A has an ad hoc n=20 probe, the A2 watchdog
+    writes n=10), so the block must report THIS bundle's own n and degrade to an
+    explicit NOT MEASURED rather than inherit A's numbers.
+    """
+
+    def setUp(self):
+        self.fx = _Fixture()
+        self.addCleanup(self.fx.close)
+
+    def _splitprobe(self, name, base_thr, base_hit, bn_thr, bn_hit, n):
+        self.fx.dump(name, {
+            'ann_file': 'data/%s.pkl' % name,
+            'indices': [3 + 100 * i for i in range(n)],
+            'arms': {
+                'eval_running_stats': {'mean_thr50': base_thr,
+                                       'mean_hit1': base_hit},
+                'z_path_batch_stats': {'mean_thr50': bn_thr,
+                                       'mean_hit1': bn_hit},
+            },
+        })
+
+    def _write_n20(self):
+        # The exact readings §71.9.19 quotes; the assertion below is that they
+        # are RECOVERED from the artifacts, not restated from the doc.
+        self._splitprobe('semA_splitprobe_train_full_n20.json',
+                         0.4739185814185814, 0.41666666666666663,
+                         0.4851423576423577, 0.36666666666666664, 20)
+        self._splitprobe('semA_splitprobe_val_full_n20.json',
+                         0.12797619047619047, 0.041666666666666664,
+                         0.24523809523809526, 0.17916666666666667, 20)
+
+    def test_n20_readings_are_derived_from_the_artifacts(self):
+        self._write_n20()
+        got = record.split_attribution(self.fx.dir)
+        self.assertEqual(got['frozen_n'], 20)
+        self.assertEqual(got['n'], {'val': 20, 'train': 20})
+        self.assertAlmostEqual(got['splits']['train']['eval_thr50'], 0.4739, 4)
+        self.assertAlmostEqual(got['splits']['val']['eval_thr50'], 0.1280, 4)
+        self.assertAlmostEqual(got['splits']['train']['eval_hit1'], 0.4167, 4)
+        self.assertAlmostEqual(got['splits']['val']['eval_hit1'], 0.0417, 4)
+        # the BN term stays SECOND order, which is the finding's whole point
+        self.assertAlmostEqual(
+            got['splits']['val']['bn_delta_thr50'], 0.1173, 4)
+        self.assertLess(abs(got['splits']['val']['bn_delta_thr50']),
+                        0.3459)
+
+    def test_render_replaces_the_unlocated_claim_with_the_attribution(self):
+        self._write_n20()
+        text = self.fx.render()
+        self.assertNotIn('该差距的来源仍未定位', text)
+        self.assertIn('主要来自数据 split', text)
+        self.assertIn('拟合内', text)
+
+    def test_n10_watchdog_artifacts_are_used_and_labelled_with_their_own_n(self):
+        """The A2 watchdog only writes the n=10 four-arm version. Reading it
+        must not silently present it as §71.9.19's n=20 result."""
+        self._splitprobe('semA_bnmode_ep6_trainsplit.json',
+                         0.4480, 0.5500, 0.4331, 0.4500, 10)
+        self._splitprobe('semA_bnmode_ep6.json',
+                         0.11666666666666667, 0.08333333333333333,
+                         0.3, 0.08333333333333333, 10)
+        got = record.split_attribution(self.fx.dir)
+        self.assertEqual(got['frozen_n'], 10)
+        text = self.fx.render()
+        self.assertIn('n=10 / 10', text)
+        self.assertNotIn('n=20 / 20', text)
+
+    def test_missing_artifacts_do_not_let_the_section_claim_a_source(self):
+        """No split artifact ⇒ the contract mismatch is still ruled out, but
+        the SOURCE of the gap was never measured for this arm. Silence would
+        read as 'attributed', so the block must say so explicitly."""
+        got = record.split_attribution(self.fx.dir)
+        self.assertIsNone(got)
+        text = self.fx.render()
+        self.assertIn('来源归属：NOT MEASURED', text)
+        self.assertIn('不得据此断言差距来自泛化', text)
+
+    def test_a_bundle_with_only_one_side_is_not_half_reported(self):
+        """Both splits are needed: train alone cannot show that the gap is the
+        split. A single-sided bundle must fall through to 'not measured'."""
+        self._splitprobe('semA_splitprobe_train_full_n20.json',
+                         0.4739, 0.4167, 0.4851, 0.3667, 20)
+        self.assertIsNone(record.split_attribution(self.fx.dir))
+
+    def test_diff_never_invents_zero(self):
+        """A missing reading must stay None; 0.0 would render as 'no effect'."""
+        self.assertIsNone(record._diff(None, 0.5))
+        self.assertIsNone(record._diff(0.5, None))
+        self.assertAlmostEqual(record._diff(0.6, 0.5), 0.1)
+
+    def test_generator_does_not_hard_code_the_published_readings(self):
+        """Structural pin: the numbers must come from the bundle's JSON. If
+        they were pasted as constants, an A2 draft would assert A's split
+        result for a run that never measured it."""
+        source = _read('me_rssm/sanity/semA_ep6_record.py')
+        for literal in ('0.4739', '0.1280', '0.4167', '0.0417', '0.3459'):
+            self.assertNotIn(literal, source)
+
+
 class TestM2ClaimIsScoped(unittest.TestCase):
     """M2 feeds an out-of-distribution input to a head trained on z only.
 

@@ -104,6 +104,12 @@ TRAIN_STAT_KEYS = (
 
 FILL = '<!-- FILL: {} -->'
 
+# The date the §72.9 Ped/Cyc stop-line was re-scoped to S2. It is the date the
+# CORRECTION was established, not the section's date, so it stays fixed for
+# every arm's draft (an A2 draft must not re-date the correction to its own
+# run). Reproduces the canonical doc's hand-written note byte-for-byte.
+S2_SCOPE_CORRECTION_DATE = '2026-10-11'
+
 
 def load_json(path):
     with open(path, encoding='utf-8') as handle:
@@ -229,6 +235,19 @@ def a2_split_contrast(run_dir, a2=None):
     return {'train': _agg(train), 'val': _agg(val)}
 
 
+def arm_short_label(run_dir, a2=None):
+    """'A' / 'A2-S' / 'A2-R' -- bare arm name for mid-sentence prose.
+
+    Used where the sentence would otherwise say "A" for every run, e.g.
+    "**A 跑标准家族**，故用 `probe_z_utilization_standard.py`". An A2 draft that
+    says A ran something is misattributing the run's own setup.
+    """
+    if a2 is None:
+        a2 = verdict.a2_readings(run_dir)
+    arm = (a2 or {}).get('arm')
+    return {'A2S': 'A2-S', 'A2R': 'A2-R'}.get(arm, 'A')
+
+
 def arm_side_label(run_dir, a2=None):
     """'A 侧' / 'A2-S 侧' ... -- whose training statistics a table reports.
 
@@ -236,10 +255,7 @@ def arm_side_label(run_dir, a2=None):
     ``stat_sem_*`` rows are the A2 arm's OWN training diagnostics, so the
     heading would misattribute them to A.
     """
-    if a2 is None:
-        a2 = verdict.a2_readings(run_dir)
-    arm = (a2 or {}).get('arm')
-    return {'A2S': 'A2-S 侧', 'A2R': 'A2-R 侧'}.get(arm, 'A 侧')
+    return arm_short_label(run_dir, a2) + ' 侧'
 
 
 def saved_epochs(run_dir):
@@ -422,6 +438,57 @@ def arm_comparator(run_dir, a2=None):
     return '`..._no2d_igdr.py`（`MotionAlignedRSSMFusion`, seed0）'
 
 
+# Two artifacts can carry the split-vs-BN attribution, at different n, and
+# NEITHER is guaranteed for a given arm: §71.9.19's n=20 three-arm probe was
+# run ad hoc for A, while the watchdog only writes the n=10 four-arm version.
+# They are tried in this order (widest contract first).
+SPLIT_ATTRIBUTION_SOURCES = (
+    ('semA_splitprobe_val_full_n20.json',
+     'semA_splitprobe_train_full_n20.json', 20),
+    ('semA_bnmode_ep6.json', 'semA_bnmode_ep6_trainsplit.json', 10),
+)
+
+
+def split_attribution(run_dir):
+    """Measure whether the M1 train/val gap is the split or the BN mode.
+
+    §71.9.19 settled this for A: re-reading one checkpoint on BOTH splits with
+    the z contract and the eval mode pinned put the gap almost entirely on the
+    split, with the BN mode a small second-order term. That finding is a
+    property of the DATA, but the artifact carrying it is produced by an ad hoc
+    probe for A and by the watchdog for A2 -- at different n.
+
+    Transcribing §71.9.19's numbers into the generator would make it keep
+    asserting them for an arm that never measured them, which is exactly the
+    failure this generator exists to remove. So return only the readings that
+    are actually present for THIS bundle, together with their own n; the caller
+    degrades to an explicit "not measured" when there are none.
+    """
+    for val_name, train_name, frozen_n in SPLIT_ATTRIBUTION_SOURCES:
+        val_path = os.path.join(run_dir, val_name)
+        train_path = os.path.join(run_dir, train_name)
+        if not (os.path.exists(val_path) and os.path.exists(train_path)):
+            continue
+        val, train = load_json(val_path), load_json(train_path)
+        out = {'val_file': val_name, 'train_file': train_name,
+               'frozen_n': frozen_n, 'n': {}, 'splits': {}}
+        for label, payload in (('val', val), ('train', train)):
+            arms = payload.get('arms') or {}
+            base = arms.get('eval_running_stats') or {}
+            zpath = arms.get('z_path_batch_stats') or {}
+            out['n'][label] = len(payload.get('indices') or [])
+            out['splits'][label] = {
+                'eval_thr50': base.get('mean_thr50'),
+                'eval_hit1': base.get('mean_hit1'),
+                'bn_delta_thr50': _diff(zpath.get('mean_thr50'),
+                                        base.get('mean_thr50')),
+                'bn_delta_hit1': _diff(zpath.get('mean_hit1'),
+                                       base.get('mean_hit1')),
+            }
+        return out
+    return None
+
+
 def watch_facts(run_dir):
     """(gate_ts, free_ts, done_ts, signal, exit_code) from the watchdog log."""
     path = os.path.join(run_dir, watch_log_name(run_dir))
@@ -475,6 +542,13 @@ def signed(value, digits=4):
     if not isinstance(value, (int, float)):
         return 'n/a'
     return f'{value:+.{digits}f}'
+
+
+def _diff(new, old):
+    """new - old, or None when either side is missing (never 0.0)."""
+    if not isinstance(new, (int, float)) or not isinstance(old, (int, float)):
+        return None
+    return new - old
 
 
 def render(run_dir, date_str):
@@ -766,7 +840,7 @@ def render(run_dir, date_str):
                 f'{num(verdict.M1_BAR_THR50, 2)}、'
                 f'`hit@1` {_kw(hit1_v, verdict.M1_BAR_HIT1)} '
                 f'{num(verdict.M1_BAR_HIT1, 2)} |')
-            add(f'| A 自身 train 口径（`stat_sem_*` ep6 的 '
+            add(f'| {arm_short_label(run_dir, a2)} 自身 train 口径（`stat_sem_*` ep6 的 '
                 f'**epoch 均值**） | '
                 f'{num(t_thr)} | {num(t_hit)} | '
                 f'`thr50` {_kw(t_thr, verdict.M1_BAR_THR50)} '
@@ -826,11 +900,19 @@ def render(run_dir, date_str):
         add('`hit1_excess_over_chance` 健康、其余三门全过，命中 §71.9.3(2)')
         add('预先写定的例外条款：需补一个 full-res 同口径对照后再判，')
         add('不得当通过，也不得归档为负结果。')
-    elif all_pass:
+    elif all_pass and added_all_pass and not grid_limited:
         add('**S1 聚合判定：ALL PASS。** 按 §7 分叉，下一步是**请求用户批准')
         add('§5 的 S2 数值**，批准后才允许从 `epoch_6.pth` 续训至 ep16。')
     else:
+        # An arm's S1 is its OWN pre-registered gate set. For an A2 bundle that
+        # includes the added M1'/M1-loc gates, so the aggregate must not be
+        # decided off M1-M4 alone: it would print ALL PASS and authorise ep16
+        # for an arm whose added gates actually FAILED, contradicting both the
+        # heading and the pre-registration.
         failing = [k for k in verdict.REQUIRED_GATES if gates.get(k) is not True]
+        if a2 is not None:
+            failing += [k for k in sorted(a2_gates)
+                        if a2_gates.get(k) is not True]
         add(f'**S1 聚合判定：NOT ALL PASS（{", ".join(failing)}）。** 按 §7')
         add('分叉，按负结果归档并把读数写进 Analysis，**不进 ep16**。')
         if gates.get('M2') is not True:
@@ -1037,7 +1119,10 @@ def render(run_dir, date_str):
     add('')
     add('三窗口与既往各代（MAI / MCI / DC-RSSM）使用同一探针语义：')
     add('`shuffle_z` 用同 batch 另一样本的 `mu_q` 替换，`zero_z` 置 0，')
-    add('`prior_only` 只走先验。**A 跑标准家族**，故用')
+    if arm_short_label(run_dir, a2) == 'A':
+        add('`prior_only` 只走先验。**A 跑标准家族**，故用')
+    else:
+        add('`prior_only` 只走先验。**本臂即跑在标准家族底座上**，故用')
     add('`probe_z_utilization_standard.py`（后验头重写 + 转发部署态 class')
     add('residual），与 `tools/diagnose_z_utilization.py` 的打分口径一致。')
     add('')
@@ -1144,7 +1229,7 @@ def render(run_dir, date_str):
     elif grid_limited:
         add('1. **补一个 full-res 同口径对照**后再判 M1（§71.9.3(2)）；')
         add('   在此之前既不算通过也不算否定。')
-    elif all_pass:
+    elif all_pass and added_all_pass and not grid_limited:
         add('1. S1 全过 ⇒ **请求用户批准 §5 的 S2 数值**（Overall ≥ 40.00；')
         add('   非劣 Car ≥ 47.34 / Truck ≥ 29.22 / Ped ≥ 29.93 / Cyc ≥ 47.63；')
         add('   hard fail < 38.78）；批准后才允许从 `epoch_6.pth` 续训至 ep16。')
@@ -1191,6 +1276,16 @@ def render(run_dir, date_str):
                 '「所有语义监督/残差读出方向」'
                 '（§7 只据此否定本设计，未否定候选 A/B 所代表的方向）。')
     add('2. 任意 Ped/Cyc 触到非劣线 ⇒ 停止，记为家族副作用第 6 次复现。')
+    # This line sits in an ep6 archive section and was read as an ep6 stop-loss
+    # (the "S2" in the STOP-line was lost). The scope correction lived ONLY as
+    # hand-written prose in the canonical doc, so re-rendering would have
+    # deleted it and restored the misreading. It is emitted here instead.
+    add(f'   > **口径更正（{S2_SCOPE_CORRECTION_DATE}）**：本行写在 ep6 归档节里，'
+        f'容易被读成 ep6 的止损线。')
+    add('   > 该非劣线属 **S2（ep12–16）**；'
+        f'{arm_short_label(run_dir, a2)} 停在 S1，S2 从未形成，故本代'
+        '**从未触发**这条线')
+    add('   > （见预登记 §7 的范围更正与 A2 预登记 §5「早期门与成熟门严格分离」）。')
     add('3. **不做**权重/KL 扫描，**不做** ep24 抢救，不靠放大系数救活机制。')
     add('')
 
@@ -1255,11 +1350,47 @@ def render(run_dir, date_str):
                  if (t_thr is not None and d_thr is not None) else None)
         add('**结论**：契约切换确实移动了 z，但**两项门控读数完全不变**'
             f'（Δ`thr50` = {signed(delta)}）——')
-        add('故 train/val 的 4.3× 差距**不能**由 z 采样解释，'
-            '该差距的来源仍未定位。这**不改变** S1 判定'
-            '（§72.0 已按两种口径分别核过），但把「契约错配」从'
+        add('故 train/val 的 4.3× 差距**不能**由 z 采样解释。这**不改变** S1 '
+            '判定（§72.0 已按两种口径分别核过），但把「契约错配」从'
             '嫌疑名单上划掉。')
         add('')
+
+        # The remaining question ("then what DOES explain the gap?") was left
+        # open here. §71.9.19 answered it for A by pinning the z contract and
+        # the eval mode and varying the DATA SPLIT alone. Rendering that answer
+        # only when THIS bundle carries the artifact keeps the section from
+        # inheriting a number it never measured.
+        attrib = split_attribution(run_dir)
+        if attrib:
+            sv, st = attrib['splits']['val'], attrib['splits']['train']
+            add(f'**来源归属（只读补测，n={attrib["n"]["val"]} / '
+                f'{attrib["n"]["train"]}）**：把 z 契约与 eval 模式都钉死后'
+                f'**只换数据 split**——')
+            add('')
+            add('| split | `thr50` | `hit@1` | 只切 z 路径 4 个 BN 的 Δ`thr50` | '
+                'Δ`hit@1` |')
+            add('|---|---:|---:|---:|---:|')
+            add(f'| train（拟合过） | **{num(st["eval_thr50"])}** | '
+                f'**{num(st["eval_hit1"])}** | '
+                f'{signed(st["bn_delta_thr50"])} | '
+                f'{signed(st["bn_delta_hit1"])} |')
+            add(f'| val（留出） | **{num(sv["eval_thr50"])}** | '
+                f'**{num(sv["eval_hit1"])}** | '
+                f'{signed(sv["bn_delta_thr50"])} | '
+                f'{signed(sv["bn_delta_hit1"])} |')
+            add('')
+            gap_t = _diff(st['eval_thr50'], sv['eval_thr50'])
+            gap_h = _diff(st['eval_hit1'], sv['eval_hit1'])
+            add(f'⇒ 该差距**主要来自数据 split**（thr50 {signed(gap_t)}、'
+                f'hit@1 {signed(gap_h)}），归一化模式是**次要**项。'
+                f'即：train 侧 `stat_sem_*` 是**拟合内**读数，不能当作'
+                f'同一模型在另一口径下的同量测量。')
+            add('')
+        else:
+            add('**来源归属：NOT MEASURED（本包无 split 对照产物）。** '
+                '本节只测得「契约错配不是原因」，**未**测量 split 与 BN 模式'
+                '各占多少；不得据此断言差距来自泛化。')
+            add('')
         add(f'> 产物：`{ZCONTRACT_JSON}`（只读探针 '
             '`me_rssm/sanity/probe_semA_zcontract.py`，未改权重、未启动训练）。')
         add('')
