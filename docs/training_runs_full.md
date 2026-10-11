@@ -14069,8 +14069,12 @@ CPU 只读退出 0：五个预期证据产物存在且检查通过；M1 thr50 **
 #### 73.6.3 S0 接线门（450 iter，无 val、无 AP 含义）
 
 两臂各跑 450 iter（3 卡 GPU5/6/7，seed0，deterministic），并各跑一次只读
-wiring 探针。**两个 3 卡作业曾同时投在同一组 GPU 上导致 A2-R OOM**，改为
-**串行**后通过（此教训已记入下方运行事实）。
+wiring 探针。**两个 3 卡作业曾同时投在同一组 GPU 上导致 A2-R OOM**（证据：
+`/tmp/a2r_smoke450.log` 中 6 处 `torch.cuda.OutOfMemoryError`，三个 rank 分别在
+`rssm_fusion.py::kl_loss` 与 `modulated_deform_conv` 上失败；该 run 目录的
+`20261011_0759/0800/0803` 三次日志都只跑到 iter 2 就中断），改为
+**串行**后通过（该次 OOM 的原始日志与本次修复说明保留在同一处；此教训已记入
+下方运行事实）。
 
 | 读数 | A2-S | A2-R |
 |---|---:|---:|
@@ -14106,7 +14110,20 @@ grid `[248,216]` 与 `pts_feats` 一致；零初始化下 head 侧残差 absmax 
 
 - **已完成**：四项契约补齐、代码实现、18 条单测、两臂 450-iter S0（全 PASS）。
 - **进行中**：**A2-S 24e 正式训练**（seed0、deterministic、GPU5/6/7），
-  ep6 看门狗已挂 `watch_semA2_ep6.sh`。**A2-R 尚未开跑**（按 §6 串行）。
+  发射 2026-10-11 09:04:45 UTC，`--work-dir` 为
+  `/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_semA2S_seed0`，日志
+  `/tmp/a2s_24e.log`，ep6 看门狗已挂 `watch_semA2_ep6.sh`（PID 3070972）。
+  **区间均值**：ep12–16 尚未形成（A2-S 仍在早期）；截至记录时唯一 val 为
+  **ep1 = 28.5104**（n=1，仅作训练健康度上下文，**不构成性能结论**）。
+  **全轮峰值**（实为当前唯一 val 点）：**28.5104 @ ep1**，无该轮以外记录；
+  **best saved**：截至记录时**尚无权重落盘**（`checkpoint_config.interval=2`，
+  即 ep2/4/6/… 落盘；ep1 无权重，故此刻确实没有 best saved —— 这是**当前时点**
+  的事实，不是"末位保存"，记录时应按真实落盘列表写）。
+  训练健康度：iter 50→1750（ep2），无 NaN/OOM，累计显存 17106 MiB，
+  `loss_rssm_sem` 1.078、`stat_cls_res_rms` 0.873（读出已离开 0，
+  与 S0 的 zero-init 契约一致）、`stat_sem_thr50` 0.2756 / `stat_sem_hit1`
+  0.2457（此为 **train 口径**统计，不能与 val 的 M1 读数混读，见 §71.9.19）。
+  **A2-R 尚未开跑**（按 §6 串行）。
 - **未完成**：A2-S 的 ep6 机制门（M1/M1'/M1-loc/M3/M4）、S2 ep12–16 任务门、
   多 seed。
 - **不构成**：任何性能结论。S0 只证明"接线对、梯度在、身份不破"，
