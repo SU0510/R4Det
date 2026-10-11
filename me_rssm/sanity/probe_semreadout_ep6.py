@@ -71,10 +71,11 @@ def parse_args():
 class _Sel:
     """Minimal stand-in for the argparse namespace dz.select_indices wants."""
 
-    def __init__(self, start_index, limit, min_valid_history):
+    def __init__(self, start_index, limit, min_valid_history=2, stride=1):
         self.start_index = start_index
         self.limit = limit
         self.min_valid_history = min_valid_history
+        self.stride = stride
         self.require_valid_history = True
 
 
