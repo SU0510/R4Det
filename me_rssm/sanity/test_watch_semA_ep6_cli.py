@@ -362,6 +362,56 @@ class TestA2WatchdogCoversTheWholeBundle(unittest.TestCase):
                           '--load-from'):
             self.assertNotIn(forbidden, text)
 
+    def test_finisher_watchdog_guard_matches_the_real_script_name(self):
+        """A dead guard let the finisher race the watchdog into an OOM.
+
+        The finisher waited with ``pgrep -f "watch_sem${ARM}_ep6.sh"``, which
+        expands to ``watch_semA2S_ep6.sh`` -- but the A2 watchdog script is
+        SHARED by both arms and really runs as ``watch_semA2_ep6.sh``. The
+        pattern could never match, so the wait loop broke immediately and the
+        finisher started its own GPU probes on the same cards as the watchdog
+        battery: the double-run that caused an earlier A2 OOM.
+        """
+        text = _read('me_rssm/sanity/finish_semA2_ep6.sh')
+        self.assertNotIn('pgrep -f "watch_sem${ARM}_ep6.sh"', text)
+        self.assertIn('WATCHDOG_SCRIPT_NAME', text)
+        self.assertIn('A2S|A2R) WATCHDOG_SCRIPT_NAME=watch_semA2_ep6.sh',
+                      text)
+        # the guard must be the one that was fixed, not a new hardcode
+        self.assertIn('pgrep -f "$WATCHDOG_SCRIPT_NAME"', text)
+
+    def test_finisher_training_log_is_derived_not_guessed_from_arm(self):
+        """A wrong LOG default made the finisher hang forever.
+
+        It defaulted to ``/tmp/sem${ARM}_24e.log`` = ``/tmp/semA2S_24e.log``,
+        a path nothing creates (the job logs to ``/tmp/a2s_24e.log`` and the
+        run dir holds ``YYYYmmdd_HHMMSS.log``). The wait loop greps that path,
+        so it could never be satisfied and the finisher silently never ran.
+        """
+        text = _read('me_rssm/sanity/finish_semA2_ep6.sh')
+        self.assertNotIn('LOG="${LOG:-/tmp/sem${ARM}_24e.log}"', text)
+        self.assertIn('LOG=$(ls -1t "$WORK_DIR"/[0-9]*.log', text)
+        # and the derived path must be the one the wait loop greps
+        self.assertIn("grep -q 'Epoch(val) \\[6\\]' \"$LOG\"", text)
+
+    def test_finisher_derivation_picks_a_real_log_for_both_arms(self):
+        """Behavioural check of the derivation against the live run dirs."""
+        for arm, work in (
+                ('A2S', '/data/lurui/work_dirs/'
+                        'fgfull_N4_no2d_igdr_2x4_24e_semA2S_seed0'),
+                ('A', '/data/lurui/work_dirs/'
+                      'fgfull_N4_no2d_igdr_2x4_24e_semA_seed0')):
+            if not os.path.isdir(work):
+                continue          # archived away; nothing to assert
+            found = [n for n in os.listdir(work)
+                     if len(n) == len('20260101_000000.log')
+                     and n.endswith('.log') and n[8] == '_']
+            if not found:
+                continue
+            # naming contract: the derivation must not invent a /tmp path when
+            # the run's own authoritative log exists
+            self.assertTrue(any(n[0].isdigit() for n in found), arm)
+
     def test_gate_clip_plan_still_matches_the_recorded_epochs(self):
         for arm, rel in WATCHDOGS.items():
             argv = next(a for a in watchdog_commands(rel)

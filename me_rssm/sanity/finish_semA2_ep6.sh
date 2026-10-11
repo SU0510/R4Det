@@ -33,8 +33,37 @@ case "$ARM" in
 esac
 
 WORK_DIR="${WORK_DIR:-/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_sem${ARM}_seed0}"
-LOG="${LOG:-/tmp/sem${ARM}_24e.log}"
 CFG="${CFG:-$CFG_DEFAULT}"
+
+# The training log is DERIVED from the run dir, not guessed from $ARM.
+#
+# The first revision defaulted to /tmp/sem${ARM}_24e.log, i.e.
+# /tmp/semA2S_24e.log for A2S -- a path NOTHING creates (the job was launched
+# with the log at /tmp/a2s_24e.log and the run's own log is
+# $WORK_DIR/YYYYmmdd_HHMMSS.log). The wait loop below greps that path, so it
+# could never be satisfied: the finisher would hang forever and silently never
+# repair anything. The A generation never hit this because there
+# `sem${ARM}_24e.log` happens to equal the real name; the A2 arms renamed the
+# log, and the derivation was never re-checked.
+#
+# The run's own timestamped log is authoritative and always present once
+# training starts, so prefer it; keep the /tmp path as a last-resort fallback
+# for a bundle whose run dir was cleaned.
+if [ -z "${LOG:-}" ]; then
+  LOG=$(ls -1t "$WORK_DIR"/[0-9]*.log 2>/dev/null | head -n1)
+  [ -n "$LOG" ] || LOG="/tmp/sem${ARM}_24e.log"
+fi
+
+# The A2 watchdog script is SHARED by both arms (watch_semA2_ep6.sh), so
+# "watch_sem${ARM}_ep6.sh" would expand to watch_semA2S_ep6.sh and never match
+# the running process. A dead guard meant the finisher would not wait for the
+# watchdog battery to finish before starting its own probes on the same GPUs
+# (the double-run that caused an earlier A2 OOM).
+case "$ARM" in
+  A2S|A2R) WATCHDOG_SCRIPT_NAME=watch_semA2_ep6.sh ;;
+  *)       WATCHDOG_SCRIPT_NAME=watch_semA_ep6.sh ;;
+esac
+
 CKPT="$WORK_DIR/epoch_6.pth"
 WATCH_LOG="$WORK_DIR/finish_sem${ARM}_ep6.log"
 
@@ -49,10 +78,10 @@ while [ ! -f "$CKPT" ] || ! grep -q 'Epoch(val) \[6\]' "$LOG" 2>/dev/null; do
 done
 echo "[finish-$ARM] $(date -u '+%F %T') ep6 present; waiting for the watchdog to exit" >> "$WATCH_LOG"
 for _ in $(seq 1 480); do
-  pgrep -f "watch_sem${ARM}_ep6.sh" >/dev/null 2>&1 || break
+  pgrep -f "$WATCHDOG_SCRIPT_NAME" >/dev/null 2>&1 || break
   sleep 15
 done
-if pgrep -f "watch_sem${ARM}_ep6.sh" >/dev/null 2>&1; then
+if pgrep -f "$WATCHDOG_SCRIPT_NAME" >/dev/null 2>&1; then
   echo "[finish-$ARM] $(date -u '+%F %T') WARNING: watchdog still alive; continuing anyway (its outputs are existence-checked below)" >> "$WATCH_LOG"
 fi
 for _ in $(seq 1 240); do
