@@ -27,6 +27,22 @@ What each test protects:
     T10 the 'h' control arm is the mirror image of T3 (gradient into h, none
         into z) — the control is wired, not merely configured;
     T11 an image without objects contributes no gradient and no NaN.
+
+A2 (docs/rssm_candidate_A2_prereg_20261011.md §4.1/§4.2) adds:
+    T14 both A2 arm defaults reproduce candidate A exactly, and an unknown
+        arm name raises instead of silently falling back to A;
+    T15 the ranking term's arithmetic matches the pre-registered formula
+        (max over GT, background quantile, one-sided margin) and is exactly 0
+        once the GT peak clears the margin;
+    T16 the ranking term's reduction is per-occupied-channel (channels without
+        GT contribute nothing) and an all-background frame is a zero no-op;
+    T17 the ranking term reaches z (gradient flows) and does not perturb the
+        focal term's own value;
+    T18 ``anchor_slot`` writes ALL 48 conv_cls channels with the same 4-channel
+        predictor / parameter count, and ``per_class_slot`` still writes 12/48
+        with the head's own mapping (the A behaviour is unchanged);
+    T19 both arms keep the zero-init identity contract (W_cls == 0 => the head
+        sees an all-zero residual on every channel).
 """
 
 import os
@@ -442,6 +458,232 @@ class TestSemanticReadoutRSSM(unittest.TestCase):
         with torch.no_grad():
             arm(torch.randn(1, 16, 8, 10), deterministic=True)
         self.assertIsNotNone(arm.last_sem_map)
+
+    def _build_a2_arm(self, **kw):
+        """A minimal A2 arm (CPU, tiny grid) mirroring ``_build_arm``."""
+        return _build_arm(**kw)
+
+    # ------------------------------------------------------------------
+    # A2 arm plumbing
+    # ------------------------------------------------------------------
+    def test_T14_a2_defaults_reproduce_candidate_A(self):
+        """An untouched config must still be candidate A, not an A2 arm.
+
+        Both A2 variables default to A's behaviour, so a config that forgets
+        to set one cannot silently become an A2 run -- and conversely, the two
+        arm configs differ from A in exactly one flag each.
+        """
+        a = self._build_a2_arm(sem_supervision_weight=1.0)
+        self.assertEqual(a.sem_target_mode, 'gaussian_full')
+        self.assertEqual(a.cls_readout_mode, 'per_class_slot')
+        self.assertIsNone(a.cls_readout_anchor_slots)
+
+        s = self._build_a2_arm(sem_supervision_weight=1.0,
+                               sem_target_mode='channel_contrastive',
+                               sem_rank_q=0.999, sem_rank_margin=1.0,
+                               sem_rank_weight=0.1)
+        self.assertEqual(s.sem_target_mode, 'channel_contrastive')
+        self.assertEqual(s.cls_readout_mode, 'per_class_slot')
+        r = self._build_a2_arm(sem_supervision_weight=1.0,
+                               cls_readout_mode='anchor_slot',
+                               cls_readout_anchor_slots=12)
+        self.assertEqual(r.cls_readout_mode, 'anchor_slot')
+        self.assertEqual(r.sem_target_mode, 'gaussian_full')
+
+        for bad in ('gaussian', 'contrastive', '', 'Gaussian_Full'):
+            with self.assertRaises(ValueError) as ctx:
+                self._build_a2_arm(sem_target_mode=bad)
+            self.assertIn('sem_target_mode', str(ctx.exception))
+        for bad in ('perclass', 'anchor', '', 'Anchor_Slot'):
+            with self.assertRaises(ValueError) as ctx:
+                self._build_a2_arm(cls_readout_mode=bad)
+            self.assertIn('cls_readout_mode', str(ctx.exception))
+
+    # ------------------------------------------------------------------
+    # T15/T16 — the ranking term's arithmetic
+    # ------------------------------------------------------------------
+    def test_T15_rank_term_matches_the_preregistered_formula(self):
+        arm = self._build_a2_arm(sem_supervision_weight=1.0,
+                                 sem_target_mode='channel_contrastive')
+        # One sample, one class channel, a known 1x8 logit row.
+        logits = torch.tensor([[[[5.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                  0.0]]]])
+        pos = torch.zeros_like(logits, dtype=torch.bool)
+        pos[0, 0, 0, 0] = True          # GT peak 5.0
+        got = float(arm._channel_rank_loss(logits, pos))
+        # q=0.999 over the 7 background values {4,0,0,0,0,0,0} lies just below
+        # 4.0; margin 1.0 => relu(1 + ~3.9995 - 5) == 0.
+        self.assertEqual(got, 0.0)
+
+        # Lower the GT peak below the background quantile: the term must be
+        # exactly (margin + q - g), the frozen one-sided hinge.
+        logits2 = logits.clone()
+        logits2[0, 0, 0, 0] = 0.5
+        bg = logits2[0, 0].reshape(-1)[1:]
+        q = torch.quantile(bg, 0.999)
+        expect = float(torch.relu(
+            arm.sem_rank_margin + q - logits2[0, 0, 0, 0]))
+        self.assertAlmostEqual(float(arm._channel_rank_loss(logits2, pos)),
+                               expect, places=6)
+        self.assertGreater(expect, 0.0)
+
+        # The hinge is ONE-sided: making the GT peak huge must not produce a
+        # negative term that could be used to buy AP elsewhere.
+        logits3 = logits.clone()
+        logits3[0, 0, 0, 0] = 100.0
+        self.assertEqual(float(arm._channel_rank_loss(logits3, pos)), 0.0)
+
+    def test_T16_rank_reduction_is_per_occupied_channel(self):
+        arm = self._build_a2_arm(sem_supervision_weight=1.0,
+                                 sem_target_mode='channel_contrastive')
+        logits = torch.zeros(1, 3, 1, 8)
+        logits[0, 0, 0] = torch.tensor([0.0, 5.0, 5, 5, 5, 5, 5, 5])
+        logits[0, 1, 0] = torch.tensor([9.0, 0.0, 0, 0, 0, 0, 0, 0])
+        logits[0, 2, 0] = torch.tensor([0.0, 3.0, 3, 3, 3, 3, 3, 3])
+        pos = torch.zeros_like(logits, dtype=torch.bool)
+        pos[0, 0, 0, 0] = True     # violated: q=5, g=0 -> 1 + 5 - 0 = 6
+        pos[0, 1, 0, 0] = True     # satisfied: q=0, g=9 -> relu(1-9) = 0
+        # channel 2 has NO GT -> must not enter the mean at all. With exactly
+        # two occupied channels the mean is (6 + 0) / 2 == 3; a mean that had
+        # swallowed channel 2 (term 1 + 3 - 0 = 4) would give 10/3 instead.
+        got = float(arm._channel_rank_loss(logits, pos))
+        self.assertAlmostEqual(got, 3.0, places=5)
+        self.assertNotAlmostEqual(got, (6.0 + 0.0 + 4.0) / 3.0, places=5)
+
+        # Mid-batch semantics: sample 1 has no occupied channel, so it cannot
+        # dilute sample 0's term (a batch-wide channel pool would halve it).
+        logits_b = torch.cat([logits, logits], dim=0)
+        pos_b = torch.cat([pos, torch.zeros_like(pos)], dim=0)
+        self.assertAlmostEqual(float(arm._channel_rank_loss(logits_b, pos_b)),
+                               3.0, places=5)
+
+        # All-background frame => exactly zero, same as focal's num_pos==0.
+        self.assertEqual(
+            float(arm._channel_rank_loss(logits, torch.zeros_like(
+                pos, dtype=torch.bool))), 0.0)
+
+    def test_T17_rank_term_reaches_z_and_leaves_focal_alone(self):
+        arm = self._build_a2_arm(sem_supervision_weight=1.0,
+                                 sem_target_mode='channel_contrastive')
+        logits = torch.randn(1, 2, 4, 5, requires_grad=True)
+        pos = torch.zeros(1, 2, 4, 5, dtype=torch.bool)
+        pos[0, 0, 1, 1] = True
+        pos[0, 1, 2, 3] = True
+        rank = arm._channel_rank_loss(logits, pos)
+        rank.backward()
+        self.assertIsNotNone(logits.grad)
+        self.assertTrue(torch.isfinite(logits.grad).all())
+        # The gradient must be non-zero somewhere: a term that cannot move the
+        # map is not a supervision term.
+        self.assertGreater(float(logits.grad.abs().sum()), 0.0)
+
+        # The two arms must share the focal term VERBATIM (prereg §4.1): the
+        # only difference between their reported losses is lambda_rank times
+        # the ranking term, and the focal-only arm is the A arm exactly.
+        target = pos.float()
+        arm.sem_target_mode = 'channel_contrastive'
+        l_rank_arm, hit_c, thr_c, n_c = arm._semantic_heatmap_loss(
+            logits.detach().clone().requires_grad_(True), target)
+        arm.sem_target_mode = 'gaussian_full'
+        l_focal_arm, hit_a, thr_a, n_a = arm._semantic_heatmap_loss(
+            logits.detach().clone().requires_grad_(True), target)
+        expected_rank_term = float(arm._channel_rank_loss(logits, pos))
+        self.assertAlmostEqual(
+            float(l_rank_arm) - float(l_focal_arm),
+            arm.sem_rank_weight * expected_rank_term, places=5)
+        # The three diagnostics are computed from the SAME focal map, so the
+        # rank term must not move them either.
+        self.assertAlmostEqual(float(hit_c), float(hit_a), places=6)
+        self.assertAlmostEqual(float(thr_c), float(thr_a), places=6)
+        self.assertEqual(float(n_c), float(n_a))
+
+        # lambda_rank = 0 must reproduce candidate A bit for bit.
+        arm.sem_target_mode = 'channel_contrastive'
+        arm.sem_rank_weight = 0.0
+        l_zero, hit_z, thr_z, n_z = arm._semantic_heatmap_loss(
+            logits.detach().clone().requires_grad_(True), target)
+        self.assertEqual(float(l_zero), float(l_focal_arm))
+        self.assertEqual(float(hit_z), float(hit_a))
+
+    # ------------------------------------------------------------------
+    # T18/T19 — the readout arm's channel coverage
+    # ------------------------------------------------------------------
+    def test_T18_anchor_slot_writes_all_48_channels(self):
+        head = self._build_head()
+        a = self._build_a2_arm(sem_supervision_weight=0.0,
+                               cls_readout_anchor_slots=12)
+        a.eval()
+        self.assertEqual(a.cls_readout_anchor_slots, 12)
+        with torch.no_grad():
+            a.z_cls_logits.weight.normal_()
+            a.z_cls_logits.bias.normal_()
+        # One fixed input for BOTH arms AND a state reset before each: the
+        # RSSM carries hidden state across calls, so re-running without
+        # resetting would move z_t and the channel check below would be
+        # comparing different latents.
+        feat = torch.randn(1, 16, 4, 4)
+        with torch.no_grad():
+            a.reset_state()
+            a(feat, deterministic=True)
+        per_class = a.last_cls_logit_residual
+        self.assertEqual(tuple(per_class.shape), (1, 4, 4, 4))
+
+        # Emulate R4Det's hook: switch the arm to anchor_slot and re-run on the
+        # SAME input, the SAME weights and the SAME (reset) state.
+        a.cls_readout_mode = 'anchor_slot'
+        with torch.no_grad():
+            a.reset_state()
+            a(feat, deterministic=True)
+        wide = a.last_cls_logit_residual
+        self.assertEqual(tuple(wide.shape), (1, 48, 4, 4))
+        # Every anchor slot of class c must carry exactly class c's logit.
+        for anchor in range(12):
+            for c in range(4):
+                self.assertAlmostEqual(
+                    float(wide[0, anchor * 4 + c, 0, 0]),
+                    float(per_class[0, c, 0, 0]), places=6,
+                    msg=f'anchor {anchor} class {c}')
+
+        # No new parameters: the predictor is still 4xlatent with the same
+        # number of tensors (prereg §4.2 forbids a capacity variable).
+        b = self._build_a2_arm(sem_supervision_weight=0.0,
+                               cls_readout_mode='anchor_slot',
+                               cls_readout_anchor_slots=12)
+        pa = sum(p.numel() for p in a.parameters())
+        pb = sum(p.numel() for p in b.parameters())
+        self.assertEqual(pa, pb)
+        self.assertEqual(b.z_cls_logits.weight.shape[0], 4)
+
+        # The head's own downstream path is identical for both: feeding the
+        # 48-channel map uses the direct branch, and the result is the sum.
+        ref = torch.zeros(1, 48, 2, 2)
+        self.assertTrue(torch.equal(
+            head._expand_cls_logit_residual(wide[:, :, :2, :2], ref),
+            wide[:, :, :2, :2]))
+
+    def test_T19_both_arms_keep_the_zero_init_identity(self):
+        head = self._build_head()
+        for mode in ('per_class_slot', 'anchor_slot'):
+            arm = self._build_a2_arm(
+                sem_supervision_weight=1.0, cls_readout_mode=mode,
+                cls_readout_anchor_slots=12,
+                sem_target_mode='channel_contrastive')
+            arm.eval()
+            # Fresh zero-init must survive as an exact zero on every channel.
+            self.assertTrue(torch.equal(
+                arm.z_cls_logits.weight, torch.zeros_like(
+                    arm.z_cls_logits.weight)))
+            with torch.no_grad():
+                arm(torch.randn(1, 16, 4, 4), deterministic=True)
+            raw = arm.last_cls_logit_residual
+            if mode == 'anchor_slot':
+                self.assertEqual(raw.shape[1], 48)
+            else:
+                self.assertEqual(raw.shape[1], 4)
+            self.assertEqual(float(raw.abs().sum()), 0.0)
+            expanded = head._expand_cls_logit_residual(raw, torch.zeros(
+                1, 48, 4, 4))
+            self.assertEqual(float(expanded.abs().sum()), 0.0)
 
     def test_T13_runtime_arm_selection_is_exact(self):
         """The M2 z-exclusivity gate compares exactly these three arms.

@@ -75,6 +75,15 @@ from mmdet3d.models.fusion_layers.rssm_fusion import MotionAlignedRSSMFusion
 __all__ = ['SemanticReadoutRSSMFusion']
 
 _SEM_INPUTS = ('z', 'h', 'feat')
+# A2-S: 'gaussian_full' is candidate A's full-resolution Gaussian target;
+# 'channel_contrastive' keeps the *same* focal term and adds one ranking term
+# per occupied class channel (prereg section 4.1).
+_SEM_TARGET_MODES = ('gaussian_full', 'channel_contrastive')
+# A2-R: 'per_class_slot' is candidate A (4 logits -> the class's own anchor
+# slots, 12/48 channels); 'anchor_slot' broadcasts each class logit to all
+# ``num_anchors`` slots of that class (48/48) using the SAME 4-channel
+# predictor and the same parameter count (prereg section 4.2).
+_CLS_READOUT_MODES = ('per_class_slot', 'anchor_slot')
 
 
 @FUSION_LAYERS.register_module()
@@ -108,8 +117,14 @@ class SemanticReadoutRSSMFusion(MotionAlignedRSSMFusion):
                  sem_head_hidden=64,
                  sem_supervision_weight=1.0,
                  object_min_radius=2,
+                 sem_target_mode='gaussian_full',
+                 sem_rank_q=0.999,
+                 sem_rank_margin=1.0,
+                 sem_rank_weight=0.1,
                  cls_residual=True,
                  cls_residual_gate=1.0,
+                 cls_readout_mode='per_class_slot',
+                 cls_readout_anchor_slots=None,
                  log_sem_maps=False,
                  init_cfg=None,
                  **kwargs):
@@ -123,6 +138,42 @@ class SemanticReadoutRSSMFusion(MotionAlignedRSSMFusion):
             raise ValueError('sem_supervision_weight must be >= 0')
         if object_min_radius < 0:
             raise ValueError('object_min_radius must be >= 0')
+        # A2 arm variables (prereg docs/rssm_candidate_A2_prereg_20261011.md
+        # sections 4.1 / 4.2). Both defaults reproduce candidate A exactly, so
+        # an unmodified config keeps the archived A behaviour bit for bit.
+        if sem_target_mode not in _SEM_TARGET_MODES:
+            raise ValueError(
+                f'sem_target_mode must be one of {_SEM_TARGET_MODES}, got '
+                f'{sem_target_mode!r}')
+        if not 0.0 < sem_rank_q <= 1.0:
+            raise ValueError(
+                f'sem_rank_q must be in (0, 1], got {sem_rank_q!r}')
+        if sem_rank_margin < 0:
+            raise ValueError('sem_rank_margin must be >= 0')
+        if sem_rank_weight < 0:
+            raise ValueError('sem_rank_weight must be >= 0')
+        if cls_readout_mode not in _CLS_READOUT_MODES:
+            raise ValueError(
+                f'cls_readout_mode must be one of {_CLS_READOUT_MODES}, got '
+                f'{cls_readout_mode!r}')
+        # Only consulted by ``anchor_slot``; it is the detector head's
+        # ``num_anchors`` (6 sizes x 2 rotations = 12 on the TJ4D mainline). It
+        # is a broadcast constant, NOT a parameter: both readout arms keep the
+        # same single 4-channel predictor, so no capacity is added. None on
+        # ``per_class_slot`` is fine -- the head's own mapping table decides
+        # the destination channels there, exactly as in candidate A.
+        if cls_readout_anchor_slots is not None:
+            if int(cls_readout_anchor_slots) < 1:
+                raise ValueError(
+                    'cls_readout_anchor_slots must be >= 1, got '
+                    f'{cls_readout_anchor_slots!r}')
+            self.cls_readout_anchor_slots = int(cls_readout_anchor_slots)
+        else:
+            # ``R4Det`` fills this in on the first forward by reading the
+            # detection head's own ``num_anchors`` -- duplicating the constant
+            # in a config would let it drift away from ``conv_cls``, and a
+            # silent shape mismatch there would corrupt the readout arm.
+            self.cls_readout_anchor_slots = None
 
         # Build the new modules without perturbing the global RNG stream: the
         # baseline weights of every pre-existing module must come out bit
@@ -133,8 +184,13 @@ class SemanticReadoutRSSMFusion(MotionAlignedRSSMFusion):
         self.sem_head_hidden = int(sem_head_hidden)
         self.sem_supervision_weight = float(sem_supervision_weight)
         self.object_min_radius = int(object_min_radius)
+        self.sem_target_mode = sem_target_mode
+        self.sem_rank_q = float(sem_rank_q)
+        self.sem_rank_margin = float(sem_rank_margin)
+        self.sem_rank_weight = float(sem_rank_weight)
         self.cls_residual_enabled = bool(cls_residual)
         self.cls_residual_gate = float(cls_residual_gate)
+        self.cls_readout_mode = cls_readout_mode
         self.log_sem_maps = bool(log_sem_maps)
 
         # Deterministic super().__init__(): the parent calls init_weights(),
@@ -298,6 +354,57 @@ class SemanticReadoutRSSMFusion(MotionAlignedRSSMFusion):
         raise ValueError(
             f"sem_head_input must be one of 'z'/'h'/'feat', got {arm!r}")
 
+    def _channel_rank_loss(self, logits, pos):
+        """A2-S ranking term: the GT peak must beat its own background quantile.
+
+        Exact contract from the A2 prereg (section 4.1); the four numbers are
+        frozen at registration and must not be tuned during training:
+
+            g_c   = max_{i in P_c} s_c[i]
+            q_c   = Quantile_{alpha=q}( { s_c[j] : j in B_c } )
+            L_rank = (1/|C_occ|) * sum_c relu(margin + q_c - g_c)
+
+        with ``q = sem_rank_q`` (0.999), ``margin = sem_rank_margin`` (1.0)
+        and a per-occupied-channel arithmetic mean. Channels with no GT
+        (``P_c = empty``) are skipped entirely -- they are not in ``C_occ``
+        and contribute no gradient; a frame with no occupied channel at all
+        returns a zero tensor, matching the focal branch's ``num_pos == 0``
+        handling.
+        """
+        dtype = logits.dtype
+        zero = torch.zeros((), device=logits.device, dtype=dtype)
+        per_channel = []
+        # Per SAMPLE first: the batch is the data-loader batch, and mixing
+        # frames here would let a busy frame's background quantile set the
+        # threshold for a sparse frame in the same tensor.
+        for b in range(logits.shape[0]):
+            logits_b = logits[b].to(torch.float32).float()
+            pos_b = pos[b]
+            terms = []
+            for c in range(logits_b.shape[0]):
+                mask = pos_b[c]
+                if not bool(mask.any()):
+                    continue
+                flat = logits_b[c].reshape(-1)
+                flat_mask = mask.reshape(-1)
+                gt_peak = flat[flat_mask].max()
+                background = flat[~flat_mask]
+                if background.numel() == 0:
+                    # Every cell of this channel is GT-marked: there is no
+                    # background distribution to contrast against, so the
+                    # channel cannot be ranked. Skip rather than fabricate a
+                    # quantile from an empty tensor.
+                    continue
+                # torch.quantile is the frozen tie/interpolation rule; it is
+                # deliberately not hand-rolled with a sort.
+                bg_q = torch.quantile(background, self.sem_rank_q)
+                terms.append(F.relu(self.sem_rank_margin + bg_q - gt_peak))
+            if terms:
+                per_channel.append(torch.stack(terms).mean())
+        if not per_channel:
+            return zero
+        return torch.stack(per_channel).mean().to(dtype)
+
     def _semantic_heatmap_loss(self, sem_map, target):
         """CenterNet focal loss + objectness diagnostics.
 
@@ -317,6 +424,12 @@ class SemanticReadoutRSSMFusion(MotionAlignedRSSMFusion):
         if num_pos.item() == 0:
             return zero, zero, zero, num_pos.detach()
         loss = (pos_loss.sum() + neg_loss.sum()) / num_pos
+        # A2-S: same focal term, PLUS one ranking term. The focal branch and
+        # its weight are untouched, so the only difference between the two
+        # arms is the presence of this term (prereg section 4.1).
+        if self.sem_target_mode == 'channel_contrastive':
+            loss = loss + self.sem_rank_weight * self._channel_rank_loss(
+                logits, pos.bool())
         # Hit@1 over occupied channels + the fixed 0.5-threshold recall: a
         # Gaussian soft target does not drive every centre past 0.5 early on,
         # so hit@1 is the reading that says whether the map is object-aligned.
@@ -371,6 +484,31 @@ class SemanticReadoutRSSMFusion(MotionAlignedRSSMFusion):
         # validation AP number would not reflect the trained model at all.
         if self.cls_residual_enabled:
             residual = self.z_cls_logits(z_t.to(torch.float32)).float()
+            if self.cls_readout_mode == 'anchor_slot':
+                # A2-R: broadcast each class logit to ALL anchor slots of that
+                # class, i.e. write every one of the ``num_anchors *
+                # num_classes`` conv_cls channels instead of only the class's
+                # own anchor slot. The predictor and its parameter count are
+                # unchanged -- only the destination set grows (prereg 4.2).
+                #
+                # conv_cls is laid out ``[anchor * num_classes + class]``, so
+                # writing class c into every anchor is exactly
+                # ``(B, C, H, W) -> (B, A, C, H, W) -> (B, A*C, H, W)``: no
+                # mapping table and no dependence on ``anchor_class_mapping``
+                # are involved, unlike the ``per_class_slot`` arm where the
+                # head's table picks one slot per class.
+                if self.cls_readout_anchor_slots is None:
+                    raise ValueError(
+                        "cls_readout_mode='anchor_slot' needs "
+                        'cls_readout_anchor_slots (the head num_anchors); it '
+                        'cannot be guessed here without risking a silent '
+                        'shape mismatch against conv_cls. R4Det binds it on '
+                        'the first forward, so a None here means the fusion '
+                        'is being driven outside the detector.')
+                b, c = residual.shape[0], residual.shape[1]
+                residual = residual[:, None].expand(
+                    b, self.cls_readout_anchor_slots, c,
+                    *residual.shape[2:]).reshape(b, -1, *residual.shape[2:])
             if self.cls_residual_gate != 1.0:
                 residual = residual * float(self.cls_residual_gate)
             self.last_cls_logit_residual = residual

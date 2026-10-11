@@ -759,6 +759,29 @@ class R4Det(MVXFasterRCNN):
 
     # NOTE: core model here, processing multi-modality feats
 
+    def _bind_cls_readout_anchor_slots(self):
+        """Hand the head's ``num_anchors`` to an ``anchor_slot`` readout arm.
+
+        ``SemanticReadoutRSSMFusion`` broadcasts its per-class logits into
+        ``conv_cls``'s ``[anchor * num_classes + class]`` layout, which needs
+        the anchor count. It deliberately refuses to guess (a wrong guess
+        reshapes the residual against the wrong channels without any shape
+        error), so the count is read from the head that owns ``conv_cls``.
+        Idempotent, and a no-op for every arm that does not ask for it.
+        """
+        fusion = self.temporal_fusion
+        if fusion is None:
+            return
+        if getattr(fusion, 'cls_readout_mode', None) != 'anchor_slot':
+            return
+        if getattr(fusion, 'cls_readout_anchor_slots', None) is not None:
+            return
+        head = getattr(self, 'pts_bbox_head', None)
+        num_anchors = getattr(head, 'num_anchors', None)
+        if num_anchors is None:
+            return
+        fusion.cls_readout_anchor_slots = int(num_anchors)
+
     def extract_feat(self, points, img, img_metas, is_valid_mask=None, feat_or_dict=0,
                      rssm_detach_state=True, rssm_deterministic=None,
                      rssm_history_losses=None, curr_frame_supervision=True):
@@ -883,6 +906,14 @@ class R4Det(MVXFasterRCNN):
         rssm_latent_loss = None
         rssm_stats = None
         if self.temporal_fusion is not None:
+            # A2-R hook: the ``anchor_slot`` readout arm broadcasts each class
+            # logit over every anchor slot, so the fusion needs the detection
+            # head's own ``num_anchors``. Bind it BEFORE any fusion forward --
+            # the fusion raises rather than guessing, and a guess that differs
+            # from ``cls_out_channels / num_classes`` would silently corrupt
+            # the arm. Only ``anchor_slot`` reads the value; the default
+            # ``per_class_slot`` arm keeps using the head's mapping table.
+            self._bind_cls_readout_anchor_slots()
             # Legacy RSSMs return `kl` at index 2 and rely on the
             # reconstruction loss at index 1; the low-dim latent returns the
             # already-combined (KL + future) objective at index 2 instead.
