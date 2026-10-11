@@ -438,14 +438,19 @@ def arm_comparator(run_dir, a2=None):
     return '`..._no2d_igdr.py`（`MotionAlignedRSSMFusion`, seed0）'
 
 
-# Two artifacts can carry the split-vs-BN attribution, at different n, and
-# NEITHER is guaranteed for a given arm: §71.9.19's n=20 three-arm probe was
-# run ad hoc for A, while the watchdog only writes the n=10 four-arm version.
-# They are tried in this order (widest contract first).
+# Both sides of a source are REQUIRED: one split alone cannot show that the
+# gap is the split, so a single-sided bundle must fall through to "not
+# measured" rather than half-report. Tried widest contract first.
+#
+# NEITHER source is guaranteed. §71.9.19's n=20 pair came from an ad hoc probe
+# run for A; the n=10 pair is likewise only present for A. The A2 watchdog runs
+# `probe_semA_bnmode.py` on the VAL side alone (n=20) and never runs the
+# train-split arm, so an A2 bundle honestly renders NOT MEASURED unless someone
+# runs that arm for it too.
 SPLIT_ATTRIBUTION_SOURCES = (
     ('semA_splitprobe_val_full_n20.json',
-     'semA_splitprobe_train_full_n20.json', 20),
-    ('semA_bnmode_ep6.json', 'semA_bnmode_ep6_trainsplit.json', 10),
+     'semA_splitprobe_train_full_n20.json'),
+    ('semA_bnmode_ep6.json', 'semA_bnmode_ep6_trainsplit.json'),
 )
 
 
@@ -454,24 +459,23 @@ def split_attribution(run_dir):
 
     §71.9.19 settled this for A: re-reading one checkpoint on BOTH splits with
     the z contract and the eval mode pinned put the gap almost entirely on the
-    split, with the BN mode a small second-order term. That finding is a
-    property of the DATA, but the artifact carrying it is produced by an ad hoc
-    probe for A and by the watchdog for A2 -- at different n.
+    split, with the BN mode a small second-order term.
 
-    Transcribing §71.9.19's numbers into the generator would make it keep
-    asserting them for an arm that never measured them, which is exactly the
-    failure this generator exists to remove. So return only the readings that
-    are actually present for THIS bundle, together with their own n; the caller
-    degrades to an explicit "not measured" when there are none.
+    That is a statement about the DATA, but the artifact carrying it was
+    produced by an ad hoc probe FOR A. Transcribing §71.9.19's numbers into the
+    generator would make it keep asserting them for an arm that never measured
+    them, which is exactly the failure this generator exists to remove. So
+    return only the readings actually present for THIS bundle, with their own n;
+    the caller degrades to an explicit "not measured" when there are none.
     """
-    for val_name, train_name, frozen_n in SPLIT_ATTRIBUTION_SOURCES:
+    for val_name, train_name in SPLIT_ATTRIBUTION_SOURCES:
         val_path = os.path.join(run_dir, val_name)
         train_path = os.path.join(run_dir, train_name)
         if not (os.path.exists(val_path) and os.path.exists(train_path)):
             continue
         val, train = load_json(val_path), load_json(train_path)
         out = {'val_file': val_name, 'train_file': train_name,
-               'frozen_n': frozen_n, 'n': {}, 'splits': {}}
+               'n': {}, 'splits': {}}
         for label, payload in (('val', val), ('train', train)):
             arms = payload.get('arms') or {}
             base = arms.get('eval_running_stats') or {}

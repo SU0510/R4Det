@@ -767,7 +767,6 @@ class TestSplitAttribution(unittest.TestCase):
     def test_n20_readings_are_derived_from_the_artifacts(self):
         self._write_n20()
         got = record.split_attribution(self.fx.dir)
-        self.assertEqual(got['frozen_n'], 20)
         self.assertEqual(got['n'], {'val': 20, 'train': 20})
         self.assertAlmostEqual(got['splits']['train']['eval_thr50'], 0.4739, 4)
         self.assertAlmostEqual(got['splits']['val']['eval_thr50'], 0.1280, 4)
@@ -786,16 +785,15 @@ class TestSplitAttribution(unittest.TestCase):
         self.assertIn('主要来自数据 split', text)
         self.assertIn('拟合内', text)
 
-    def test_n10_watchdog_artifacts_are_used_and_labelled_with_their_own_n(self):
-        """The A2 watchdog only writes the n=10 four-arm version. Reading it
-        must not silently present it as §71.9.19's n=20 result."""
+    def test_n10_artifacts_are_used_and_labelled_with_their_own_n(self):
+        """The n=10 pair must not be silently presented as §71.9.19's n=20."""
         self._splitprobe('semA_bnmode_ep6_trainsplit.json',
                          0.4480, 0.5500, 0.4331, 0.4500, 10)
         self._splitprobe('semA_bnmode_ep6.json',
                          0.11666666666666667, 0.08333333333333333,
                          0.3, 0.08333333333333333, 10)
         got = record.split_attribution(self.fx.dir)
-        self.assertEqual(got['frozen_n'], 10)
+        self.assertEqual(got['n'], {'val': 10, 'train': 10})
         text = self.fx.render()
         self.assertIn('n=10 / 10', text)
         self.assertNotIn('n=20 / 20', text)
@@ -822,6 +820,21 @@ class TestSplitAttribution(unittest.TestCase):
         self.assertIsNone(record._diff(None, 0.5))
         self.assertIsNone(record._diff(0.5, None))
         self.assertAlmostEqual(record._diff(0.6, 0.5), 0.1)
+
+    def test_a2_watchdog_shape_yields_not_measured(self):
+        """Pin the ACTUAL A2 watchdog output shape.
+
+        `watch_semA2_ep6.sh` runs probe_semA_bnmode.py on the VAL side only
+        (`--limit 20`, no `--split-ann-file`) and never runs the train-split arm.
+        So an A2 bundle must render NOT MEASURED -- if this ever starts
+        rendering a table, someone has either started producing the train side
+        (update this test and §73.6.17) or the fallback is half-reporting.
+        """
+        self._splitprobe('semA_bnmode_ep6.json',
+                         0.11666666666666667, 0.08333333333333333,
+                         0.3, 0.08333333333333333, 20)
+        self.assertIsNone(record.split_attribution(self.fx.dir))
+        self.assertIn('来源归属：NOT MEASURED', self.fx.render())
 
     def test_generator_does_not_hard_code_the_published_readings(self):
         """Structural pin: the numbers must come from the bundle's JSON. If
