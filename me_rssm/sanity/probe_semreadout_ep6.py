@@ -44,6 +44,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import statistics
 import sys
 
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -647,6 +648,12 @@ def main():
             continue
         labels = tgt[0].reshape(num_classes, -1).permute(1, 0)[sel].argmax(dim=1)
         pooled_labels.append(labels.detach().to('cpu'))
+        # Per-clip majority-class floor (recorded only; the gate uses the
+        # pooled floor). A clip holding a single class has a floor of 1.0, so
+        # this reading is strictly harder than the pre-registered one.
+        clip_counts = torch.bincount(labels.detach().to('cpu'),
+                                     minlength=num_classes).float()
+        prior_floor = float(clip_counts.max() / clip_counts.sum())
         own = residual_class_map(run, num_classes)[sel].argmax(dim=1)
         donor_res = residual_class_map(donor_run, num_classes)
         donor_dom = dominant_class(donor_run)
@@ -671,6 +678,7 @@ def main():
             'own_dominant_class': dominant_class(run),
             'donor_dominant_class': donor_dom,
             'cells': int(sel.numel()),
+            'prior_floor': prior_floor,
             'own_hit': float((own == labels).float().mean()),
             'donor_transfer': float((donor_pred == donor_dom).float().mean()),
             'head_swap_to_donor': head_swap,
@@ -699,10 +707,21 @@ def main():
         pooled_class_counts = []
     own_bar = (None if pooled_prior_floor is None
                else pooled_prior_floor + 0.20)
+    # Report BOTH floor calibers. The gate uses the POOLED one (what section 5
+    # pre-registers, and what section 71.9.18 measured: 0.5128), while the
+    # per-clip floor is a strictly harder alternative (its mean was 0.6970 on
+    # A's window, because a single-object clip has a floor of 1.0). Recording
+    # both makes the sensitivity visible without moving the pre-registered bar.
+    per_clip_floors = [r['prior_floor'] for r in m4
+                       if r.get('prior_floor') is not None]
     report['M4_class_information'] = {
         'per_clip': m4, 'chance': chance, 'bar': chance + 0.20,
         'own_hit_bar': own_bar, 'pooled_prior_floor': pooled_prior_floor,
         'pooled_class_counts': pooled_class_counts,
+        'per_clip_prior_floor_mean': (
+            statistics.mean(per_clip_floors) if per_clip_floors else None),
+        'per_clip_prior_floor_max': (
+            max(per_clip_floors) if per_clip_floors else None),
         'mean_own_hit': own_hit, 'mean_donor_transfer': transfer,
         'mean_head_swap_to_donor': head_swap,
         'mean_changed_frac': _m(m4, 'changed_frac'),
