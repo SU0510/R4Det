@@ -13973,3 +13973,142 @@ CPU 只读退出 0：五个预期证据产物存在且检查通过；M1 thr50 **
   不足；peak 排序能泛化也不证明 RSSM 或概率状态必要。C3/确定性匹配对照仍缺。
 - 本次仅给技术审查，不改 A2 数值或状态、不实现代码、不使用 GPU、不启动 S/R。
   总体批准与任何正式运行授权均仍未完成；修订后再审。
+
+### 73.6 A2 四项契约补齐、代码实现与 S0 结果（2026-10-11；S0 已完成，ep6 训练中）
+
+本节回应 §73.5 的四点技术审查，并记录补齐后的**代码实现**与**S0 接线门**。
+范围：仅 A2-S / A2-R 两条**串行单变量**臂；不改 A 的任何归档判定。
+
+#### 73.6.1 四项契约如何补齐（对应 §73.5 的 1–4）
+
+1. **排序损失完整定义**（预登记 §4.1）：`g_c = max_{i∈P_c} s_c[i]`、
+   `q_c = Quantile_{0.999}({s_c[j] : j∈B_c})`、
+   `L_rank = (1/|C_occ|)·Σ_c relu(margin + q_c − g_c)`。固定 `q=0.999`、
+   `margin=1.0`、`λ_rank=0.1`；**归约**为先按通道、再在占用通道上算术平均；
+   `P_c=∅` 的通道整体跳过，`C_occ=∅` 时 `L_rank=0`（与 focal 的
+   `num_pos==0` 分支一致）。
+   **数值依据来自实测**（A 的 ep6 权重、eval 口径 `mu_q`、同一批固定 20 clip，
+   只读落盘 `semA_lrank_magnitude_ep6{,_trainsplit}.json` 与
+   `semA_lrank_margin_activation_{trainsplit,val}.json`）：
+
+   | split | focal（逐 clip 等权） | `L_rank`(q=.999,m=1.0) | 比值 |
+   |---|---:|---:|---:|
+   | train | **0.6945** | **0.0932** | 0.134 |
+   | val | **3.1019** | **0.9645** | 0.311 |
+
+   ⇒ `λ_rank=0.1` 使新增项为 focal 的 **1.34%/3.11%**，不改变主损失量级。
+   活跃比例（`relu(margin+q_c−g_c)>0`，**逐通道实例池化**）：
+   train `margin=0` 仅 **1/37 = 2.7%**、`margin=1.0` 为 **7/37 = 18.9%**；
+   val 为 **15/42 = 35.7%** → **22/42 = 52.4%**。两侧都远未饱和。
+
+2. **A2-R 通道映射**（预登记 §4.2）：实测 `num_classes=4`、`num_rot=2`、
+   `num_sizes=6` ⇒ `num_anchors=12`、`cls_out_channels=48`；
+   `anchor_class_mapping=[0,0,0,1,2,3]`；既有映射实际写出
+   `[0,4,8,12,16,20,25,29,34,38,43,47]` = **12/48**。公式：
+   `per_class_slot: dst[a]=a*4+acm[a//2]`（12 通道） vs
+   `anchor_slot: dst[a*4+c]=r[:,c]`（**全部 48 通道**）。
+   **同一 `nn.Conv2d(256,4,1)`、同一参数量**，zero-init 契约不变。
+   `num_anchors` 由 `R4Det._bind_cls_readout_anchor_slots()` 在首次 forward 前
+   从检测头读取，**不在 config 里重抄常量**（避免与 `cls_out_channels` 漂移）。
+
+   **口径更正（本轮自查发现并写入预登记）**：初稿把
+   `get_bboxes_single` 的 `scores.max(dim=1)` 读成「在 12 个 anchor 上取
+   max/argmax」，**是错的**。实测该 reshape 的展开顺序是
+   `(cell, anchor, class)`（用已知张量逐项核对 linear index 通过），
+   `scores.max(dim=1)` 只用于 `nms_pre` 的 topk 筛选；**不同 anchor 槽是彼此
+   独立的候选框，各自带自己的类别分数进多类 NMS，不存在跨 anchor 的 max**。
+   因此 `frac_cells_residual_can_flip = 0.2530` 是 §71.9.18 探针
+   `class_scores_from_head`（先对同类 anchor 取 max 再对类取 argmax）的
+   **代理口径**，与推理语义**不等价**，A2-R 不得把它当成推理级预期命中率。
+   §71.9.18 的 M4 判定与其「读出被稀释」的机制结论**不变**。
+
+3. **采样与统计契约**（预登记 §5）：固定 `--start-index 3 --stride 100
+   --limit 20`，**分母冻结**；选中的 20 个 index 必须与
+   `semA_rank_*_ep6.json` 的 `indices` **逐位相同**（本次核对：
+   两 split 均为 `[3,103,...,1903]`）。「无有效历史」是**选样规则**而非事后
+   剔除（`select_clips` 在 stride>1 时对不满足 `sum(mask[:-1])>=2` 的 index
+   **跳过并 +1 续找**）；事后有效性只看 `C_occ=∅` 与语义图缺失，实测 20 个
+   clip **无一触发**。`top-k` 的 `k` = 该通道 GT 格数（逐通道），
+   `torch.topk` 并列取索引较小者；`recall@top-k` 逐通道→通道等权→clip→**中位**。
+   均值/中位/计数逐门写死（`thr50`/`hit@1`/`auc`/`max_gt_prob`/`recall@top-k`
+   不得混用）。
+   **类别覆盖（实测，报告字段）**：val 20 clip 中 Ped **5**、Cyc **9**、
+   Car **18**、Truck **10**；train 同协议 Ped 3、Cyc 10、Car 16、Truck 8。
+   ⇒ **Ped 仅覆盖 5/20**，任何 Ped 专属 ep6 结论只能是**弱证据**。
+   另核对：探针的 `occupied_channels` 与数据集 GT 类别数**逐 clip 完全一致**
+   （val/train 各 20/20 匹配，0 mismatch）。
+
+4. **早期门与成熟门分离、等号统一**（预登记 §5/§7）：§7 的「Ped/Cyc 低于
+   非劣线即停」**只适用于 A2-S2/A2-R2 的 ep12–16 固定窗口**；ep6 的
+   M1/M1'/M1-loc/M3/M4 **不得**套 S2 数值。等号统一为 **GO `≥`、停止 `<`**，
+   `Overall == 38.78/40.00` 分别归中间区/GO，不落 FAIL。
+
+#### 73.6.2 代码实现（本轮新增，均已单测）
+
+- `me_rssm/semantic_readout_rssm.py`
+  - `sem_target_mode ∈ {gaussian_full, channel_contrastive}` + `_channel_rank_loss()`
+    （§4.1 的逐字实现；`torch.quantile` 直调，不自写排序）；
+  - `cls_readout_mode ∈ {per_class_slot, anchor_slot}`（§4.2 的 4→48 展开）。
+  - **两臂默认值都等于候选 A**，故未修改的 config 仍逐位是 A。
+- `mmdet3d/models/detectors/R4Det.py`：`_bind_cls_readout_anchor_slots()`
+  在 fusion 首次 forward **之前**绑定 `num_anchors`；`anchor_slot` 在读到该值
+  之前**直接报错**而不是猜（猜错只会静默写错通道）。
+- 两个 24e 臂 config + 两个 450-iter 冒烟 config + `watch_semA2_ep6.sh`
+  （按预登记的 **20-clip 冻结契约**取门，按 PID 停训，非 tmux）。
+- **单测**：`me_rssm/sanity/test_semantic_readout_rssm.py` 新增 T14–T19，
+  与本文件原有 T1–T13 合计 **18 passed**（CPU，小网格，无 checkpoint）：
+  T14 默认值即 A + 非法臂名报错；T15 排序项算术与预登记公式一致且**单侧**；
+  T16 归约是按占用通道、全背景帧为 0（并验证无正例样本不稀释同批正例）；
+  T17 排序项梯度确实到 z、且 focal 与其诊断量**逐位不变**（`λ=0` 复现 A）；
+  T18 `anchor_slot` 写满 48 通道且**参数量与 A 完全相同**；
+  T19 两臂 zero-init ⇒ 头侧残差恒 0。
+
+#### 73.6.3 S0 接线门（450 iter，无 val、无 AP 含义）
+
+两臂各跑 450 iter（3 卡 GPU5/6/7，seed0，deterministic），并各跑一次只读
+wiring 探针。**两个 3 卡作业曾同时投在同一组 GPU 上导致 A2-R OOM**，改为
+**串行**后通过（此教训已记入下方运行事实）。
+
+| 读数 | A2-S | A2-R |
+|---|---:|---:|
+| S0-b 身份（基线 ckpt 加载，`max_abs_cls_diff`/`max_abs_reg_diff`） | **0.0 / 0.0 → PASS** | **0.0 / 0.0 → PASS** |
+| `readout_zero_at_load` | True | True |
+| S0-d 压力 `‖∂sem/∂z‖ / ‖∂tot/∂z‖`（门 ≥5%） | **0.8961 → PASS** | **0.8996 → PASS** |
+| S0-e readout live | PASS | PASS |
+| S0-e 语义项不动 readout | PASS | PASS |
+| `loss_rssm_sem` 首→末（iter 50→450） | 21.60 → **2.36** | 21.42 → **2.25** |
+| `loss_rssm_recon` 首→末 | 1.0497 → **0.2701** | 1.0617 → **0.2601** |
+| 非有限迭代数 | **0** | **0** |
+| `iter_450.pth` 落盘 | 是 | 是 |
+
+**A2-S 专属：排序项梯度预算（预登记要求"只记录、不设通过线"）**
+
+| 读数 | 值 |
+|---|---:|
+| `L_rank × λ` 值（batch） | **0.1957** |
+| `‖∂L_rank/∂z‖ / ‖∂L_sem/∂z‖` | **0.1575** |
+| `‖∂L_sem/∂z‖ / ‖∂L_total/∂z‖` | **0.8961** |
+
+⇒ 排序项在 z 上确实有**独立于 focal 的**梯度份额（约 15.8%），且语义项整体
+对 z 的压力高达 89.6%。**两者都不设线**：设置通过线会让"预算变了"成为事后的
+解释借口；记录下来只为了让"排序项是否真的在 z 上工作"可核。
+
+**A2-R 专属：`anchor_slot` 臂的残差确实到达头**（`residual_emitted=True`，
+grid `[248,216]` 与 `pts_feats` 一致；零初始化下 head 侧残差 absmax = 0）。
+
+**运行事实**：两臂均**从零起训**（非热启动基线权重）；3 卡 GPU5/6/7；
+`find_unused_parameters=True` 是既有训练脚本默认，未改。
+
+#### 73.6.4 当前状态与边界
+
+- **已完成**：四项契约补齐、代码实现、18 条单测、两臂 450-iter S0（全 PASS）。
+- **进行中**：**A2-S 24e 正式训练**（seed0、deterministic、GPU5/6/7），
+  ep6 看门狗已挂 `watch_semA2_ep6.sh`。**A2-R 尚未开跑**（按 §6 串行）。
+- **未完成**：A2-S 的 ep6 机制门（M1/M1'/M1-loc/M3/M4）、S2 ep12–16 任务门、
+  多 seed。
+- **不构成**：任何性能结论。S0 只证明"接线对、梯度在、身份不破"，
+  **不证明机制成立**；A 的 S1 仍 **NOT ALL PASS**、ep16 仍未授权。
+
+**下一步**：等 A2-S 的 ep6 val 落盘 → 看门狗自动停训并冻结 M1–M4 + M1'/M1-loc
+证据 → 按预登记 §5 判定；**全过**才允许进 ep12–16，**不过**则该臂按负结果
+归档且不再调权重/增益/KL 抢救。
