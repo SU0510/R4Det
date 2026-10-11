@@ -413,6 +413,17 @@
   语义项不动 readout、无 NaN、`iter_450.pth` 落盘）。**A2-S 24e 训练进行中**
   （seed0/deterministic/GPU5/6/7，挂 `watch_semA2_ep6.sh`）；**A2-R 按 §6 串行，
   尚未开跑**。S0 只证接线，**不证明机制成立**；A 的 S1 仍 NOT ALL PASS、ep16 未授权。
+- **A2 看门狗证据缺失已修复（2026-10-11，§73.6.5；训练中修复，不改判据）**：
+  首版 `watch_semA2_ep6.sh` 漏跑 `semA_ep6_verdict.py` 必需的四个家族标准产物
+  （`z_util_std_ep6_w3/w100/w1800.json`、`post_source_std_ep6_stride700.json`），
+  也不调用 verdict/record —— 按旧版跑完会判 **INCOMPLETE BUNDLE**。三层修复：
+  (1) 看门狗补齐四个产物 + verdict/record（窗口/offset/stride 与 A 完全一致）；
+  (2) 新增幂等补跑器 `finish_semA2_ep6.sh`（仅在产物缺失时补跑，已在
+  `10:48:35 UTC` 挂到 A2-S 补跑，A2-R 开跑后同样要挂）；
+  (3) `test_watch_semA_ep6_cli.py` 10 → **19 条**，新增六条把 A2 看门狗/补跑器
+  纳入静态契约。负向验证：用 `8ae570d` 的旧脚本跑同一测试，新测试 **3 条失败**
+  ⇒ 测试确实拦住该缺陷。**未改判据数值、未改模型/超参、未重启训练**；A 的归档
+  判定不变。
 - **A2 草案技术审查完成（2026-10-11，§73.5；整稿/训练未批准）**：同意 S/R
   分离和保留 S2 筛选数值；投训前须固定排序项 q/margin/系数/归约、48 通道
   映射及参数量、采样/聚合/有效性契约，限定类别非劣门仅用于 ep12–16 并消除

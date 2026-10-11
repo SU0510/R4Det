@@ -14112,3 +14112,44 @@ grid `[248,216]` 与 `pts_feats` 一致；零初始化下 head 侧残差 absmax 
 **下一步**：等 A2-S 的 ep6 val 落盘 → 看门狗自动停训并冻结 M1–M4 + M1'/M1-loc
 证据 → 按预登记 §5 判定；**全过**才允许进 ep12–16，**不过**则该臂按负结果
 归档且不再调权重/增益/KL 抢救。
+
+#### 73.6.5 A2 看门狗证据缺失修复（2026-10-11；训练中修复，不改任何判据）
+
+**发现的缺陷**：`watch_semA2_ep6.sh` 首版（`8ae570d`）只跑 A2 专属探针
+（M1–M4 / rank / m4floor / bnmode）就结束，**漏掉了
+`semA_ep6_verdict.py` 列为必需证据的四个产物**——
+`z_util_std_ep6_w3/w100/w1800.json`（三个 z 利用率窗）与
+`post_source_std_ep6_stride700.json`（后验来源归因）；也**没有调用**
+`semA_ep6_verdict.py` / `semA_ep6_record.py`。若按该版本跑完 ep6，
+`check_evidence()` 会判 **INCOMPLETE BUNDLE**、证据包不完整，判定器还会
+打印「bundle is incomplete; the gate reading below is provisional」。
+
+**为什么没被测出**：`test_watch_semA_ep6_cli.py` 原先只读 **A 的**
+`watch_semA_ep6.sh`；A2 脚本是复制品，其遗漏落在测试覆盖之外。
+
+**修复（三层，全部可核）**：
+
+1. **看门狗补齐**（本文件外，`me_rssm/sanity/watch_semA2_ep6.sh`）：在判决前
+   补跑四个家族标准产物（窗口 `3/100/1800`、offset `2/2/-1`、`stride 700`
+   与 A 完全一致，保持跨代可比），然后依次调用
+   `semA_ep6_verdict.py`、`semA_ep6_record.py`。
+2. **幂等补跑器**（新增 `me_rssm/sanity/finish_semA2_ep6.sh`）：A2-S 在修复
+   落地时**已在训练**，bash 已按旧版本继续，故另起一个只在**产物不存在**时
+   才补跑对应探针的补跑器；它先等看门狗退出再等 GPU 排空，然后重新生成判定
+   与 §72 草稿。对已完成产物**不重跑**（避免覆盖已冻结读数）。已在
+   `2026-10-11 10:48:35 UTC` 挂到 A2-S（A2-R 开跑后同样需要挂）。
+3. **回归测试**（`test_watch_semA_ep6_cli.py`，10 → **19 条**）：新增
+   `TestA2WatchdogCoversTheWholeBundle` 六条，把 A2 看门狗与补跑器一并纳入
+   静态契约——必需证据四个产物、探针清单、verdict/record 相对后验来源探针的
+   顺序、冻结的 20-clip 契约（`limit=20/stride=100/start-index=3`）、
+   补跑器的存在性守卫、以及不得自动续训。
+
+**负向验证（证明测试真能拦住该缺陷）**：在临时目录用 `8ae570d` 的旧
+`watch_semA2_ep6.sh` 跑同一测试文件，新测试**3 条失败**
+（`test_a2_watchdog_produces_the_required_evidence_artifacts`、
+`..._runs_every_required_probe`、`..._runs_verdict_and_record_after_the_probes`），
+说明它抓的正是这次的真实遗漏，不是空断言。
+
+**边界**：本次只改探针编排与测试，**未改任何判据数值、未改模型、
+未改训练超参、未重启训练**；A2-S 的 ep6 读数仍未产出，A 的归档判定不变。
+修好后 A2-S 的 ep6 证据包将与 A 同构，跨代读数可直接对照。
