@@ -127,4 +127,52 @@ if [ "$ARM" = "A2R" ]; then
     --output "$WORK_DIR/semA_rank_val_ep6_a2r.json" >> "$WATCH_LOG" 2>&1
 fi
 
+# --- family-standard evidence artifacts the verdict/record tools require ----
+# CORRECTION (2026-10-11): the first version of this watchdog stopped after the
+# A2-specific probes and therefore did NOT produce the four artifacts that
+# `semA_ep6_verdict.py` lists as required evidence (three z-utilization windows
+# + one posterior-source attribution), nor did it run the verdict/record tools.
+# The ep6 bundle would have been flagged INCOMPLETE. These blocks restore the
+# exact A-family commands (same windows, same offsets, same scoring) BEFORE the
+# verdict is read, so the bundle stays cross-generation comparable.
+CUDA_VISIBLE_DEVICES=6 python me_rssm/sanity/probe_z_utilization_standard.py \
+  --config "$CFG" --checkpoint "$CKPT" \
+  --start-index 3 --limit 4 --batch-size 4 --shuffle-offset 2 \
+  --output "$WORK_DIR/z_util_std_ep6_w3.json" >> "$WATCH_LOG" 2>&1
+
+CUDA_VISIBLE_DEVICES=7 python me_rssm/sanity/probe_z_utilization_standard.py \
+  --config "$CFG" --checkpoint "$CKPT" \
+  --start-index 100 --limit 4 --batch-size 4 --shuffle-offset 2 \
+  --output "$WORK_DIR/z_util_std_ep6_w100.json" >> "$WATCH_LOG" 2>&1
+
+CUDA_VISIBLE_DEVICES=5 python me_rssm/sanity/probe_z_utilization_standard.py \
+  --config "$CFG" --checkpoint "$CKPT" \
+  --start-index 1800 --limit 4 --batch-size 4 --shuffle-offset -1 \
+  --output "$WORK_DIR/z_util_std_ep6_w1800.json" >> "$WATCH_LOG" 2>&1
+
+# Source attribution: the standard-family tool (transition hook), NOT the MCI
+# variant that reads the eval-mode `_last_h_t` stash.
+CUDA_VISIBLE_DEVICES=5 python tools/probe_posterior_source.py \
+  --config "$CFG" --checkpoint "$CKPT" \
+  --start-index 3 --limit 4 --stride 700 \
+  --output "$WORK_DIR/post_source_std_ep6_stride700.json" >> "$WATCH_LOG" 2>&1
+
+# --- assemble the readings + freeze the verdict (still read-only) ----------
+python me_rssm/sanity/semA_ep6_verdict.py --run "$WORK_DIR" >> "$WATCH_LOG" 2>&1
+VERDICT_RC=$?
+if [ "$VERDICT_RC" -ne 0 ]; then
+  echo "[watch-$ARM] $(date -u '+%F %T') WARNING: verdict exit $VERDICT_RC (see $WATCH_LOG)" >> "$WATCH_LOG"
+fi
+
+# Render the rule-5/rule-6 draft from the bundle so the training record is
+# never hand-transcribed. Read-only; the file is a DRAFT for human pasting.
+python me_rssm/sanity/semA_ep6_record.py --run "$WORK_DIR" \
+  --output "$WORK_DIR/section72_draft.md" >> "$WATCH_LOG" 2>&1
+RECORD_RC=$?
+if [ "$RECORD_RC" -eq 0 ]; then
+  echo "[watch-$ARM] $(date -u '+%F %T') section-72 draft written to $WORK_DIR/section72_draft.md" >> "$WATCH_LOG"
+else
+  echo "[watch-$ARM] $(date -u '+%F %T') WARNING: section-72 draft generation failed (rc=$RECORD_RC); evidence bundle unaffected" >> "$WATCH_LOG"
+fi
+
 echo "[watch-$ARM] $(date -u '+%F %T') probes done; gate decision is a manual step" >> "$WATCH_LOG"
