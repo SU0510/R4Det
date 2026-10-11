@@ -1730,6 +1730,25 @@ class TestArmAwareProse(unittest.TestCase):
         self._gate('/x/..._semA2R_24e.py')
         self.assertEqual(record.arm_label(self.tmp), '候选 A2-R')
 
+    def test_header_prose_matches_the_gates_the_arm_actually_runs(self):
+        """The intro must not promise M1-loc on an arm that never runs it.
+
+        M1-loc is pre-registered A2-S only, and the verdict tool prints
+        "n/a for A2-R" a few lines later. A single sentence covering "the A2
+        arm" had the draft contradict its own judgement table.
+        """
+        self._gate('/x/..._semA2S_24e.py')
+        self._rank('/x/..._semA2S_24e.py')
+        text = record.render(self.tmp, '2026-10-11')
+        self.assertIn('M1-loc', text.split('### 72.0')[0])
+
+        self._gate('/x/..._semA2R_24e.py')
+        self._rank('/x/..._semA2R_24e.py')
+        text = record.render(self.tmp, '2026-10-11')
+        intro = text.split('### 72.0')[0]
+        self.assertIn("M1'", intro)
+        self.assertIn('本臂不评估', intro)
+
     def test_a2_archive_reason_names_the_added_gate(self):
         """Source guard: the A2 failure reason must quote M1-loc explicitly."""
         source = _read(os.path.join('me_rssm', 'sanity',

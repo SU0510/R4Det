@@ -86,6 +86,17 @@ WATCH_LOG = 'watch_semA_ep6.log'
 SIGNAL_NAMES = {1: 'SIGHUP', 2: 'SIGINT', 9: 'SIGKILL', 15: 'SIGTERM'}
 STDOUT_LOG = 'stdout.log'
 
+# Which probes the watchdog runs BEYOND the shared M1-M4 battery, per arm.
+# M1-loc is pre-registered A2-S only (prereg section 5), so a single sentence
+# covering "the A2 arm" would tell an A2-R reader that its own run measured a
+# gate it never measured -- and, worse, the verdict tool prints "n/a for A2-R"
+# three lines below it. Prose and judge must agree.
+A2_ADDED_PROBE_PROSE = {
+    'A2S': "（A2-S 臂另跑 M1'/M1-loc 的双 split 排序探针与 M4 地板探针）。",
+    'A2R': "（A2-R 臂另跑 M1' 的双 split 排序探针与 M4 地板探针；"
+           'M1-loc 为 A2-S 专属，本臂不评估）。',
+}
+
 # Standard-family same-epoch comparator for the shuffle_z reading: the plain
 # no2d_igdr RSSM, seed1, ep6. Transcribed from docs/training_runs_full.md
 # section 62.2 (table "ep6 三窗口反事实诊断"); display-only, never re-derived
@@ -760,7 +771,9 @@ def render(run_dir, date_str):
     add(f'ep6 val 与 `epoch_6.pth` 落盘后由看门狗 '
         f'`me_rssm/sanity/{watchdog_script_name(run_dir)}` 中断训练、')
     add(f'等待 GPU 释放，再自动跑 M1–M4 门 + 三窗口反事实 + source 探针'
-        + ('（A2 臂另跑 M1\'/M1-loc 的双 split 排序探针与 M4 地板探针）。'
+        + (A2_ADDED_PROBE_PROSE.get(
+            (a2 or {}).get('arm'),
+            '（A2 臂另跑双 split 排序探针与 M4 地板探针）。')
            if a2 is not None else '。'))
     add('')
     add('> **本节不宣称任何 S2 性能结论。** S2 是 ep12–16 五轮窗口，且其数值需')
