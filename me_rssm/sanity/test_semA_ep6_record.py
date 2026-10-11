@@ -1030,3 +1030,69 @@ class TestA2RecordRows(unittest.TestCase):
         text = self.fx.render()
         self.assertIn('NOT EVALUABLE（A2 增补门未测全）', text.splitlines()[0])
         self.assertIn('A2 增补门 BLOCKER', text)
+
+
+class TestA2RunIdentity(unittest.TestCase):
+    """An A2 bundle must cite the A2 prereg and its OWN watchdog log.
+
+    Both were hard-coded to the A generation: the draft named
+    ``watch_semA_ep6.sh`` and ``docs/rssm_candidate_A_prereg_20261010.md`` for
+    every run, and ``watch_facts`` looked only for ``watch_semA_ep6.log`` -- so
+    an A2 bundle that HAD recorded its stop timings rendered a FILL
+    placeholder instead.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='a2id_')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write(self, name, payload):
+        with open(os.path.join(self.tmp, name), 'w') as handle:
+            json.dump(payload, handle)
+
+    def test_a_bundle_keeps_the_a_prereg_and_log(self):
+        self._write(verdict.GATE_JSON, _gate_payload())
+        self.assertEqual(record.watch_log_name(self.tmp), 'watch_semA_ep6.log')
+        self.assertEqual(record.watchdog_script_name(self.tmp),
+                         'watch_semA_ep6.sh')
+        self.assertEqual(record.prereg_doc(self.tmp),
+                         'docs/rssm_candidate_A_prereg_20261010.md')
+
+    def test_a2_bundle_cites_the_a2_prereg_and_its_own_log(self):
+        gate = _gate_payload()
+        gate['input_fingerprints']['config_path'] = '/x/..._semA2S_24e.py'
+        self._write(verdict.GATE_JSON, gate)
+        with open(os.path.join(self.tmp, 'watch_semA2S_ep6.log'), 'w'):
+            pass
+        self.assertEqual(record.watch_log_name(self.tmp),
+                         'watch_semA2S_ep6.log')
+        self.assertEqual(record.watchdog_script_name(self.tmp),
+                         'watch_semA2_ep6.sh')
+        self.assertEqual(record.prereg_doc(self.tmp),
+                         'docs/rssm_candidate_A2_prereg_20261011.md')
+
+    def test_a_stale_rank_file_does_not_make_a_an_a2_run(self):
+        """A's archive carries a post-hoc rank JSON; that must not re-label it."""
+        self._write(verdict.GATE_JSON, _gate_payload())   # A config path
+        self._write(verdict.A2_RANK_VAL, {'per_clip': []})
+        self.assertEqual(record.prereg_doc(self.tmp),
+                         'docs/rssm_candidate_A_prereg_20261010.md')
+        self.assertEqual(record.watch_log_name(self.tmp), 'watch_semA_ep6.log')
+
+    def test_a2_draft_reads_the_a2_watchdog_timings(self):
+        """The stop-time row must be filled from the A2 log, not a FILL stub."""
+        gate = _gate_payload()
+        gate['input_fingerprints']['config_path'] = '/x/..._semA2S_24e.py'
+        self._write(verdict.GATE_JSON, gate)
+        with open(os.path.join(self.tmp, 'watch_semA2S_ep6.log'), 'w') as fh:
+            fh.write('[watch-A2S] 2026-10-11 09:00:00 gate hit (fresh ckpt)\n')
+            fh.write('[watch-A2S] 2026-10-11 09:01:00 GPUs free after 60s; '
+                     'running probes\n')
+            fh.write('[watch-A2S] 2026-10-11 09:05:00 probes done; gate '
+                     'decision is a manual step\n')
+        facts = record.watch_facts(self.tmp)
+        self.assertIsNotNone(facts, 'the A2 watchdog log must be found')
+        self.assertEqual(facts[0], '2026-10-11 09:00:00')
+        self.assertEqual(facts[2], '2026-10-11 09:05:00')

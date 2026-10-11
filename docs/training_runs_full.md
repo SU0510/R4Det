@@ -14258,3 +14258,40 @@ M1-loc、M1'/M1-loc 任一条腿未过即 FAIL、冻结 n 不符读 NOT MEASURED
 **未读任何 A2-S 的 ep6 数值**（该 checkpoint 尚未产出）；A2-S 仍在 GPU5/6/7
 训练中。修复后 A2-S 的 ep6 判定将在**完整门集合**上作出，不会出现
 "只看 M1–M4 就宣告通过"的漏判。
+
+#### 73.6.7 渲染器的 A 代硬编码修复（2026-10-11，训练中修复；承接 §73.6.6）
+
+§73.6.6 修的是**门读得对不对**。本节修的是**草稿写得对不对**：`semA_ep6_record.py`
+是 §72 正文的生成器（AGENTS 第 5/6 条要求逐 epoch 表、逐类拆解、运行事实都
+由它落盘，避免手抄），但它有四处**写死成 A 代**，对 A2 包会生成**错误或残缺**
+的正文。四处在 A2-S 的 ep6 产出前修复。
+
+| # | 硬编码 | 对 A2 包的后果 | 修复 |
+|---|---|---|---|
+| 1 | `_WATCH_TS_RE` 只匹配 `[watch]` | A2 看门狗写的是 `[watch-A2S]` ⇒ **停止时刻/GPU 释放/探针结束三行全部读不到**，正文退回 `FILL` 占位符（明明有记录） | 正则放宽为 `[watch(-<ARM>)?]`，对 `[watch]`/`[watch-A2S]`/`[watch-A2R]` 均匹配 |
+| 2 | `WATCH_LOG = 'watch_semA_ep6.log'` | A2 的日志名是 `watch_semA2S_ep6.log` ⇒ 找不到文件，同样丢运行事实 | 新增 `watch_log_name()`，按存在性在三种日志名间选择 |
+| 3 | 正文写死 `watch_semA_ep6.sh` / `semA_watch` | A2 包会**指错看门狗脚本**（且 `semA_watch` 是早已不存在的旧句柄） | 新增 `watchdog_script_name()`，A2 指向 `watch_semA2_ep6.sh` |
+| 4 | 正文写死 `docs/rssm_candidate_A_prereg_20261010.md` | A2 包会**引用错预登记文档** | 新增 `prereg_doc()`，按**臂**（config 路径，经 `verdict.a2_readings`）选择 A2 预登记 |
+
+**第 4 项的一个实现陷阱（自查发现并避免）**：`prereg_doc()` 初版按
+「`semA_rank_val_ep6.json` 是否存在」判定 A2。但 **A 的归档包里也有这份文件**
+（§71.9.19/20 的事后只读探针写入），那样判会把 A 的归档正文改成引用 A2 预登记。
+最终与 `arm_of_bundle()` 一致，**按 config 路径**判臂。
+
+**A 的归档正文不受影响（负向验证）**：对 A 的证据包重跑渲染器，逐行 diff
+只有两处**预期内的措辞**变化——(a) 生成日期仍是当前日期，(b) 第 5 行把早已
+失效的 `semA_watch` 句柄改写为真实脚本名 `me_rssm/sanity/watch_semA_ep6.sh`；
+**所有读数、判定、表格行一字未变**，A 的 S1 仍是 M1/M3/M4 FAIL。
+
+**对真实 A2 日志的验证**：直接拿**正在跑的** A2-S 看门狗日志
+（`…_semA2S_seed0/watch_semA2S_ep6.log`）测正则，
+`[watch-A2S] 2026-10-11 09:06:40 waiting for ep6 val + fresh checkpoint`
+现在**匹配成功**；修复前该行被静默丢弃。
+
+**测试**：`test_semA_ep6_record.py` 新增 4 条（A 包仍指向 A 预登记与 A 日志、
+A2 包指向 A2 预登记与自己的日志、**A 包里的陈旧 rank 文件不得把 A 重新标成
+A2**、A2 草稿能从自己的看门狗日志读出停止时刻）。11 个相关文件合跑
+**222 passed**（`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 -p no:warnings`）。
+
+**边界**：本次同样只改**渲染器与测试**，未改模型、未改超参、未重启训练、
+未读任何 A2-S 的 ep6 机制读数（`epoch_6.pth` 尚未产出，当前最新为 ep2）。

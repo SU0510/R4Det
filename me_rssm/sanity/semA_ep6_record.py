@@ -205,8 +205,13 @@ def saved_epochs(run_dir):
 # FILL fallback stays for a bundle whose logs are missing.
 
 _TS_RE = re.compile(r'^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)')
+# The A watchdog tags its lines ``[watch]``; the A2 watchdog tags them
+# ``[watch-A2S]`` / ``[watch-A2R]``. Matching only the bare tag silently
+# dropped every A2 stop-time reading, so the draft fell back to a FILL
+# placeholder even though the run HAD recorded gate hit / GPU free / probes
+# done.
 _WATCH_TS_RE = re.compile(
-    r'^\[(?:watch)\] (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (.*)$')
+    r'^\[watch(?:-[A-Za-z0-9]+)?\] (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (.*)$')
 _EXIT_RE = re.compile(r'^EXIT=(-?\d+)\s*$')
 
 
@@ -274,9 +279,48 @@ def train_throughput(run_dir):
             len(times))
 
 
+def watch_log_name(run_dir):
+    """Which watchdog log this bundle belongs to.
+
+    The A generation's log is ``watch_semA_ep6.log``; the A2 watchdogs write
+    ``watch_semA2S_ep6.log`` / ``watch_semA2R_ep6.log``. Hard-coding the A name
+    silently dropped the whole stop-time evidence row for an A2 bundle (the
+    file simply does not exist), leaving a FILL placeholder in a run that had
+    in fact recorded the timings.
+    """
+    for name in (WATCH_LOG, 'watch_semA2S_ep6.log', 'watch_semA2R_ep6.log'):
+        if os.path.exists(os.path.join(run_dir, name)):
+            return name
+    return WATCH_LOG
+
+
+def watchdog_script_name(run_dir):
+    """The watchdog script that produced this bundle (for the prose header)."""
+    name = watch_log_name(run_dir)
+    if name == 'watch_semA2S_ep6.log':
+        return 'watch_semA2_ep6.sh'
+    if name == 'watch_semA2R_ep6.log':
+        return 'watch_semA2_ep6.sh'
+    return 'watch_semA_ep6.sh'
+
+
+def prereg_doc(run_dir, a2=None):
+    """The pre-registration document this bundle was produced under.
+
+    Keyed on the ARM (config path), not on the presence of the rank artifact:
+    A's archived bundle also carries a post-hoc ``semA_rank_val_ep6.json``, so
+    a file-existence test would cite the A2 pre-registration for A's run.
+    """
+    if a2 is None:
+        a2 = verdict.a2_readings(run_dir)
+    if a2 is not None:
+        return 'docs/rssm_candidate_A2_prereg_20261011.md'
+    return 'docs/rssm_candidate_A_prereg_20261010.md'
+
+
 def watch_facts(run_dir):
     """(gate_ts, free_ts, done_ts, signal, exit_code) from the watchdog log."""
-    path = os.path.join(run_dir, WATCH_LOG)
+    path = os.path.join(run_dir, watch_log_name(run_dir))
     if not os.path.exists(path):
         return None
     gate = free = done = None
@@ -383,11 +427,13 @@ def render(run_dir, date_str):
 
     add(f'## 72. 候选 A ep6 机制门（S1）：{headline}（{date_str}）')
     add('')
-    add('本节执行 `docs/rssm_candidate_A_prereg_20261010.md` §5 预登记的 S1 ep6')
+    add(f'本节执行 `{prereg_doc(run_dir, a2=a2)}` §5 预登记的 S1 ep6')
     add('机制门。训练从零起（3 卡 GPU5/6/7、seed0、deterministic、24e 余弦日程），')
-    add('ep6 val 与 `epoch_6.pth` 落盘后由看门狗 `semA_watch`')
-    add('（`me_rssm/sanity/watch_semA_ep6.sh`）中断训练、等待 GPU 释放，再自动跑')
-    add('M1–M4 门 + 三窗口反事实 + source 探针。')
+    add(f'ep6 val 与 `epoch_6.pth` 落盘后由看门狗 '
+        f'`me_rssm/sanity/{watchdog_script_name(run_dir)}` 中断训练、')
+    add(f'等待 GPU 释放，再自动跑 M1–M4 门 + 三窗口反事实 + source 探针'
+        + ('（A2 臂另跑 M1\'/M1-loc 的双 split 排序探针与 M4 地板探针）。'
+           if a2 is not None else '。'))
     add('')
     add('> **本节不宣称任何 S2 性能结论。** S2 是 ep12–16 五轮窗口，且其数值需')
     add('> 用户批准后才允许 ep6→ep16 续训（§5/§7）。本节只报 ep6 机制门与早期')
@@ -704,7 +750,8 @@ def render(run_dir, date_str):
             f'预期动作，非崩溃）· gate hit {gate_ts} → GPU 释放 {free_ts} →'
             f' 探针结束 {done_ts} |')
     else:
-        add(FILL.format('停止方式与 GPU 释放时刻（watch_semA_ep6.log）'))
+        add(FILL.format('停止方式与 GPU 释放时刻（'
+                        + watch_log_name(run_dir) + '）'))
     add('')
 
     # --- per-epoch curve --------------------------------------------------
