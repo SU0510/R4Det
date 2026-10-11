@@ -626,8 +626,17 @@ def main():
                   '71.9.3(2)), NOT a mechanism refutation. Do not archive as '
                   'negative; add a full-res matched control first.')
         else:
-            print(f'S1 AGGREGATE: '
-                  f'{"ALL PASS" if all_pass else "NOT ALL PASS"}')
+            # For an A2 arm the arm's S1 is M1-M4 PLUS its own pre-registered
+            # added gates, so the M1-M4-only line must not say "ALL PASS" when
+            # the added gates failed: the very next line then contradicts it,
+            # and a reader who stops at the first line would see a pass. The
+            # A2 line below carries the detail; this line must not disagree
+            # with it.
+            if a2 is not None and not (all_pass and a2_all_pass):
+                print('S1 AGGREGATE: NOT ALL PASS')
+            else:
+                print(f'S1 AGGREGATE: '
+                      f'{"ALL PASS" if all_pass else "NOT ALL PASS"}')
 
         # --- A2 aggregate -------------------------------------------------
         # An A2 arm passes S1 only when A's M1-M4 AND the A2-added gates pass.

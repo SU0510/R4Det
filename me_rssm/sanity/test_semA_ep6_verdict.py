@@ -443,3 +443,71 @@ class TestA2AddedGates(unittest.TestCase):
         self.assertIn('verdict.a2_readings(run_dir)', source)
         self.assertIn('added_all_pass', source)
         self.assertIn('A2 增补门未测全', source)
+
+
+class TestConsoleAggregateAgreesWithA2(unittest.TestCase):
+    """The console's S1 AGGREGATE line must not contradict the A2 line.
+
+    For an A2 arm the arm's S1 is M1-M4 PLUS its pre-registered added gates.
+    The M1-M4-only line read "S1 AGGREGATE: ALL PASS" while the next line read
+    "A2 AGGREGATE: NOT ALL PASS ... does NOT enter ep16" -- a reader who stops at
+    the first line would see a pass, and the two lines disagreed about the same
+    arm. Reproduced by running the real console.
+
+    Uses a clipping passed in via a temp dir so it tests the shipped code path.
+    """
+
+    CFG = '/x/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_semA2S_24e.py'
+
+    def _run(self, tmp, auc, maxgt, recall):
+        # The family-standard artifacts too: without them `evidence_ok` is False
+        # and the console prints the INCOMPLETE branch, which would mask the
+        # very line this test is about.
+        build_bundle(tmp)
+        gate = _gate(M1=True, M2=True, M3=True, M4=True)
+        gate['M1_sem_head'] = {
+            'mean_thr50': 0.5, 'mean_hit1': 0.7,
+            'per_clip': [{'index': 3 + 100 * i, 'thr50': 0.5, 'hit1': 0.7,
+                          'num_pos_cells': 4, 'occupied_class_channels': 2,
+                          'hit1_chance': 0.0001,
+                          'hit1_excess_over_chance': 0.6999}
+                         for i in range(20)],
+        }
+        gate['indices'] = [3 + 100 * i for i in range(20)]
+        gate['input_fingerprints']['config_path'] = self.CFG
+        _write(tmp, verdict.GATE_JSON, gate)
+        rows = [{'index': 3 + 100 * i,
+                 'auc_mean_over_occupied_channels': auc,
+                 'gt_shuffle_auc': 0.47,
+                 'max_gt_prob': maxgt,
+                 'recall_at_top_k_mean': recall} for i in range(20)]
+        for name in (verdict.A2_RANK_VAL, verdict.A2_RANK_TRAIN):
+            _write(tmp, name, {
+                'config': self.CFG, 'n_clips': 20,
+                'indices': [r['index'] for r in rows],
+                'input_fingerprints': {'checkpoint_sha256': 'a' * 64},
+                'per_clip': rows})
+        import subprocess
+        proc = subprocess.run(
+            [sys.executable, os.path.join('me_rssm', 'sanity',
+                                          'semA_ep6_verdict.py'),
+             '--run', tmp],
+            capture_output=True, text=True)
+        lines = proc.stdout.split('\n')
+        s1 = [x for x in lines if x.startswith('S1 AGGREGATE')]
+        a2 = [x for x in lines if x.startswith('A2 AGGREGATE')]
+        return s1, a2
+
+    def test_added_gate_failure_does_not_read_as_s1_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s1, a2 = self._run(tmp, auc=0.60, maxgt=0.9, recall=0.6)
+        self.assertTrue(s1)
+        self.assertIn('NOT ALL PASS', s1[0])
+        self.assertTrue(a2)
+        self.assertIn('does NOT enter ep16', a2[0])
+
+    def test_genuine_pass_still_reports_a_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s1, a2 = self._run(tmp, auc=0.95, maxgt=0.9, recall=0.6)
+        self.assertIn('ALL PASS', s1[0])
+        self.assertIn('ALL PASS', a2[0])

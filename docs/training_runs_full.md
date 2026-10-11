@@ -14836,3 +14836,42 @@ val 0.92350/0.00000，与字面量逐位相符），但作为常量有两个后�
 **验证**：`test_semA_ep6_record` **107 passed**（105 + 2）；§72 整节重渲染与文档
 仍 **IDEMPOTENT**（A 的草稿不受影响——A 自己的草稿不与自身对照）；判定器/rank/
 m4floor 相关 54 passed。**边界**：未改门槛常量/模型/探针；训练未动。
+
+#### 73.6.19 判定器**控制台**的 S1 聚合行也只看 M1–M4（2026-10-11，训练中修复；A2-S ep6 未产出）
+
+§73.6.17 缺陷二修的是**渲染器草稿**（§72.0/§72.9）的同一越权。本轮把同一判据
+施加到**判定器自己的控制台输出**——那是人工裁决时**真正看到**的东西，且比草稿更
+靠前（看门狗先跑 `semA_ep6_verdict.py`，再渲染 `section72_draft.md`）。
+
+实测复现（构造 M1–M4 全绿、M1′ 实测 FAIL 的 A2-S 捆）：控制台连打两行
+
+```
+S1 AGGREGATE: ALL PASS
+A2 AGGREGATE: NOT ALL PASS -- M1-M4 all passed but the A2 added gates failed
+              (M1p=FAIL, M1loc=PASS). The arm does NOT enter ep16.
+```
+
+**两行对同一臂给出相反结论**，且第一行是「ALL PASS」。虽然输出里确实又有
+`A2 AGGREGATE` 行（§73.6.6 缺陷二补的），但**只读第一行的人会看到放行**——
+这正是本项目反复出现的失败模式：**正确的读数旁边放一个更容易被读到的错误结论**。
+
+修复：`S1 AGGREGATE` 行在 `a2 is not None and not (all_pass and a2_all_pass)` 时
+直接输出 `NOT ALL PASS`，不再单独按 M1–M4 报「ALL PASS」。A 代（`a2 is None`）
+分支**逐字节不变**。
+
+实测三种情形：
+
+| 臂 / 构造 | `S1 AGGREGATE` | `A2 AGGREGATE` |
+|---|---|---|
+| A（无 A2 配置路径） | `ALL PASS`（不变） | （不打印） |
+| A2-S 增补门全绿 | `ALL PASS` | `ALL PASS … may be requested` |
+| A2-S M1p FAIL | `NOT ALL PASS` | `NOT ALL PASS … does NOT enter ep16` |
+| A2-S M1loc FAIL | `NOT ALL PASS` | `NOT ALL PASS … does NOT enter ep16` |
+
+新增 2 条测试（真实 `subprocess` 跑交付的控制台脚本，不是只读源码）：一条断言
+增补门失败时**不得**出现 S1 通过，一条守卫全绿时仍须报通过（防把真通过卡死）。
+
+**验证**：11 个文件合跑 **264 passed**（260 + 4）；A 的归档判定与 §72 草稿重渲染
+仍**逐字节/逐位不变**（`S1 AGGREGATE: NOT ALL PASS` 与之前一致）；§72.11 边界
+未变。**边界**：未改门槛常量、探针、证据 JSON；训练未动；A2-S 的 ep6 仍未产出，
+不存在事后调门。
