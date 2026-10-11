@@ -394,6 +394,35 @@ def main():
                                           allow_unused=True))
     g_sem_w = _norm(torch.autograd.grad(sem, weight, retain_graph=True,
                                         allow_unused=True))
+    # A2-S (prereg section 4.1): the ranking term changes z's gradient
+    # budget, so it must be MEASURED, not asserted away. The two ratios are
+    # RECORDED ONLY -- deliberately with no pass line, so that "the budget
+    # moved" can never be used after the fact to explain a result either way.
+    rank_term = None
+    if getattr(fusion, 'sem_target_mode', None) == 'channel_contrastive':
+        sem_map = fusion.last_sem_map
+        if sem_map is not None:
+            target = fusion._rasterize_target(
+                sem_map.device, tuple(sem_map.shape[-2:]))
+            if target is not None:
+                rank_term = fusion.sem_rank_weight * fusion._channel_rank_loss(
+                    sem_map.to(torch.float32).float(), target.eq(1.0))
+    if rank_term is not None:
+        g_rank_z = _norm(torch.autograd.grad(
+            rank_term, z_t, retain_graph=True, allow_unused=True))
+        report['rank_gradient_budget'] = {
+            'rank_term_value': float(rank_term.detach()),
+            'grad_rank_on_z': g_rank_z,
+            'grad_sem_on_z': g_sem_z,
+            'rank_over_sem_on_z': (g_rank_z / g_sem_z) if g_sem_z > 0
+            else float('nan'),
+            'sem_over_total_on_z': (g_sem_z / g_total_z) if g_total_z > 0
+            else float('nan'),
+            'note': ('recorded only, no pass line: see prereg section 4.1. '
+                     'These are NOT gates.'),
+        }
+    else:
+        report['rank_gradient_budget'] = None
     # BOTH readings are recorded: a batch whose last history frame is
     # invalid gets an identically-zero residual by design (extract_feat
     # falls back to un-fused features), which is NOT a dead readout.
