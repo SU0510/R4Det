@@ -79,7 +79,8 @@ A 的 S1 已按 §7 分叉归档（M1/M3/M4 FAIL），**A 的 ep16 永不启动*
 
 **共同底座**：标准 `no2d_igdr` 24e、`MotionAlignedRSSMFusion` 全分辨率 RSSM、
 seed0、deterministic、24e 余弦日程、3 卡 GPU5/6/7。**共同不变项**：重建目标
-（全分辨率原始 `bev_feats`、不 detach、权重 1.0、`burn_in=2` 两帧等权）、
+（全分辨率原始 `bev_feats`、不 detach、权重 1.0、`burn_in=2` ⇒ 仅窗口内最后 1 帧历史 +
+当前帧计 recon、两帧等权）、
 posterior/prior/KL/free_nats/`kl_scale`、`output_proj`、backbone、检测头几何分支、
 优化器、日程、数据管线、种子协议。
 
