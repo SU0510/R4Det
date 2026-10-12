@@ -17055,3 +17055,46 @@ ep6 早期检查用的是 ep1-6（n=6）窗口均值 vs B0 **29.0420**。
 - 门槛 FAIL 且 AP 提升时，能挽救的是结果，不能自动挽救解释；
 - 要主张「z 携带对象判别信息并进入检测决策」这条论文主线，
   **机制证据与成熟 AP 证据缺一不可**，且必须在多 seed 上一致。
+
+---
+
+## 82. 停止规则修订与 A2-R 续训排程（2026-10-12，用户批准的两项动作）
+
+### 82.1 动作一：C1 的 ep14 机制门降级为归因诊断
+
+按附录 B 执行（`docs/rssm_c_validity_update_prereg_20261012.md`）。修订时 C1 在 ep5，
+work dir 仅有 `epoch_2.pth`/`epoch_4.pth`，**无任何 ep12-16 val 行与 ep14 产物** ⇒ 属
+预数据冻结修正，非事后放宽门槛。修订后：ep12-16 一律跑满 n=5，ep14 机制读数只做归因，
+剪枝权移到 ep16→24。C1 的 ep6 任务损害条款不变（当时 +4.26，未触发）。
+
+### 82.2 优先级声明（用户 2026-10-12）
+
+> **最重要的目标是提升 AP。即使机制未成立，只要有大幅 AP 提升，也接受该结果。**
+
+落到记录口径：
+- **AP 是决策主指标**，机制门是归因/写作工具，不是 AP 的前置条件；
+- 机制 FAIL + AP 提升 ⇒ **结果成立**，按 §81.6 重新归因（噪声 / 探针 / 未命名机制），
+  **不得用机制读数否决性能结果**；
+- **硬约束只在写作**：论文 claim 必须等于实际成立的解释；
+- 「大幅」以 **ep12-16 同 seed 配对 Δ ≥ +2.0 且多 seed 方向一致**为准
+  （单 seed ±1 点在本项目复现不了：MAI seed0 +0.8434 / seed1 −2.5063）。
+
+### 82.3 动作二：A2-R 续训（ep6→ep16）已排入队列
+
+- 依据 §81.5：三个被 ep6 剪掉的臂都留有 `epoch_6.pth`，**续训 10 轮（~10.1 h）**即可拿到
+  成熟窗口，比从零重建到 ep16（16 轮 ~16.1 h）省 ~6 h。
+- **选 A2-R 优先**：其 FAIL 条款效力最低（ep6 M3 7/10 vs 门槛 8/10）。
+- **接线等价性已核对**（硬问题类）：当前代码 `mmdet3d/models/detectors/R4Det.py` 对
+  `obs_points` 的传递**仅在 fusion 声明 `accepts_obs_valid` 时生效**，A2-R 的
+  `SemanticReadoutRSSMFusion` 不声明 ⇒ 调用签名与本臂原始运行时逐字节一致；
+  `me_rssm/__init__.py` 仍注册该类；repo 配置与运行目录快照的差异只是 mmcv 落盘的
+  flattened 形式，不是语义差异。
+- **队列事实**：`me_rssm/sanity/queue_semA2R_resume.sh` 于 **14:02:26 武装**，等待 C1 退出
+  （预计 10-13 约 09:15-10:15），随后 GPU 5-7 排空 → 补 C1 的 ep14 产物（若训练中探针 OOM）
+  → pre-flight（fusion 类型/权重存在/幂等）→ 以 `--resume-from epoch_6.pth --seed 0
+  --deterministic` 续训（**保持 24e 配置以延续 CosineAnnealing 日程与 epoch 计数**）
+  → **ep16 val 后停**（不跑 ep17-24，省 8 h）→ 三口径报告。
+- 产物：`/tmp/semA2R_resume_16e.log`；`<A2R_WD>/queue_semA2R_resume.log`、
+  `merged_val_curve.log.json`、`merged_val_curve_report.json`。
+- **口径声明**：A2-R 续训的 val 仍走训练内 EvalHook（与 B0 同口径），不与离线 harness
+  数字混算；全轮峰值的作用域是 **ep1-16**（ep17-24 未跑），记录时必须写明。
