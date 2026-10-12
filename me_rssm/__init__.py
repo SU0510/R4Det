@@ -27,6 +27,7 @@ from .semantic_readout_rssm import SemanticReadoutRSSMFusion
 from .validity_gain_rssm import (ValidityGatedDeterministicRSSMFusion,
                                  ValidityGatedRSSMFusion,
                                  build_radar_validity_mask)
+from .reliability_fusion_rssm import ReliabilityGatedConcatFusion
 
 __all__ = [
     'ModalityContext',
@@ -42,4 +43,5 @@ __all__ = [
     'ValidityGatedRSSMFusion',
     'ValidityGatedDeterministicRSSMFusion',
     'build_radar_validity_mask',
+    'ReliabilityGatedConcatFusion',
 ]

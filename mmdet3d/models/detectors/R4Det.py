@@ -889,7 +889,16 @@ class R4Det(MVXFasterRCNN):
         step4_time = end_time - start_time
 
         start_time = time.time()
-        bev_feats = self.cross_attention(img_bev_feats, pts_bev_feats)
+        if getattr(self.cross_attention, 'accepts_obs_valid', False):
+            # Reliability-gated front-end fusion (prereg
+            # docs/rssm_reliability_fusion_prereg_20261012.md): opt-in only, so
+            # every other arm keeps the exact old two-argument signature and
+            # behaviour.  The fusion derives its GT-free occupancy evidence
+            # from the *input* point cloud it already sees.
+            bev_feats = self.cross_attention(img_bev_feats, pts_bev_feats,
+                                             obs_points=points)
+        else:
+            bev_feats = self.cross_attention(img_bev_feats, pts_bev_feats)
         end_time = time.time()
         bev_feats = bev_feats.permute(0, 1, 3, 2).contiguous()
         assert bev_feats.shape[2] == self.bev_h_
