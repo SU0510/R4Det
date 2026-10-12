@@ -32,7 +32,7 @@ done
 echo "[watch] $(date -u '+%F %T') ep6 present" >> "$OUT"
 
 # ---- Stage A: same-epoch early curve -------------------------------------
-python me_rssm/sanity/c1valid_curve_check.py --log "$LOG" \
+python me_rssm/sanity/c1valid_curve_check.py --log "$C1_WD" \
   --work-dir "$C1_WD" --b0-log "$B0_WD" --out "$C1_WD/c1valid_ep6_early_check.json" >> "$OUT" 2>&1
 
 # ---- Stage B: ep14 paired group-recall (C1 dump only; B0 frozen) ---------
@@ -66,7 +66,7 @@ while [ ! -f "$C1_WD/epoch_16.pth" ] && [ ! -f "$C1_WD/epoch_24.pth" ]; do
   grep -q 'Epoch(val) \[16\]' "$LOG" 2>/dev/null && break
   sleep 60
 done
-python me_rssm/sanity/c1valid_curve_check.py --log "$LOG" \
+python me_rssm/sanity/c1valid_curve_check.py --log "$C1_WD" \
   --work-dir "$C1_WD" --b0-log "$B0_WD" --window 12-16 \
   --out "$C1_WD/c1valid_ep16_window_check.json" >> "$OUT" 2>&1
 
