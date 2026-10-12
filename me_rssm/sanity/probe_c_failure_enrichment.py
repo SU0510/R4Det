@@ -373,45 +373,22 @@ def verdict_for(records, bins):
     }
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--preds', required=True, help='outputs pkl from test_vod.py')
-    ap.add_argument('--config', required=True, help='config snapshot of that arm')
-    ap.add_argument('--coverage-groups', required=True)
-    ap.add_argument('--motion-axis', required=True)
-    ap.add_argument('--harness-ap', default=None,
-                    help='json written by test_vod.py --saveoutput (caliber note)')
-    ap.add_argument('--output', required=True)
-    args = ap.parse_args()
+def build_frozen_labels(val_infos, coverage_json, motion_json):
+    """Per-object frozen group labels, recomputed with the two probes' own code.
 
-    cfg = Config.fromfile(args.config)
-    coverage_json = json.load(open(args.coverage_groups, encoding='utf-8'))
-    motion_json = json.load(open(args.motion_axis, encoding='utf-8'))
-    outputs = load_pickle(args.preds)
-    dataset = build_dataset(cfg.data.val)
-    val_infos = coverage.load_infos(cfg.data.val.get(
-        'ann_file', 'data/TJ4D/TJ4D_infos_val.pkl'))
-    if len(outputs) != len(dataset) or len(dataset) != len(val_infos):
-        raise AssertionError(f'length mismatch: outputs={len(outputs)} '
-                             f'dataset={len(dataset)} infos={len(val_infos)}')
-    for i, info in enumerate(val_infos):
-        got = int(dataset.data_infos[i]['image']['image_idx'])
-        want = int(info['image']['image_idx'])
-        if got != want:
-            raise AssertionError(f'frame order mismatch at {i}: {got} != {want}')
+    Returns ``{'image_idx_of_frame', 'scene_runs', 'by_object', 'cell_counts',
+    'frozen_cell_counts', 'frozen_zero_sub_counts'}``. Every frozen cell count
+    is re-derived and
+    compared here, so any boundary drift raises instead of silently analysing a
+    different partition.
 
-    result_files, tmp_dir = dataset.format_results(outputs, pklfile_prefix=None)
-    # TJ4DDataset.format_results -> bbox2result_kitti returns the KITTI-style
-    # det_annos list itself (it additionally dumps a throwaway tmp pkl); use the
-    # returned object, not the tmp path, so nothing depends on the tmp dir.
-    dt_annos = result_files['pts_bbox']
-    if len(dt_annos) != len(val_infos):
-        raise AssertionError('format_results length mismatch')
-
-    gt_annos = [info['annos'] for info in coverage.load_infos(
-        cfg.data.val.get('ann_file', 'data/TJ4D/TJ4D_infos_val.pkl'))]
-
-    # --- frozen group labels, recomputed with the probes' own code -----------
+    ``by_object`` is keyed by ``(image_idx, k)`` where ``k`` is the k-th scored
+    object of that frame in the probes' emission order (DontCare/env-ignored
+    entries skipped). Callers on the val split may rely on that order because
+    the val infos contain no DontCare objects at all (checked: 2040/2040 frames);
+    the cell-count assertion above is what makes the order trustworthy in
+    general.
+    """
     runs = coverage.scene_runs([i['image']['image_idx'] for i in val_infos])
     cov_cuts = coverage_json['cuts']
     amp_cuts = motion_json['amplitude_cuts']
@@ -420,7 +397,7 @@ def main():
             'the two frozen artifacts disagree about the coverage cuts: '
             f"coverage-groups {cov_cuts} vs motion-axis "
             f"{motion_json.get('coverage_cuts')} (stale motion artifact?)")
-    label_rows, cell_counts = [], collections.Counter()
+    label_rows = []
     for info in val_infos:
         idx = int(info['image']['image_idx'])
         path = os.path.join(motion_json['inputs']['data_root'],
@@ -483,19 +460,68 @@ def main():
     if drift:
         raise AssertionError(f'frozen group drift (frozen, recomputed): {drift}')
 
-    # (image_idx, k) -> label of the k-th scored object of that frame. The
-    # probes emit rows in exactly that order (DontCare/ignored skipped), and the
-    # cell-count assertion above proves the partition still matches the frozen
-    # artifact before any of it is used.
     by_object, order = {}, collections.Counter()
     for r in label_rows:
         by_object[(int(r['image_idx']), order[int(r['image_idx'])])] = r
         order[int(r['image_idx'])] += 1
-    labels = {
+    return {
         'image_idx_of_frame': [int(i['image']['image_idx']) for i in val_infos],
         'scene_runs': runs,
         'by_object': by_object,
+        'cell_counts': dict(cell_counts),
+        'frozen_cell_counts': frozen_counts,
+        'frozen_zero_sub_counts': sub_frozen,
     }
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--preds', required=True, help='outputs pkl from test_vod.py')
+    ap.add_argument('--config', required=True, help='config snapshot of that arm')
+    ap.add_argument('--coverage-groups', required=True)
+    ap.add_argument('--motion-axis', required=True)
+    ap.add_argument('--harness-ap', default=None,
+                    help='json written by test_vod.py --saveoutput (caliber note)')
+    ap.add_argument('--output', required=True)
+    ap.add_argument('--records-out', default=None,
+                    help='optional: per-GT records (image_idx, gt_index, class, '
+                         'found, frozen group, range) as JSON, so a masked-vs-'
+                         'baseline contrast can be paired on the SAME GTs by the '
+                         'same harness. Purely additive: it cannot change any '
+                         'number in --output.')
+    args = ap.parse_args()
+
+    cfg = Config.fromfile(args.config)
+    coverage_json = json.load(open(args.coverage_groups, encoding='utf-8'))
+    motion_json = json.load(open(args.motion_axis, encoding='utf-8'))
+    outputs = load_pickle(args.preds)
+    dataset = build_dataset(cfg.data.val)
+    val_infos = coverage.load_infos(cfg.data.val.get(
+        'ann_file', 'data/TJ4D/TJ4D_infos_val.pkl'))
+    if len(outputs) != len(dataset) or len(dataset) != len(val_infos):
+        raise AssertionError(f'length mismatch: outputs={len(outputs)} '
+                             f'dataset={len(dataset)} infos={len(val_infos)}')
+    for i, info in enumerate(val_infos):
+        got = int(dataset.data_infos[i]['image']['image_idx'])
+        want = int(info['image']['image_idx'])
+        if got != want:
+            raise AssertionError(f'frame order mismatch at {i}: {got} != {want}')
+
+    result_files, tmp_dir = dataset.format_results(outputs, pklfile_prefix=None)
+    # TJ4DDataset.format_results -> bbox2result_kitti returns the KITTI-style
+    # det_annos list itself (it additionally dumps a throwaway tmp pkl); use the
+    # returned object, not the tmp path, so nothing depends on the tmp dir.
+    dt_annos = result_files['pts_bbox']
+    if len(dt_annos) != len(val_infos):
+        raise AssertionError('format_results length mismatch')
+
+    gt_annos = [info['annos'] for info in coverage.load_infos(
+        cfg.data.val.get('ann_file', 'data/TJ4D/TJ4D_infos_val.pkl'))]
+
+    labels = build_frozen_labels(val_infos, coverage_json, motion_json)
+    runs = labels['scene_runs']
+    frozen_counts = labels['frozen_cell_counts']
+    sub_frozen = labels['frozen_zero_sub_counts']
 
     # --- matching -----------------------------------------------------------
     overlaps = calculate_iou_partly(dt_annos, gt_annos, 2, 200)[0]
@@ -602,6 +628,11 @@ def main():
     }
     with open(args.output, 'w', encoding='utf-8') as handle:
         json.dump(result, handle, indent=2, sort_keys=True)
+    if args.records_out:
+        with open(args.records_out, 'w', encoding='utf-8') as handle:
+            json.dump(records, handle, sort_keys=True)
+        print(f'[records] {len(records)} per-GT records -> '
+              f'{os.path.abspath(args.records_out)}')
 
     print(f"n_gt={result['inputs']['n_gt']} n_dt={result['inputs']['n_dt']}")
     print('pooled:', json.dumps(result['primary']['pooled']))
