@@ -52,6 +52,11 @@
   (iii) 自然缺测与受控雷达屏蔽分开；(iv) 全部按距离/尺寸分层并声明离线 harness 与
   EvalHook 的口径差（§51.5 约 2.2 个 3D 点）。**测到富集才谈 C 立项；没有关联就转对象级读出/
   空间定位/跨场景泛化方向。**
+- [ ] **候选 C 诊断的第二根轴：运动可观测性**（用户口径 `class × coverage × motion-observability`）。
+  §76 目前**只有 coverage 轴**。先核对该点云 8 维特征里速度/多普勒通道的语义
+  （`LoadPointsFromFile(use_dim=[0,1,2,3,5])` 的第 5 维在 `RadarPillarFeatureNet` /
+  `me_rssm/radar_motion_chain.py` 中对应什么），再按「无回波 / 有回波但速度不可分辨 /
+  速度可分辨 / 测量冲突」切分；阈值同样**只用 train** 确定。未做，未开训。
 - [x] A2-R ep1–6 完成、S1 门核验与负结果归档（训练记录 §75）。Overall 实际 ep1–6
   等权均值 33.9502（n=6），全轮已有 val 峰值 38.4943 @ ep5；best saved 36.3491 @ ep6。
   M1′/M2 PASS，**M1/M3/M4 FAIL**，总 NOT ALL PASS；**不进 ep16**。
