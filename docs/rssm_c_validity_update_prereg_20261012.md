@@ -137,6 +137,27 @@ z_t = mu_q + (g_t - 1) * (mu_q - mu_p)      (≡ mu_p + g_t (mu_q - mu_p))
 4. C1-D 与 C1 同等有效 ⇒ 结论改写为「缺测可区分的更新机制」，不主张随机状态必要性。
 5. 任何阶段发现 GT 泄漏、接线不等价、梯度断路、NaN/OOM、实现与本节不一致 ⇒ 立即停并报告。
 
+---
+
+## 附录 A. 冻结后的实现性修正（2026-10-12 09:00 UTC，**在任何 C1 训练数据产生之前**）
+
+两条修正都源于**仪器/产物限制**，与任何 C1 结果无关（C1 只在跑 450-iter 接线冒烟）：
+
+1. **`zero 组分类 CE` 在本仓库的冻结产物里不可测**：dump 只保存 top-1 `scores_3d` 与
+   `labels_3d`（无逐类分数向量），FN 也没有可匹配的框。故该条款改为在同一离线 harness 上
+   用 **per-class 3D AP**（Ped/Cyc loose、Car/Truck strict）做**非劣**判定（ep6 与 ep14 各一次），
+   阈值：任一类 C1 ≥ B0 − 0.5 AP。ep12-16 的 EvalHook 四类门槛不变。
+2. **B0 的 `epoch_6.pth` 不在**（清理策略只保留 best saved ep14 与 last ep22），因此
+   「同 epoch ep6 的分组召回配对」不可执行。分层改为：
+   - **ep6 早停检查（同 seed 同 EvalHook 口径）**：C1 的 ep1–6 训练内 val 曲线 vs B0 已记录的
+     ep1–6 曲线（同 seed 同日程）；若 C1 的 ep1–6 区间均值低于 B0 同窗 **> 2.0 点**，或出现
+     NaN/OOM/梯度异常 ⇒ 停。
+   - **分组召回机制门移到 ep14**（C1 与 B0 都有 checkpoint，同 epoch 同 seed 同离线 harness）：
+     M1 covered 组 Δrecall ≥ 0、M2 zero 组 Δrecall ≥ −0.5、M3 逐类 AP ≥ −0.5（见修正 1）。
+   - **ep12–16 成熟任务门**不变（Overall 区间均值 ≥ 40.00、四类非劣、止损 −2.0）。
+   B0 侧 ep14 的现成产物：`c_failpred_ep14_dump.pkl` / `c_failure_enrichment_ep14.json` /
+   `c_failpred_ep14_harness_ap.json`（§78）。
+
 ## 8. 实现与产物索引（冻结时）
 
 - 实现：`me_rssm/validity_gain_rssm.py`（`build_radar_validity_mask`、
