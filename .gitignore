@@ -33,3 +33,6 @@ data/
 # generated slide previews
 slides/preview/
 slides/gm_preview/
+
+# tools/test_vod.py dumps its eval outputs into CWD unconditionally
+/outputs.pkl
