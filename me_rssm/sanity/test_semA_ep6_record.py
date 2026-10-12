@@ -651,6 +651,26 @@ class TestZContractBlock(unittest.TestCase):
     def test_noise_ratio_is_reported(self):
         self.assertIn('噪声占比', self.fx.render())
 
+    def test_the_gap_sentence_names_its_operands_and_no_typed_multiplier(self):
+        """The paragraph that clears the z contract used to quote A's ratio.
+
+        "4.3x" is 0.5022/0.1167 -- a last-value train reading over a 20-clip
+        val reading, i.e. two calibers inside one number -- and it rendered
+        verbatim into A2-R, whose own pair is 0.4923/0.0712. §72.11 also
+        promises the section transcribes no reading, and a typed multiplier is
+        a transcribed reading that survives any re-probe.
+        """
+        source = _read('me_rssm/sanity/semA_ep6_record.py')
+        self.assertNotIn('4.3×', source)
+        self.assertNotIn('4.3x', source)
+        line = [ln for ln in self.fx.render().split('\n')
+                if '（train split、epoch 均值）' in ln]
+        self.assertEqual(len(line), 1, line)
+        ep6 = record.train_stat_means(self.fx.dir)[6]['stat_sem_thr50']
+        self.assertIn(record.num(ep6), line[0])      # derived from the log
+        self.assertIn(record.num(0.1167), line[0])   # the val operand, named
+        self.assertIn('不是同一个量的两次测量', line[0])
+
     def test_missing_artifact_keeps_the_section_with_a_visible_gap(self):
         """A missing z-contract reading must stay VISIBLE.
 

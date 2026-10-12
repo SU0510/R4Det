@@ -1590,9 +1590,26 @@ def render(run_dir, date_str):
                  if (t_thr is not None and d_thr is not None) else None)
         add('**结论**：契约切换确实移动了 z，但**两项门控读数完全不变**'
             f'（Δ`thr50` = {signed(delta)}）——')
-        add('故 train/val 的 4.3× 差距**不能**由 z 采样解释。这**不改变** S1 '
-            '判定（§72.0 已按两种口径分别核过），但把「契约错配」从'
-            '嫌疑名单上划掉。')
+        # Both operands are named WITH their calibers and no multiplier is
+        # printed. The first version of this line carried A's archived ratio as
+        # prose, and that ratio (0.5022/0.1167) is a last-value train reading
+        # over a 20-clip val reading -- two calibers inside one number. It
+        # would also have stamped A's value onto A2-R, whose own pair is
+        # 0.4923/0.0712. A wrong reading inside the very paragraph that clears
+        # the z contract is worse than no reading; the matched, same-caliber
+        # attribution is the table rendered immediately below.
+        ep6_tr_thr = (train_stat_means(run_dir).get(6) or {}).get(
+            'stat_sem_thr50')
+        if isinstance(ep6_tr_thr, (int, float)) and d_thr is not None:
+            add(f'故 train 侧读数与 val 侧读数之间的差距**不能**由 z 采样解释：'
+                f'两侧在各自口径下分别是 `stat_sem_thr50` '
+                f'{num(ep6_tr_thr)}（train split、epoch 均值）与 '
+                f'{num(d_thr)}（M1 实读的 val 口径）——两者口径不同，'
+                f'只作数量级参照，不是同一个量的两次测量。')
+        else:
+            add('故 train 侧读数与 val 侧读数之间的差距**不能**由 z 采样解释。')
+        add('这**不改变** S1 判定（§72.0 已按两种口径分别核过），但把'
+            '「契约错配」从嫌疑名单上划掉。')
         add('')
 
         # The remaining question ("then what DOES explain the gap?") was left
