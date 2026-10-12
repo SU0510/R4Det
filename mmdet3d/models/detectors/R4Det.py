@@ -906,6 +906,13 @@ class R4Det(MVXFasterRCNN):
         rssm_latent_loss = None
         rssm_stats = None
         if self.temporal_fusion is not None:
+            # C1 arm (prereg docs/rssm_c_validity_update_prereg_20261012.md):
+            # arms that declare ``accepts_obs_valid`` receive the *input* point
+            # cloud of this frame and build their own GT-free validity mask.
+            # Every other fusion keeps the exact old call signature.
+            rssm_fusion_kwargs = {}
+            if getattr(self.temporal_fusion, 'accepts_obs_valid', False):
+                rssm_fusion_kwargs['obs_points'] = points
             # A2-R hook: the ``anchor_slot`` readout arm broadcasts each class
             # logit over every anchor slot, so the fusion needs the detection
             # head's own ``num_anchors``. Bind it BEFORE any fusion forward --
@@ -927,7 +934,7 @@ class R4Det(MVXFasterRCNN):
                 fusion_out = self.temporal_fusion(
                     bev_feats, use_posterior=True,
                     deterministic=rssm_deterministic,
-                    detach_state=rssm_detach_state)
+                    detach_state=rssm_detach_state, **rssm_fusion_kwargs)
                 bev_feats, rssm_recon = fusion_out[0], fusion_out[1]
                 if uses_latent_loss:
                     rssm_latent_loss = fusion_out[2]
@@ -950,7 +957,7 @@ class R4Det(MVXFasterRCNN):
                 bev_feats_cache = bev_feats
                 fusion_out = self.temporal_fusion(
                     bev_feats, use_posterior=True,
-                    deterministic=rssm_deterministic)
+                    deterministic=rssm_deterministic, **rssm_fusion_kwargs)
                 bev_feats, rssm_recon = fusion_out[0], fusion_out[1]
                 if uses_latent_loss:
                     rssm_latent_loss = fusion_out[2]

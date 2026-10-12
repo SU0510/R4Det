@@ -24,6 +24,9 @@ from .mci_rssm import MeasurementConditionedInnovationRSSMFusion
 from .evidence_field_rssm import EvidenceFieldInnovationRSSMFusion
 from .ego_warp_rssm import EgoWarpEvidenceFieldRSSMFusion
 from .semantic_readout_rssm import SemanticReadoutRSSMFusion
+from .validity_gain_rssm import (ValidityGatedDeterministicRSSMFusion,
+                                 ValidityGatedRSSMFusion,
+                                 build_radar_validity_mask)
 
 __all__ = [
     'ModalityContext',
@@ -36,4 +39,7 @@ __all__ = [
     'EvidenceFieldInnovationRSSMFusion',
     'EgoWarpEvidenceFieldRSSMFusion',
     'SemanticReadoutRSSMFusion',
+    'ValidityGatedRSSMFusion',
+    'ValidityGatedDeterministicRSSMFusion',
+    'build_radar_validity_mask',
 ]
