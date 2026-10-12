@@ -850,3 +850,17 @@
   不能因 M3 接近门槛认定它优于 A/A2-S。三个 ep6 权重均在，成熟 AP 均未验证。
   建议 C1 后保留现有 A2-R 队列，并补 A 父对照、A2-S 各一次成熟窗口；后两臂尚未排程。
   本次仅更新理由与建议，不新增训练或队列；历史无效/硬故障 run 不自动补训。
+
+- **F1 可靠性感知前端融合：实现完成 + 已排队（2026-10-12，§83）**：
+  - 立项证据：历史 `crossmodal_fusion` 的 ep12-16 五轮均值对 B0 为
+    Overall −1.3019 / Car −2.0772 / Ped −5.2413，Truck +1.7612 / Cyc +0.3495；
+    该模块无可靠性估计、无缺测处理 ⇒ 只能否定「盲目 concat→attention」，不能否定融合方向。
+  - 唯一变量：`alpha = 1 + tanh(gate([occ, |radar|_mean, |radar|_max]))`，
+    `out = fusion_conv(cat([img, alpha*radar]))`；occ 来自**输入点云**（GT-free）；
+    **配置差异键恰为 `['RCFusion']`**（机械核验）；+593 参数（+0.040%）；
+    零初始化 ⇒ step 0 与基线**逐位相同**。
+  - 验证：`test_reliability_fusion.py` **8 passed**（与 C1 合计 22 passed）；
+    `relfus_s0_verdict.py` 纯产物判定 + 合成目录自检通过。
+  - 排程：`queue_relfus.sh` 于 **15:13:16** 武装，排在 C1 → A2-R 之后；
+    冒烟 → S0 通过才跑 24e → ep6 任务损害 → ep12-16 三口径。
+  - **未完成**：450-iter 冒烟（等 GPU）、S0 实跑、24e、α 机制探针（ep14 前补，不阻塞开训）。

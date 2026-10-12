@@ -17130,3 +17130,73 @@ M1 与 M4 donor FAIL。A2-R **并非仅差一个 M3 样本**，也没有充分�
 历史所有停在 ep6 的 run **不自动一律补训**：无效接线/泄漏/数值故障或不兼容日程应先
 区分；成熟窗口已经测过的实验不重复。本次没有全面审核这些历史臂。
 预算取舍可以决定先后，但没有证据时，不把“暂未排程”写成“已证明不值得跑”。
+
+---
+
+## 83. 可靠性感知前端融合臂 F1：立项、实现与排程（2026-10-12，未开训）
+
+### 83.1 立项证据：历史上「concat → attention」替换的真实代价
+
+`crossmodal_fusion_N4_2x4_24e_seed0` vs 同口径 B0（标准 `no2d_igdr` seed0），
+**ep12-16 五轮等权均值（n=5）**：
+
+| 指标 | crossmodal | B0 | Δ |
+| --- | --- | --- | --- |
+| Overall | 37.9789 | 39.2809 | **−1.3019** |
+| Car (strict) | 45.7627 | 47.8399 | **−2.0772** |
+| Truck (strict) | 31.4858 | 29.7246 | +1.7612 |
+| Pedestrian (loose) | 25.6864 | 30.9277 | **−5.2413** |
+| Cyclist (loose) | 48.9808 | 48.6313 | +0.3495 |
+
+全轮峰值：crossmodal **39.2835 @ ep16**；B0 **40.3853 @ ep14**。
+
+**口径边界**：该模块不是强意义的 Transformer cross-attention（两模态各自 channel
+mean/max → 空间 attention → 互乘 → concat+conv），**没有可靠性估计、没有缺测处理**。
+⇒ 可以说「不能盲目用 attention 替换 concat」；**不能**说「所有高级 fusion 无效」，
+也**不能**说「雷达缺测就是它失败的原因」（未测）。
+
+### 83.2 F1 的唯一研究因素（公式冻结）
+
+```
+occ   = 逐 BEV 格雷达点占用（由 *输入点云* 构造；GT-free）
+alpha = 1 + tanh( gate([occ, |radar|_mean_c, |radar|_max_c]) )    # ∈ (0, 2)
+out   = fusion_conv( cat([img_bev, alpha * radar_bev]) )          # conv 与基线同形
+```
+
+- **单变量契约已机械核验**：臂配置与主线配置的差异键 **恰好 `['RCFusion']`**
+  （`temporal_fusion` 仍是标准 `MotionAlignedRSSMFusion`）。
+- **容量**：唯一新增 **593** 参数（基线 1,474,816 → **+0.040%**）；`fusion_conv` 同形。
+- **零初始化** ⇒ step 0 `alpha ≡ 1` ⇒ 与 `ConcatConvFusion` **逐位相同**（单测断言）。
+- **相机通路不被门控**；无新 loss、无 KL 改动、无语义头、无 Doppler 门。
+- **布局**：源码确证 `PointPillarsScatter` 按 `coors(b,z,y,x)` → `canvas.view(ny,nx)`，
+  行=y、列=x ⇒ `valid_layout='yx'`（布局错误会静默镜像掩码，故列为硬门）。
+- 预登记：`docs/rssm_reliability_fusion_prereg_20261012.md`。
+
+### 83.3 工程验证（已完成）
+
+- 实现 `me_rssm/reliability_fusion_rssm.py`（`ReliabilityGatedConcatFusion`）；
+  接线 `R4Det.py` 仅在 fusion 声明 `accepts_obs_valid` 时传 `obs_points`（其它臂签名不变）。
+- 单测 `me_rssm/sanity/test_reliability_fusion.py`：**8 passed**
+  （逐位恒等、无点回退、门活性与 α∈(0,2)、角落映射与 yx/xy 转置、容量增量、接线守卫）。
+  与 C1 单测合跑 **22 passed**。
+- S0 判定器 `relfus_s0_verdict.py`（纯产物、不占 GPU）自检通过：
+  合成冒烟目录下 S0-2/S0-4 为 True、S0-1/S0-3 正确为 False。
+
+### 83.4 排程（用户指令：接在现有队列之后）
+
+- **队列链**：C1（进行中，ep5）→ **A2-R 续训 ep6→ep16**（14:02 武装）→ **F1**（15:13:16 武装）。
+- F1 队列动作：等 A2-R 队列 `DONE` 且其进程退出 → GPU 5-7 排空 → **450-iter 冒烟** →
+  `S0_ALL_PASS` 才继续（否则停）→ **24e seed0** → ep6 任务损害检查 → ep12-16 三口径报告。
+- 预计：A2-R 约 10-13 20:30 结束；F1 若 S0 通过，24e 约 24.2 h ⇒ **约 10-14 晚间**出成熟读数。
+- 所有 GPU 工作仍只用 **5/6/7**，串行，不并发抢卡。
+
+### 83.5 判定层（遵循附录 B 政策）
+
+1. **ep6 只查任务损害**（低于 B0 同窗 29.0420 > 2.0 点才停）；机制读数不裁决。
+2. **ep12-16 成熟门**（n=5）：Overall ≥ 40.00；Car ≥ 47.34、Truck ≥ 29.22、Ped ≥ 29.93、
+   Cyc ≥ 47.63；任一类 ≤ B0 同窗 −2.0 ⇒ 止损。**ep14 不设剪枝门。**
+3. 必报三口径（区间均值写跨度/n、全轮峰值值+epoch、best saved 值+epoch）。
+4. **无论 AP 正负都要报 α 机制读数**（占用格 vs 空格的 α 分布、α 与占空比关系），
+   否则「可靠性感知」只是命名；该探针尚未实现（ep14 前补齐，不阻塞开训）。
+5. 失败时只能归因到「每格标量门不足」或「前端不是瓶颈」，**不得外推**为
+   「所有可靠性融合无效」。
