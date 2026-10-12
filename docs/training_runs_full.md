@@ -16778,3 +16778,113 @@ C 的立项前提（缺测 ↔ 漏检）从相关升级为**有干预支持的�
    若确定性对照同样有效，贡献归于有效性建模，不宣称随机 latent 必要。
 
 **授权边界**：建议开始“写预登记”，不是授权实现/冒烟/正式训练；A/A2 仍不续训。
+
+---
+
+## 80. 候选 C 最小臂 C1（观测有效性条件化更新）：S0 接线门通过 + seed0 24e 正式启动（2026-10-12）
+
+### 80.1 立项与唯一研究因素
+
+- **假设**：标准 `no2d_igdr` 的后验更新在雷达缺测时仍以同一力度写入状态，导致缺测对象的状态
+  被「无信息先验」污染；让后验更新显式条件化于**输入回波可见性**可以部分恢复 §79 中受控屏蔽
+  造成的召回损失。
+- **唯一研究因素**：观测有效性条件化的相机/雷达更新策略。公式（预登记冻结，未改）：
+  `z_t = mu_q + (g_t − 1)(mu_q − mu_p)`，`g_t = 1 + tanh(W_v [h_t; valid_t] + b_v)`；
+  `valid_t` 由**输入点云**逐 BEV cell 占用构造（`valid_layout='xy'`，pc range 与既有配置一致），
+  **不读 GT**。
+- **保持不动**：backbone、检测头、重建/KL、优化器、数据管线、日程、score/IoU/分组边界。
+  未加入协方差校准、标准化 innovation、新语义头、Doppler 门或额外损失。
+- **预登记**：`docs/rssm_c_validity_update_prereg_20261012.md`（含附录 A 冻结修正：ep6 改为
+  早期曲线检查、分组召回机制门移到 ep14、zero 组 CE 改为逐类 3D AP 非劣）。
+- **实现**：`me_rssm/validity_gain_rssm.py`；接线 `mmdet3d/models/detectors/R4Det.py`
+  （仅当 fusion 声明 `accepts_obs_valid` 时传 `obs_points=points`，其它臂签名不变）。
+  代码提交：`0364928`（实现）、`83279ba`（判定/看门狗工具）。
+
+### 80.2 S0 接线门（450-iter 冒烟，GPU 5/6/7，3-rank DDP）
+
+产物：`/data/lurui/work_dirs/c1valid_smoke_450iter/`（`20261012_084202.log.json`、
+`iter_450.pth`、`s0_verdict.json`）。
+
+| 判据 | 内容 | 结果 |
+| --- | --- | --- |
+| S0-1 | 450 iter 完成、权重落盘、**无 NaN** | PASS（max_iter=450） |
+| S0-2 | 零初始化：step0 与主线**逐位相同**（`torch.equal`）；门已偏离恒等；门权重非零 | PASS（`abs_mean=0.001724`、`abs_max=0.008960`） |
+| S0-3 | `v_gate_valid_mean`/`v_gate_invalid_mean` 逐行可读；mask 非退化 | PASS（有效帧 64；invalid cell share 均值 **0.9818**，范围 0.9776–0.9872） |
+| S0-4 | 无 GT 推理输入、仅单一新增参数组（由测试断言） | PASS |
+
+**S0_ALL_PASS = true**。
+
+冒烟期门曲线（`v_gate_mean`）：iter50 **0.99693** → iter100 0.98322 → iter350 0.99306 →
+iter450 **0.99380**；iter450 条件均值 `valid=0.98781` / `invalid=0.99384`，
+说明门确实按有效性条件分化（不是常数旁路）。
+
+**必写 caveat**：invalid cell share ≈ 98.2% 说明 mask 极稀疏——门的主要输入是「绝大多数 cell
+无回波」。这不违反冻结的 S0 判据，但属于 ep14 机制门需要盯的观测（若 Δrecall 全部由稀疏
+mask 的常量偏置驱动，应在此后归因中显式报告，而不是当作有效性建模的功劳）。
+
+**容量（测试断言，256 通道配置）**：B0 9,191,510 → C1 9,257,558（**+66,048** 活跃参数
+= (256+1)×256+256）；确定性对照基线 6,831,446 → C1-D 6,897,494（同一增益）；
+C1 − C1-D = 2,360,064（随机分支的活跃参数差，供后续「概率状态必要性」判定使用）。
+
+### 80.3 运行事实（正式启动）
+
+- **启动**：2026-10-12 09:03:33 UTC，`CUDA_VISIBLE_DEVICES=5,6,7`，3-rank DDP，
+  `--seed 0 --deterministic`，24 epoch（1902 iter/epoch）。
+- 运行目录：`/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_c1valid_seed0`
+  （日志 `/tmp/c1valid_24e.log`；首个 log.json `20261012_090333.log.json`）。
+- 配置：`me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_c1valid.py`。
+- 观测速度：首轮 ~1.53–1.60 s/iter（iter250 @ 09:10:35），单轮约 50–52 min，
+  全程 ETA 约 20.9 h；无 NaN/OOM；DDP 仅报 `find_unused_parameters=True` 例行警告
+  （与「门在计算图中」一致，无未用参数）。
+- **未完成**：ep6 早期检查、ep14 机制门、ep12–16 成熟门、C1-D 对照（串行后置）均未执行。
+
+### 80.4 三口径与门（当前状态；★=训练中，待 ep6/ep16 回填）
+
+| 口径 | B0（标准 no2d_igdr seed0） | C1（本臂） |
+| --- | --- | --- |
+| 区间均值 ep12-16（n=5） | **39.2809** | ★ 待补（训练未到 ep12） |
+| 全轮峰值（值@epoch） | **40.3853 @ ep14** | ★ 待补 |
+| best saved（值@epoch） | **40.3853 @ ep14**（另有 ep22 权重） | ★ 待补 |
+
+对照 B0 同窗四类均值（非劣线）：Car **47.8399**（线 47.34）、Truck **29.7246**（线 29.22）、
+Pedestrian **30.9277**（线 29.93）、Cyclist **48.6313**（线 47.63）。
+
+门（冻结，未改）：
+
+1. **ep6 早期检查**（同 seed 同日程）：C1 的 ep1–6 区间均值低于 B0 同窗（**29.0420**）
+   **> 2.0 点** ⇒ 停并复查。
+2. **ep14 机制门**（同 epoch/seed/离线 harness）：M1 covered 组 Δrecall ≥ 0；
+   M2 自然 zero 组 Δrecall ≥ −0.5；M3 逐类 3D AP ≥ B0 − 0.5。
+3. **ep12–16 成熟任务门**：Overall 区间均值 ≥ **40.00**；四类非劣；任一类别 ≤ B0 同窗 −2.0 ⇒ 止损归档。
+4. **归因底线**：若 C1-D 与 C1 同等有效，结论写作「缺测可区分的更新机制」，
+   不主张随机状态必要性。
+
+### 80.5 工具与只读验证
+
+- 新增（本次提交）：
+  - `me_rssm/sanity/c1valid_curve_check.py`：三口径窗口报告（区间均值写实际跨度与 n、
+    全轮峰值值@epoch、best saved 值@epoch）+ 冻结门机械判定。自检：B0-vs-B0 复算得到
+    39.2809 / 40.3853@ep14，与 §69 口径逐位一致。
+  - `me_rssm/sanity/c1valid_ep6_verdict.py`：M1/M2/M3 判定（修 1 节 M1/M2/M3 条款）。
+  - `me_rssm/sanity/watch_c1valid_ep6.sh`：分阶段看门狗（ep6 早期检查 → ep14 机制门 →
+    ep12-16 任务门），已 `source .envrc`，已在 09:10:22 武装。
+- 回归：`me_rssm/sanity/test_validity_gain_rssm.py` **14 passed**
+  （本环境需 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest`，原因见 §69 记录的
+  conftest→hydra→`omegaconf.vendor` 插件问题，与本改动无关）。
+- 本次未复跑全量 496 项；`test_flops.py`/`test_grad_paths.py` 因 GPU0 被其他租户占满而不可用
+  （非本次改动造成）。
+
+### 80.6 结论与下一步
+
+**结论（截至 2026-10-12 09:15 UTC）**：C1 的最小实现、接线、S0 门与冒烟全部通过，
+正式 seed0 24e 训练在 GPU 5/6/7 运行中。**方法有效性尚未判定**——ep6/ep14/ep12-16 三道门
+都还没到；本节的三口径单元格在训练产生 val 后回填，不以冒烟日志推断任何 AP 结论。
+
+**下一步（自动，看门狗已武装）**：
+
+1. ep6（约 14:15 UTC）：`c1valid_curve_check.py` 早期检查；未触发 >2.0 点则继续。
+2. ep14（约 21:55 UTC）：构建 C1 ep14 dump（GPU5）→ 与 B0 冻结产物配对机制门判定。
+3. ep16（约 23:40 UTC）：ep12-16 成熟任务门。
+4. 任一门 FAIL 即归档负结果，按 §75.15 转对象级读出/空间定位/跨场景泛化分支；
+   **不扫增益系数、不调 KL、不续 ep24 抢救**。
+5. C1-D（确定性对照）在 C1 结论出来后串行执行，不与 C1 并行以免彼此抢 GPU 干扰日程对照。

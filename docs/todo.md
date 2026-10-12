@@ -808,3 +808,18 @@
   **A2-S 看门狗仍在运行时不得改脚本**（bash 按字节偏移读取在执行中的脚本，
   §73.6.5 已踩过），故本轮只记录。清理时机：A2-S 结束、**A2-R 开跑之前**，
   与 §73.6.10 的 `_a2r.json` 冗余块一并删除。
+
+- **候选 C 最小臂 C1 已实现并启动（2026-10-12，§80）**：按用户一次性指令完成
+  「预登记 + 最小实现 + 回归/S0 + 短冒烟 → seed0 24e 启动」，不再追加泛化探针延迟开训。
+  唯一研究因素：`z_t = mu_q + (g_t−1)(mu_q−mu_p)`，`g_t=1+tanh(W_v[h_t;valid_t]+b_v)`，
+  `valid_t` 由**输入点云**逐 BEV cell 占用构造（无 GT 推理输入）。
+  - 预登记冻结：`docs/rssm_c_validity_update_prereg_20261012.md`（附录 A：ep6 改早期曲线检查、
+    分组召回机制门移到 ep14、zero 组 CE 改逐类 3D AP 非劣）。
+  - 450-iter 冒烟 **S0_ALL_PASS**（S0-1..S0-4 全绿；门权重 `abs_mean=0.001724`；
+    `v_gate_mean` 0.99693→0.99380，iter450 `valid=0.98781`/`invalid=0.99384`）。
+  - 容量：B0 9,191,510 → C1 9,257,558（+66,048 活跃参数）；C1−C1-D = 2,360,064。
+  - 回归：`test_validity_gain_rssm.py` **14 passed**（需 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`）。
+  - 运行：`/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_c1valid_seed0`，GPU 5/6/7，
+    seed0 24e，09:03:33 启动，看门狗 09:10:22 武装（ep6 早期检查 → ep14 机制门 → ep12-16 任务门）。
+  - **未完成**：ep6/ep14/ep12-16 三道门、C1-D 确定性对照（C1 结论后串行）、多 seed。
+  - **本环境 pytest 需 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`**（conftest→hydra→`omegaconf.vendor`）。
