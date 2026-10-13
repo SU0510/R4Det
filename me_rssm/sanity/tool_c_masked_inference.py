@@ -52,6 +52,7 @@ import json
 import os
 import random
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -262,6 +263,31 @@ def compare_dumps(left_path, right_path, limit=None):
     return report
 
 
+def ensure_meta_info(cfg, config_path):
+    """Give the bare config the ``model.meta_info`` that train_vod.py injects.
+
+    R4Det.__init__ reads ``meta_info['figures_path']`` unconditionally
+    (R4Det.py:254), so a config loaded by plain ``Config.fromfile`` aborts the
+    model build with ``TypeError: R4Det: 'NoneType' object is not subscriptable``.
+    That is exactly what killed C1's staged ep14 probe on 2026-10-13 while the
+    same tool had been fine when the caller supplied meta_info.
+
+    ``project_name`` is derived the way train_vod.py does it (config file stem)
+    so the detector's dataset branch (VoD / TJ4D) matches training;
+    ``figures_path`` is a throwaway directory because this probe writes no
+    training figures.  A config that already carries meta_info is left alone.
+    """
+    if cfg.model.get('meta_info') is not None:
+        return cfg.model['meta_info']
+    figures_path = os.path.join(tempfile.gettempdir(), 'r4det_tool_c_figures')
+    os.makedirs(figures_path, exist_ok=True)
+    cfg.model['meta_info'] = {
+        'figures_path': figures_path,
+        'project_name': os.path.basename(str(config_path)).split('.')[0],
+    }
+    return cfg.model['meta_info']
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--config', required=True)
@@ -296,6 +322,8 @@ def main():
     setup_multi_processes(cfg)
     cfg.model.pretrained = None
     cfg.gpu_ids = [args.gpu_id]
+
+    ensure_meta_info(cfg, args.config)
 
     coverage_json = json.load(open(args.coverage_groups, encoding='utf-8'))
     motion_json = json.load(open(args.motion_axis, encoding='utf-8'))

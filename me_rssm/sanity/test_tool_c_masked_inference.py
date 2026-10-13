@@ -280,5 +280,34 @@ class CompareDumpsTest(unittest.TestCase):
         self.assertEqual(tool._sha256(path), expected)
 
 
+
+class MetaInfoInjection(unittest.TestCase):
+    """A bare Config has no model.meta_info; R4Det needs it to even build."""
+
+    def test_injects_when_missing(self):
+        from mmcv import Config
+        cfg = Config.fromfile(os.path.join(
+            _REPO, 'me_rssm/configs/'
+            'TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_c1valid.py'))
+        self.assertIsNone(cfg.model.get('meta_info'))
+        meta = tool.ensure_meta_info(
+            cfg, '/x/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_c1valid.py')
+        self.assertEqual(meta['project_name'],
+                         'TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_c1valid')
+        self.assertTrue(os.path.isdir(meta['figures_path']))
+        self.assertIs(cfg.model['meta_info'], meta)
+
+    def test_leaves_existing_meta_info_alone(self):
+        from mmcv import Config
+        cfg = Config.fromfile(os.path.join(
+            _REPO, 'me_rssm/configs/'
+            'TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_c1valid.py'))
+        cfg.model['meta_info'] = {'figures_path': '/tmp/keep-me',
+                                  'project_name': 'TJ4D-keep'}
+        meta = tool.ensure_meta_info(cfg, 'whatever.py')
+        self.assertEqual(meta, {'figures_path': '/tmp/keep-me',
+                                'project_name': 'TJ4D-keep'})
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
