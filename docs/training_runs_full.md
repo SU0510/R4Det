@@ -17872,3 +17872,72 @@ vs B0 同窗 **30.2603**，Δ **+4.2478**。⚠️ 该领先**不是**成熟证�
   此前 `## 已完成` 内容除新增核验归档外逐字保留。
 - `git diff --check`；仅文档变更，不重跑 sanity，不把既有测试数量写成本次新增验证。
 - 结论：候选池补录完成，方法实现/训练仍待单独选择与预登记；不改变既有排程或冻结判定。
+
+
+---
+
+## 91. 方向 1 几何多尺度 fusion：旧模块核验、原文对比与 GP-MSF 设计（2026-10-13，CPU）
+
+### 91.1 范围与必填性能摘要
+
+用户要求设计并论证 TODO 第一项几何多尺度 fusion。本次只读现行源码/配置、历史 EvalHook 日志、train infos 和原论文/作者资料，新增设计文档与 CPU 证据报告。
+**无网络实现、GPU 探针、S0 或新训练/评测**，不改变 A2-R/F1/其他队列，不占用 GPU。
+
+- 本任务**区间均值 N/A（无新增 val 曲线/窗口）**；**全轮峰值 N/A（无新增 val 指标/epoch）**；best saved N/A。
+- 历史指标复读使用每 epoch 最后一次 val；窗口 ep12–16 五轮等权、n=5，峰值取所有有 val 的 epoch。实际权重存在性单独核验。
+
+| 历史 run | 区间均值 ep12–16，n=5 | 全轮峰值 | 当前 best saved |
+| --- | ---: | ---: | ---: |
+| `run10_headv2_multiseed/seed_0`（旧同栈 concat） | 38.3902 | 39.8802 @ ep16 | 39.8802 @ ep16 |
+| `crossmodal_fusion_N4_2x4_24e_seed0`（旧恢复预训练 CrossModal） | 37.9789 | 39.2835 @ ep16 | 39.2835 @ ep16 |
+| `fgfull_N4_no2d_igdr_2x4_24e_seed0`（当前 B0） | 39.2809 | 40.3853 @ ep14 | 40.3853 @ ep14 |
+
+旧 CrossModal 的完整 ep1–16 Overall 曲线补在设计附录 A；本次复读的全部历史 epoch 及四类构成项保存在 JSON，不是新 val。
+历史正式运行配置、起止/截断、逐项窗口均值等继续引用 §40、§47 及之后的 multi-seed 归档，不以本节摘要替代明细。
+
+### 91.2 两个必须修正的因果/坐标读法
+
+1. `BEVCross_modal_attention.py:13–50` 的旧类是 mean/max→sigmoid 空间掩码互乘→concat+3×3 conv，不含标定 reference、跨位置 learned offset 或多尺度 source selection。
+   旧同栈替换效应为 Overall −0.4113、Car −2.0400、Truck +3.2709、Ped −3.2296、Cyc +0.3537；它比当前 B0 的 −1.3019 是**跨训练栈参照，不能全部归因于 fusion**。
+   原干预还改变了预训练 fusion 权重是否加载，不能声称已纯粹识别掩码算子的因果贡献；F1 原排程不因本次核验自动改变。
+2. 当前 resolved `zbound=[-4,2,6.0]` 只有一层；`mean(-1)` 本身不抹掉多层。高度容量不足发生于单层表示设计，而非已证明该 mean 是瓶颈。
+   image FPN / radar SECONDFPN 本来已有多尺度信息，不能宣称“第一次加 FPN”；新候选改变原生取证位置/来源而非只堆一个下采样 neck。
+
+### 91.3 提案、文献边界与唯一研究因素
+
+完整论证：`docs/geometry_multiscale_fusion_design_20261013.md`。
+
+GP-MSF 保留原 ConcatConv 基础通路，通过有界共享米制地址读原 image P2/P3/P4 与 SECOND 原生三层；同地址的 image/radar 配对条件化双向消息，分开归一化；新增直接 radar 证据无支持时为 null，但 image fallback 不依赖回波。
+消息以零初始化线性投影分别加入 C/R，仍使用原 `fusion_conv` 输出 256 通道给现有 RSSM/head。
+
+首轮唯一研究模块：前端 RCFusion。无新对象 detector/RoI/完整 voxel volume/occupancy task/新 RSSM loss；N4、原 backbone/head、既有 FG/depth/RSSM 配方保持。
+同 seed 不自动保证新增模块后的随机初始状态公平，实施要校验共同模块初始 state/RNG 与 step-0 identity，禁止新臂 hot-start 成熟 B0 而控制从头训。
+
+核对 R4Det、SGDet3D、Doracamom、CVFusion、RCFusion、LXL、RCBEVDet++，补 MSSF/SGDet3D++；后两者直接限制“几何/多尺度/雷达引导原图检索”的首创主张。
+DR-Net 仅核到原始题录/DOI，原文未取到，不使用未核模块细节；其余原文/作者仓库/出版题录的覆盖层级在设计 §13 明列；RCFusion 原始正文也未取得，粗结构只采用原论文之间可交叉核对的部分。
+方案是可检验的研究候选，不承诺 AP 增益或论文新颖性；必须以 same-capacity/fixed-offset/native-vs-BEV/source/null/fallback 消融和 RSSM/GRU×fusion、h/z 排他干预给出机制证据。
+
+### 91.4 本次 CPU 运行事实与证据
+
+- Config 用 `import_custom_modules=False` 只解析继承，避免 custom-import 触发必须 CUDA 的 localattention；未构造模型或使用 GPU。
+- train infos：5,706 帧，sha256 `0eb60b281141afc22879efe008d23e78c485837e69cd912a126af7b752cccb11`；按原 dataset camera→LiDAR/类别/BEV xy 筛选 23,029 框：Ped 3,242、Cyc 5,125、Car 11,030、Truck 3,632。
+- 中位宽度 / 0.32m：Ped 1.9604、Cyc 2.3626、Car 5.7213、Truck 8.3546 cells。仅是训练设计统计，不是 AP 分母或“高分辨率必有益”的证据。
+- train-only 等类/等对象、保留高度 surface 等权的 q10/q50/q90 reference：−1.1230436265 / −0.3003779650 / 0.6601446867m。
+  规则完整记录于 JSON，不使用每样本 GT 作 forward 地址/有效性，也不混用工作区旧未跟踪草稿中的不同 quantile 常数。
+- radar native shape 248×216 / 124×108 / 62×54，步长 0.32/0.64/1.28m，receptive-center origin=(0.08,−39.60)。这是新增采样器的 index bookkeeping，**不是证明原 semantic alignment 错误**。
+- 实际 train 标定 + 合成 augmentation 的分步/复合投影等价：1,280 点最大像素误差 4.55e−13；CPU native affine-field `grid_sample` 三层最大误差 4.44e−15 / 3.55e−15 / 1.78e−15。
+  这不是实际 augmented metadata、网络 forward 或 GPU S0 证明；真实接线测试仍待执行。
+- B0 三 seed 窗口复读：39.28088 / 41.91848 / 40.12066，均值 40.4400，样本 std 1.3475（ddof=1），总体 std 1.1002；不把 std 当严格差值显著性门槛。
+- 临时 CPU audit 脚本：`/tmp/r4det_geom_fusion_design_audit_20261013.py`；长期证据、完整原始复读曲线与定义：`docs/geometry_multiscale_fusion_audit_20261013.json`。
+- 原有未跟踪 `docs/artifacts/` 未改/未提交；不把它算本次新产物或实现。
+
+### 91.5 验证与下一步
+
+本次只对文档/报告做契约、数值、历史日志一致性与 diff 检查；不运行无关模型测试，不复用旧测试数量充当新验证。
+验证结果：`/tmp/r4det_geom_fusion_validate_20261013.py` 六组 focused checks PASS（历史曲线/三口径、数据/数学、source hash、旧未跟踪文件、追加式历史、TODO 与范围契约）；`rtk git diff --check` PASS。
+校验脚本初版的 heading/归档匹配断言曾误报，已锚定正式标题并包含“条件方向 7”后重跑通过；不是网络/GPU 测试通过。
+TODO 标记“设计论证已完成”并归档该子任务；完整方向 1 的 `[ ]` 保留，明确尚未实现/冻结预登记/训练。
+
+建议最小验证顺序：同初始化 identity + 真实坐标/augmentation + 两步梯度 + 原 bs/N4 的 S0，然后 B0/同容量 conv/固定取证/完整块；成熟正结果后才补其余归因和多 seed。
+大幅目标暂提议配对三 seed ΔOverall≥+2.0（ep12–16），Ped/Cyc 与 high/low/zero 一并报告；具体非劣容限/训练停止规则尚未冻结，不改既有预登记。
+若机制未成立，不默认扩展 head/volume/新损失或调大采样半径。设计和 CPU 数学核验完成不等于网络/性能验证完成。

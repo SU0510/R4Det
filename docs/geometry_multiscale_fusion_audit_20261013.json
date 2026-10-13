@@ -1,0 +1,1442 @@
+{
+  "task": "geometry-multiscale fusion design CPU audit; no model implementation/training/quality eval",
+  "date": "2026-10-13 Asia/Shanghai",
+  "config": "configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr.py",
+  "resolved_config": {
+    "grid_config": {
+      "xbound": [
+        0,
+        69.12,
+        0.32
+      ],
+      "ybound": [
+        -39.68,
+        39.68,
+        0.32
+      ],
+      "zbound": [
+        -4,
+        2,
+        6.0
+      ],
+      "dbound": [
+        1.0,
+        73,
+        1.0
+      ]
+    },
+    "img_neck": {
+      "type": "FPN",
+      "in_channels": [
+        256,
+        512,
+        1024,
+        2048
+      ],
+      "out_channels": 256,
+      "norm_cfg": {
+        "type": "BN",
+        "requires_grad": false
+      },
+      "num_outs": 5
+    },
+    "pts_voxel_layer": {
+      "max_num_points": 10,
+      "point_cloud_range": [
+        0,
+        -39.68,
+        -4,
+        69.12,
+        39.68,
+        2
+      ],
+      "voxel_size": [
+        0.16,
+        0.16,
+        6.0
+      ],
+      "max_voxels": [
+        16000,
+        40000
+      ]
+    },
+    "pts_backbone": {
+      "type": "SECOND",
+      "in_channels": 64,
+      "layer_nums": [
+        3,
+        5,
+        5
+      ],
+      "layer_strides": [
+        2,
+        2,
+        2
+      ],
+      "out_channels": [
+        64,
+        128,
+        256
+      ]
+    },
+    "pts_neck": {
+      "type": "SECONDFPN",
+      "in_channels": [
+        64,
+        128,
+        256
+      ],
+      "upsample_strides": [
+        1,
+        2,
+        4
+      ],
+      "out_channels": [
+        128,
+        128,
+        128
+      ]
+    },
+    "RCFusion": {
+      "type": "ConcatConvFusion",
+      "img_channels": 256,
+      "rad_channels": 384,
+      "out_channels": 256,
+      "kernel_size": 3
+    },
+    "temporal_fusion": {
+      "type": "MotionAlignedRSSMFusion",
+      "in_channels": 256,
+      "out_channels": 256,
+      "kernel_size": 3,
+      "latent_dim": 256,
+      "hidden_dim": 128,
+      "action_dim": 0,
+      "kl_scale": 1.0,
+      "free_nats": 1.0,
+      "min_std": 0.1,
+      "init_std": 0.2,
+      "align_kernel_size": 3,
+      "align_deform_groups": 1,
+      "align_z_state": true,
+      "norm_cfg": {
+        "type": "BN",
+        "requires_grad": true
+      },
+      "act_cfg": {
+        "type": "ReLU",
+        "inplace": true
+      }
+    },
+    "seq_len": 4,
+    "depth_net": {
+      "type": "GeometryDepth_Net",
+      "use_radar_depth": false,
+      "use_extra_depth": false,
+      "data_config": {
+        "resize_lim": [
+          0.4,
+          0.5
+        ],
+        "final_dim": [
+          480,
+          640
+        ],
+        "final_dim_test": [
+          480,
+          640
+        ],
+        "bot_pct_lim": [
+          0.0,
+          0.0
+        ],
+        "top_pct_lim": [
+          0.0,
+          0.1
+        ],
+        "rot_lim": [
+          -2.7,
+          2.7
+        ],
+        "rand_flip": true
+      },
+      "downsample": 8,
+      "input_channels": 1280,
+      "numC_input": 256,
+      "numC_Trans": 256,
+      "cam_channels": 33,
+      "grid_config": {
+        "xbound": [
+          0,
+          69.12,
+          0.32
+        ],
+        "ybound": [
+          -39.68,
+          39.68,
+          0.32
+        ],
+        "zbound": [
+          -4,
+          2,
+          6.0
+        ],
+        "dbound": [
+          1.0,
+          73,
+          1.0
+        ]
+      },
+      "loss_depth_type": "kld",
+      "loss_prob_weight": 0.0,
+      "loss_abs_weight": 0.0,
+      "loss_sam2_weight": 0.0,
+      "foreground_loss_alpha": 5.0,
+      "relative_loss_weight": 0.04
+    },
+    "img_input_hw": [
+      480,
+      640
+    ]
+  },
+  "train_info": "data/TJ4D/TJ4D_infos_train.pkl",
+  "train_info_sha256": "0eb60b281141afc22879efe008d23e78c485837e69cd912a126af7b752cccb11",
+  "train_frames": 5706,
+  "class_geometry": {
+    "Pedestrian": {
+      "boxes_in_xy_grid": 3242,
+      "height_fitting_objects": 3242,
+      "median_lwh_m": [
+        0.6554544568061829,
+        0.6273180544376373,
+        1.6878935098648071
+      ],
+      "median_width_cells_at_0p32m": 1.9603689201176167
+    },
+    "Cyclist": {
+      "boxes_in_xy_grid": 5125,
+      "height_fitting_objects": 5125,
+      "median_lwh_m": [
+        1.7894575595855713,
+        0.756019115447998,
+        1.591180443763733
+      ],
+      "median_width_cells_at_0p32m": 2.362559735774994
+    },
+    "Car": {
+      "boxes_in_xy_grid": 11030,
+      "height_fitting_objects": 11030,
+      "median_lwh_m": [
+        4.521212100982666,
+        1.830810308456421,
+        1.6332659721374512
+      ],
+      "median_width_cells_at_0p32m": 5.721282213926315
+    },
+    "Truck": {
+      "boxes_in_xy_grid": 3632,
+      "height_fitting_objects": 3632,
+      "median_lwh_m": [
+        10.018940925598145,
+        2.673487424850464,
+        3.70955228805542
+      ],
+      "median_width_cells_at_0p32m": 8.3546482026577
+    }
+  },
+  "reference_heights_m": [
+    -1.1230436265468597,
+    -0.3003779649734497,
+    0.6601446866989136
+  ],
+  "height_rule": "train only; four classes equal mass; valid objects equal mass; in-range 25/50/75% height surfaces equal mass; left-inverse weighted CDF at 10/50/90%; xy-grid filtering follows dataset BEV range; fixed constants, no per-sample GT inference",
+  "camera_height_bins": 1,
+  "radar_native": [
+    {
+      "level": 0,
+      "shape_yx": [
+        248,
+        216
+      ],
+      "step_m": 0.32,
+      "receptive_center_origin_xy": [
+        0.08,
+        -39.6
+      ]
+    },
+    {
+      "level": 1,
+      "shape_yx": [
+        124,
+        108
+      ],
+      "step_m": 0.64,
+      "receptive_center_origin_xy": [
+        0.08,
+        -39.6
+      ]
+    },
+    {
+      "level": 2,
+      "shape_yx": [
+        62,
+        54
+      ],
+      "step_m": 1.28,
+      "receptive_center_origin_xy": [
+        0.08,
+        -39.6
+      ]
+    }
+  ],
+  "cpu_checks": {
+    "projection_identity_max_abs_pixel_error": 4.547473508864641e-13,
+    "projection_test_points": 1280,
+    "native_affine_sampling_max_abs_errors": [
+      4.440892098500626e-15,
+      3.552713678800501e-15,
+      1.7763568394002505e-15
+    ],
+    "torch_device": "cpu",
+    "scope": "actual train calibration + synthetic augmentations / synthetic affine fields; not actual network/pipeline S0"
+  },
+  "historical_metrics": {
+    "crossmodal_fusion_N4_2x4_24e_seed0": {
+      "window_epochs": [
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "window_means": {
+        "pts_bbox/KITTI/Overall_3D_moderate": 37.97894,
+        "pts_bbox/KITTI/Car_3D_moderate_strict": 45.76274000000001,
+        "pts_bbox/KITTI/Truck_3D_moderate_strict": 31.4858,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.686380000000003,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 48.9808
+      },
+      "all_epoch_peak": {
+        "value": 39.2835,
+        "epoch": 16
+      },
+      "best_saved": {
+        "value": 39.2835,
+        "epoch": 16
+      },
+      "val_epochs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "curve": [
+        {
+          "epoch": 1,
+          "pts_bbox/KITTI/Overall_3D_moderate": 16.2131,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 30.1532,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 2.0868,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 5.9268,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 26.6854
+        },
+        {
+          "epoch": 2,
+          "pts_bbox/KITTI/Overall_3D_moderate": 28.4627,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 40.132,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 18.0557,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 20.3724,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 35.2908
+        },
+        {
+          "epoch": 3,
+          "pts_bbox/KITTI/Overall_3D_moderate": 28.4421,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 37.6618,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 16.5914,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 20.7765,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 38.7388
+        },
+        {
+          "epoch": 4,
+          "pts_bbox/KITTI/Overall_3D_moderate": 31.0702,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 37.8766,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 20.7291,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 23.6405,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 42.0348
+        },
+        {
+          "epoch": 5,
+          "pts_bbox/KITTI/Overall_3D_moderate": 33.1058,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 34.021,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 24.0973,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 21.6711,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 52.6339
+        },
+        {
+          "epoch": 6,
+          "pts_bbox/KITTI/Overall_3D_moderate": 35.5144,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 46.3431,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 21.7819,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 26.4331,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.4995
+        },
+        {
+          "epoch": 7,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.6989,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 49.0241,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 28.1868,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.9971,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 51.5877
+        },
+        {
+          "epoch": 8,
+          "pts_bbox/KITTI/Overall_3D_moderate": 35.4494,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 44.262,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 25.6144,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 22.4845,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 49.4365
+        },
+        {
+          "epoch": 9,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.3662,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 43.104,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 29.9123,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 26.1342,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.3141
+        },
+        {
+          "epoch": 10,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.9072,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 48.9999,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 31.6326,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 24.9333,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.0628
+        },
+        {
+          "epoch": 11,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.3325,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 49.6411,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 32.1681,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.0844,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.4363
+        },
+        {
+          "epoch": 12,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.0084,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 46.9644,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 30.476,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 26.0507,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 48.5425
+        },
+        {
+          "epoch": 13,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.5784,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 43.761,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 33.0847,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.2427,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 48.2254
+        },
+        {
+          "epoch": 14,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.9041,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 47.568,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 32.2926,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 26.5165,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 49.2393
+        },
+        {
+          "epoch": 15,
+          "pts_bbox/KITTI/Overall_3D_moderate": 36.1203,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 43.0773,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 30.1687,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 22.751,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 48.484
+        },
+        {
+          "epoch": 16,
+          "pts_bbox/KITTI/Overall_3D_moderate": 39.2835,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 47.443,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 31.407,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.871,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.4128
+        }
+      ]
+    },
+    "run10_headv2_multiseed/seed_0": {
+      "window_epochs": [
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "window_means": {
+        "pts_bbox/KITTI/Overall_3D_moderate": 38.39018,
+        "pts_bbox/KITTI/Car_3D_moderate_strict": 47.80274,
+        "pts_bbox/KITTI/Truck_3D_moderate_strict": 28.214939999999995,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.915960000000002,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 48.62708
+      },
+      "all_epoch_peak": {
+        "value": 39.8802,
+        "epoch": 16
+      },
+      "best_saved": {
+        "value": 39.8802,
+        "epoch": 16
+      },
+      "val_epochs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24
+      ],
+      "curve": [
+        {
+          "epoch": 1,
+          "pts_bbox/KITTI/Overall_3D_moderate": 17.354,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 24.025,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 2.798,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 8.6111,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 33.982
+        },
+        {
+          "epoch": 2,
+          "pts_bbox/KITTI/Overall_3D_moderate": 24.4474,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 38.515,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 11.1923,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 18.5589,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 29.5233
+        },
+        {
+          "epoch": 3,
+          "pts_bbox/KITTI/Overall_3D_moderate": 31.1141,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 44.8808,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 15.5383,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 18.7188,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 45.3185
+        },
+        {
+          "epoch": 4,
+          "pts_bbox/KITTI/Overall_3D_moderate": 28.927,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 41.6099,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 14.8198,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 21.7557,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 37.5226
+        },
+        {
+          "epoch": 5,
+          "pts_bbox/KITTI/Overall_3D_moderate": 32.8077,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 41.5684,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 19.0863,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 21.496,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 49.0802
+        },
+        {
+          "epoch": 6,
+          "pts_bbox/KITTI/Overall_3D_moderate": 33.5095,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 44.1053,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 26.3965,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 18.7187,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 44.8177
+        },
+        {
+          "epoch": 7,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.4821,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 50.3072,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 22.4686,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.6697,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 48.4831
+        },
+        {
+          "epoch": 8,
+          "pts_bbox/KITTI/Overall_3D_moderate": 34.3565,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 47.4087,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 17.7924,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 26.6549,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 45.5699
+        },
+        {
+          "epoch": 9,
+          "pts_bbox/KITTI/Overall_3D_moderate": 36.1902,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 44.6476,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 24.0675,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.5189,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.5267
+        },
+        {
+          "epoch": 10,
+          "pts_bbox/KITTI/Overall_3D_moderate": 36.2099,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 46.2995,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 24.4894,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.4954,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.5554
+        },
+        {
+          "epoch": 11,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.1574,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 46.4972,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 28.5703,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.6539,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.9083
+        },
+        {
+          "epoch": 12,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.7893,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 45.3546,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 27.4549,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 31.6537,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.6939
+        },
+        {
+          "epoch": 13,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.724,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 50.8325,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 27.5724,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.546,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.9449
+        },
+        {
+          "epoch": 14,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.9089,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 48.9651,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 27.9347,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 31.2854,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.4506
+        },
+        {
+          "epoch": 15,
+          "pts_bbox/KITTI/Overall_3D_moderate": 36.6485,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 43.8843,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 27.6824,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 24.4521,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.5751
+        },
+        {
+          "epoch": 16,
+          "pts_bbox/KITTI/Overall_3D_moderate": 39.8802,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 49.9772,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 30.4303,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.6426,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.4709
+        },
+        {
+          "epoch": 17,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.2926,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 49.7121,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 27.1233,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.648,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.6869
+        },
+        {
+          "epoch": 18,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.8965,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 47.0569,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 28.1013,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.5732,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 48.8545
+        },
+        {
+          "epoch": 19,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.3707,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 44.3504,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 30.8935,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.1948,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 49.0441
+        },
+        {
+          "epoch": 20,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.5337,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 46.0341,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 31.7148,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.137,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.2491
+        },
+        {
+          "epoch": 21,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.1876,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 44.3761,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 29.0116,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.8322,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.5304
+        },
+        {
+          "epoch": 22,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.9255,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 47.1432,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 30.2938,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 26.962,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.3031
+        },
+        {
+          "epoch": 23,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.6825,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 46.7156,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 29.3147,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.675,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.0247
+        },
+        {
+          "epoch": 24,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.7128,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 46.6572,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 30.4155,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 26.8409,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.9378
+        }
+      ]
+    },
+    "fgfull_N4_no2d_igdr_2x4_24e_seed0": {
+      "window_epochs": [
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "window_means": {
+        "pts_bbox/KITTI/Overall_3D_moderate": 39.28088,
+        "pts_bbox/KITTI/Car_3D_moderate_strict": 47.83994,
+        "pts_bbox/KITTI/Truck_3D_moderate_strict": 29.724619999999998,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 30.927660000000003,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 48.631299999999996
+      },
+      "all_epoch_peak": {
+        "value": 40.3853,
+        "epoch": 14
+      },
+      "best_saved": {
+        "value": 40.3853,
+        "epoch": 14
+      },
+      "val_epochs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23
+      ],
+      "curve": [
+        {
+          "epoch": 1,
+          "pts_bbox/KITTI/Overall_3D_moderate": 15.264,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 29.4114,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 7.1599,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 13.9757,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 10.5091
+        },
+        {
+          "epoch": 2,
+          "pts_bbox/KITTI/Overall_3D_moderate": 26.3716,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 37.6748,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 22.447,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 11.5293,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 33.8351
+        },
+        {
+          "epoch": 3,
+          "pts_bbox/KITTI/Overall_3D_moderate": 31.6591,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 44.9349,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 19.5616,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 22.2242,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 39.9158
+        },
+        {
+          "epoch": 4,
+          "pts_bbox/KITTI/Overall_3D_moderate": 32.8506,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 40.8715,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 22.3596,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.0709,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 43.1004
+        },
+        {
+          "epoch": 5,
+          "pts_bbox/KITTI/Overall_3D_moderate": 34.0827,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 43.3588,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 25.1274,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 18.3216,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 49.5232
+        },
+        {
+          "epoch": 6,
+          "pts_bbox/KITTI/Overall_3D_moderate": 34.0243,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 43.2792,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 21.9299,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.1223,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 43.7657
+        },
+        {
+          "epoch": 7,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.5701,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 44.9186,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 27.0695,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 29.0887,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 49.2034
+        },
+        {
+          "epoch": 8,
+          "pts_bbox/KITTI/Overall_3D_moderate": 39.5965,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 49.5047,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 30.6257,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 29.9507,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 48.3048
+        },
+        {
+          "epoch": 9,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.5362,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 48.2411,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 29.7876,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.2625,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.8535
+        },
+        {
+          "epoch": 10,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.0619,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 46.7774,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 25.8437,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.5972,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 51.0294
+        },
+        {
+          "epoch": 11,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.9632,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 45.4232,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 27.1357,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 30.6001,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 52.694
+        },
+        {
+          "epoch": 12,
+          "pts_bbox/KITTI/Overall_3D_moderate": 39.2953,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 47.4092,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 30.8624,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 30.3707,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 48.5388
+        },
+        {
+          "epoch": 13,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.9178,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 46.5688,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 25.106,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 29.242,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.7543
+        },
+        {
+          "epoch": 14,
+          "pts_bbox/KITTI/Overall_3D_moderate": 40.3853,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 48.7109,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 28.0448,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 34.2463,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.5391
+        },
+        {
+          "epoch": 15,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.8111,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 47.4499,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 32.1884,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.0223,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.584
+        },
+        {
+          "epoch": 16,
+          "pts_bbox/KITTI/Overall_3D_moderate": 39.9949,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 49.0609,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 32.4215,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 32.757,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 45.7403
+        },
+        {
+          "epoch": 17,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.2148,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 47.1332,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 31.0667,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.7569,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.9025
+        },
+        {
+          "epoch": 18,
+          "pts_bbox/KITTI/Overall_3D_moderate": 39.0322,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 45.5842,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 33.1699,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 32.2872,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 45.0875
+        },
+        {
+          "epoch": 19,
+          "pts_bbox/KITTI/Overall_3D_moderate": 39.5607,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 48.4368,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 33.334,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 30.0429,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.429
+        },
+        {
+          "epoch": 20,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.3599,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 46.0241,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 33.5696,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 29.7686,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 44.0773
+        },
+        {
+          "epoch": 21,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.7773,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 46.624,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 32.7192,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 31.6241,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 44.1417
+        },
+        {
+          "epoch": 22,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.711,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 48.2989,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 31.9662,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 30.3549,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 44.2242
+        },
+        {
+          "epoch": 23,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.4766,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 47.32,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 33.0956,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 30.1571,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 43.3337
+        }
+      ]
+    },
+    "fgfull_N4_no2d_igdr_2x4_24e_seed1": {
+      "window_epochs": [
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "window_means": {
+        "pts_bbox/KITTI/Overall_3D_moderate": 41.91848,
+        "pts_bbox/KITTI/Car_3D_moderate_strict": 53.95032,
+        "pts_bbox/KITTI/Truck_3D_moderate_strict": 31.36166,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 29.108639999999998,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 53.253240000000005
+      },
+      "all_epoch_peak": {
+        "value": 43.1449,
+        "epoch": 15
+      },
+      "best_saved": {
+        "value": 42.2904,
+        "epoch": 16
+      },
+      "val_epochs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21
+      ],
+      "curve": [
+        {
+          "epoch": 1,
+          "pts_bbox/KITTI/Overall_3D_moderate": 17.9825,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 29.9372,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 11.7141,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 8.6685,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 21.6102
+        },
+        {
+          "epoch": 2,
+          "pts_bbox/KITTI/Overall_3D_moderate": 25.1756,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 36.3895,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 13.6859,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 17.2615,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 33.3657
+        },
+        {
+          "epoch": 3,
+          "pts_bbox/KITTI/Overall_3D_moderate": 33.31,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 35.1345,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 25.772,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.0509,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 45.2826
+        },
+        {
+          "epoch": 4,
+          "pts_bbox/KITTI/Overall_3D_moderate": 34.4331,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 39.0882,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 27.3618,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 26.6451,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 44.6371
+        },
+        {
+          "epoch": 5,
+          "pts_bbox/KITTI/Overall_3D_moderate": 36.2203,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 47.4202,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 27.1075,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.0658,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 45.2878
+        },
+        {
+          "epoch": 6,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.3254,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 48.279,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 23.8026,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 30.2778,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.9422
+        },
+        {
+          "epoch": 7,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.5346,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 52.9987,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 29.2474,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 23.1209,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 48.7712
+        },
+        {
+          "epoch": 8,
+          "pts_bbox/KITTI/Overall_3D_moderate": 40.6789,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 57.0293,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 28.4172,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 26.7295,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.5395
+        },
+        {
+          "epoch": 9,
+          "pts_bbox/KITTI/Overall_3D_moderate": 41.0668,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 56.5351,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 26.0885,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.8808,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 53.763
+        },
+        {
+          "epoch": 10,
+          "pts_bbox/KITTI/Overall_3D_moderate": 40.7542,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 49.9414,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 34.4514,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.6747,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 52.9492
+        },
+        {
+          "epoch": 11,
+          "pts_bbox/KITTI/Overall_3D_moderate": 40.6441,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 52.0903,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 30.8372,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.2687,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 51.3804
+        },
+        {
+          "epoch": 12,
+          "pts_bbox/KITTI/Overall_3D_moderate": 40.8126,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 54.2461,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 29.4119,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.1459,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 52.4466
+        },
+        {
+          "epoch": 13,
+          "pts_bbox/KITTI/Overall_3D_moderate": 41.5027,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 49.4485,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 32.4119,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 29.6686,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 54.4818
+        },
+        {
+          "epoch": 14,
+          "pts_bbox/KITTI/Overall_3D_moderate": 41.8418,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 53.4683,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 31.0226,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 29.3985,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 53.4776
+        },
+        {
+          "epoch": 15,
+          "pts_bbox/KITTI/Overall_3D_moderate": 43.1449,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 54.2137,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 35.0104,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 31.0114,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 52.3439
+        },
+        {
+          "epoch": 16,
+          "pts_bbox/KITTI/Overall_3D_moderate": 42.2904,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 58.375,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 28.9515,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.3188,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 53.5163
+        },
+        {
+          "epoch": 17,
+          "pts_bbox/KITTI/Overall_3D_moderate": 41.4488,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 51.4721,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 29.7252,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 30.2309,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 54.3671
+        },
+        {
+          "epoch": 18,
+          "pts_bbox/KITTI/Overall_3D_moderate": 40.0608,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 52.2195,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 31.2148,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.4311,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 51.3777
+        },
+        {
+          "epoch": 19,
+          "pts_bbox/KITTI/Overall_3D_moderate": 41.0511,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 54.4524,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 31.0539,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.5299,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.168
+        },
+        {
+          "epoch": 20,
+          "pts_bbox/KITTI/Overall_3D_moderate": 41.311,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 53.0877,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 30.4426,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 29.323,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 52.3906
+        },
+        {
+          "epoch": 21,
+          "pts_bbox/KITTI/Overall_3D_moderate": 40.4423,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 53.7354,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 30.2494,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.5115,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.2729
+        }
+      ]
+    },
+    "fgfull_N4_no2d_igdr_2x4_24e_seed2": {
+      "window_epochs": [
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "window_means": {
+        "pts_bbox/KITTI/Overall_3D_moderate": 40.12066,
+        "pts_bbox/KITTI/Car_3D_moderate_strict": 50.930420000000005,
+        "pts_bbox/KITTI/Truck_3D_moderate_strict": 32.58182000000001,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.568959999999997,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 49.40136
+      },
+      "all_epoch_peak": {
+        "value": 41.9586,
+        "epoch": 14
+      },
+      "best_saved": {
+        "value": 41.9586,
+        "epoch": 14
+      },
+      "val_epochs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24
+      ],
+      "curve": [
+        {
+          "epoch": 1,
+          "pts_bbox/KITTI/Overall_3D_moderate": 18.6445,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 30.6779,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 9.097,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 12.7869,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 22.0162
+        },
+        {
+          "epoch": 2,
+          "pts_bbox/KITTI/Overall_3D_moderate": 26.3884,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 35.2421,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 14.8976,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 17.9622,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 37.4516
+        },
+        {
+          "epoch": 3,
+          "pts_bbox/KITTI/Overall_3D_moderate": 33.412,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 46.8942,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 20.9889,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 21.5696,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 44.1955
+        },
+        {
+          "epoch": 4,
+          "pts_bbox/KITTI/Overall_3D_moderate": 33.7727,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 48.9232,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 17.3871,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.8717,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 42.9087
+        },
+        {
+          "epoch": 5,
+          "pts_bbox/KITTI/Overall_3D_moderate": 34.0866,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 41.6581,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 24.1358,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.5008,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 43.0516
+        },
+        {
+          "epoch": 6,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.7924,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 53.0249,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 27.5163,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.283,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 45.3454
+        },
+        {
+          "epoch": 7,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.2717,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 53.3201,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 24.1599,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.3933,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 48.2135
+        },
+        {
+          "epoch": 8,
+          "pts_bbox/KITTI/Overall_3D_moderate": 39.5775,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 53.0158,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 24.1775,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 31.5383,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 49.5783
+        },
+        {
+          "epoch": 9,
+          "pts_bbox/KITTI/Overall_3D_moderate": 41.7916,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 53.2835,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 34.5652,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.3209,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 51.997
+        },
+        {
+          "epoch": 10,
+          "pts_bbox/KITTI/Overall_3D_moderate": 40.6525,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 51.0132,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 36.7044,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.6231,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.2693
+        },
+        {
+          "epoch": 11,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.5625,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 51.8281,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 28.4459,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 26.012,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.9641
+        },
+        {
+          "epoch": 12,
+          "pts_bbox/KITTI/Overall_3D_moderate": 39.4745,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 51.5522,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 30.9237,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.1355,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.2864
+        },
+        {
+          "epoch": 13,
+          "pts_bbox/KITTI/Overall_3D_moderate": 39.9364,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 48.1577,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 35.6346,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 28.5115,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.4416
+        },
+        {
+          "epoch": 14,
+          "pts_bbox/KITTI/Overall_3D_moderate": 41.9586,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 55.4565,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 32.2697,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 29.1651,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.9431
+        },
+        {
+          "epoch": 15,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.8632,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 50.6741,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 31.1166,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.6763,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.9858
+        },
+        {
+          "epoch": 16,
+          "pts_bbox/KITTI/Overall_3D_moderate": 40.3706,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 48.8116,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 32.9645,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 29.3564,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.3499
+        },
+        {
+          "epoch": 17,
+          "pts_bbox/KITTI/Overall_3D_moderate": 39.4022,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 48.2754,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 32.2214,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 29.5779,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.5341
+        },
+        {
+          "epoch": 18,
+          "pts_bbox/KITTI/Overall_3D_moderate": 39.1559,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 50.0437,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 34.1118,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 26.1338,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.3343
+        },
+        {
+          "epoch": 19,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.8232,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 47.4197,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 34.8479,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 26.4896,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.5357
+        },
+        {
+          "epoch": 20,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.8476,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 48.7961,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 33.3466,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 27.0775,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.1701
+        },
+        {
+          "epoch": 21,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.6369,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 48.6094,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 32.8723,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 26.4907,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.5754
+        },
+        {
+          "epoch": 22,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.6592,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 45.7239,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 33.3568,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 24.9456,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 46.6106
+        },
+        {
+          "epoch": 23,
+          "pts_bbox/KITTI/Overall_3D_moderate": 37.8678,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 45.0155,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 33.1105,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.8037,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.5414
+        },
+        {
+          "epoch": 24,
+          "pts_bbox/KITTI/Overall_3D_moderate": 38.0502,
+          "pts_bbox/KITTI/Car_3D_moderate_strict": 46.0048,
+          "pts_bbox/KITTI/Truck_3D_moderate_strict": 32.7502,
+          "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 25.6888,
+          "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 47.757
+        }
+      ]
+    }
+  },
+  "current_baseline_seed_means": [
+    39.28088,
+    41.91848,
+    40.12066
+  ],
+  "current_baseline_population_std": 1.1002182087002355,
+  "current_baseline_sample_std": 1.3474866085172545,
+  "preexisting_untracked_artifact_sha256": "080f6acb260f8887bacde6770522869d9f7df6feeb59d282a39aff154d44487a",
+  "boundaries": [
+    "not an AP evaluation; values are reread archived EvalHook logs",
+    "native origin is convolution receptive-center bookkeeping, not proof old semantic alignment is wrong",
+    "reference fitting counts are not the KITTI AP denominator",
+    "synthetic projection proof does not replace actual augmented metadata tests"
+  ],
+  "audit_script_sha256": "fde6c21bd73aef777add6b13092248abccba5e3eac1a0c24fba1d34cd11444d2",
+  "source_sha256": {
+    "mmdet3d/models/necks/BEVCross_modal_attention.py": "edbfcea6810cfc523f790b677d8a23af75ba27c686d5293714569bc7a6eaa9cb",
+    "mmdet3d/models/fusion_layers/concat_conv_fusion.py": "c930b298b54c0bffd42193c907c36aff2ca0d169d73eea0684113515a41e4fc5",
+    "mmdet3d/models/detectors/R4Det.py": "58ced223080293c485719bc9915057ddde0f4323eca813c07e775dade5d2a02d",
+    "mmdet3d/models/backbones/second.py": "7741c0c83354a6ee21b0c55310d1aaa359fc1ac097e741e7f1d7c58f503cb85f",
+    "mmdet3d/models/img2bev/forward_projection/ViewTransformerLSS.py": "cf2fc2b504839a684c627c08518e2b00244d2a05cac22ed19b1da8d8b50ab4b9",
+    "mmdet3d/models/img2bev/forward_projection/GeometryDepth_Net.py": "c0bf07d5ba314c1bea8277dacecb1a5493a270792425a2aeb1212fef6724ac51",
+    "mmdet3d/datasets/TJ4D_dataset.py": "0727a007c9c85fb4225aa4e6729594d49ec93f6c9e22326090d2355b9c8310a0",
+    "mmdet3d/core/bbox/structures/box_3d_mode.py": "49e7e784e9d832183414febd4bd467716a2510d070943eb732c0690ada891b67"
+  }
+}

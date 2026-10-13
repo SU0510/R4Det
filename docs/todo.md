@@ -55,13 +55,15 @@
 > **七项均未因本次文档更新获准实现/开训或新增排程**；A2-R 续训、F1 排队保留原审批。
 
 - [ ] **方向 1：几何约束、多尺度 deformable cross-modal fusion（优先）**
-  - **完整方案状态：待实现/预登记；未发现对应主线训练归档。** 改跨位置/跨尺度取证，首轮保留现有 RSSM/head。
+  - **完整方案状态：设计论证与 CPU 数学/训练集几何核验已完成（2026-10-13，§91）；实现/冻结预登记/训练仍待完成。**
+    详见 `docs/geometry_multiscale_fusion_design_20261013.md`（GP-MSF：共享米制地址、原生 image/radar 多尺度配对取证、null+camera fallback、基线保持残差）；首轮保留现有 RSSM/head。
   - **已尝试且失败的相关项**：恢复预训练 `Cross_Modal_Fusion`（§40，至 ep16，成熟门 FAIL，Car/Ped 回退）。
     源码 `mmdet3d/models/necks/BEVCross_modal_attention.py:13–50` 实际是两路 avg/max 空间掩码互乘后 concat+conv，
     **不是**几何约束、多尺度可变形跨模态采样；不能只恢复它再称新方案，也不能据此否定完整候选。
   - **已有基础/正在排队的相关项**：同文件有 `Virtual_pts_BEV_Warp`、`RadarBEVFusionWithDCN`；
     DCN+SE 堆叠不等同完整方案。F1 已实现并排队（§83/§85），仍是 ConcatConv+雷达可靠性门，**不计作方向 1 已开训**。
-  - **下一步**：明确几何参考、双向局部采样与多尺度入口；对照原 ConcatConv、同容量 conv、无偏移/单尺度版本。
+  - **下一步**：按设计先做同初始化 step-0 identity、真实 augmentation/坐标与两步梯度接线，再做 B0/同容量 conv/固定采样/完整块；
+    正结果后补原 BEV-only、单尺度、独立地址、null/fallback 消融。设计完成不等于已实现/开训；不改 A2-R/F1 排程。
 
 - [ ] **方向 2：对象 query 驱动的多模态检测器（与方向 4 二选一）**
   - **状态：已有相关 detector/采样代码；当前 RSSM 主线尚未接入，未发现对应训练归档。**
@@ -151,6 +153,14 @@
   C 最小臂已实测（FAIL，§86/§87）；B/D 尚未正式验证；匹配消融与多 seed 均未做。
 
 ## 已完成
+
+### 方向 1：几何多尺度 fusion 的设计论证（2026-10-13，§91）
+
+- [x] 核验旧 `Cross_Modal_Fusion` 是同位置互乘空间掩码，不是几何 deformable；重读完整历史日志，区分旧同栈 −0.4113 与跨栈参照 −1.3019。
+- [x] 对比 R4Det、SGDet3D、Doracamom、CVFusion、RCFusion、LXL、RCBEVDet++，补 MSSF/SGDet3D++ 最近邻；DR-Net 原始全文未取得，明确题录级核验边界，不采用未核模块细节。
+- [x] 完成 GP-MSF 设计、几何/高度/source index 契约、同初始化残差、最小消融/失败解释及 RSSM 主线验证路径；训练集统计与 CPU 投影/采样数学核验通过。
+- 状态边界：无新 AP、无实现/GPU S0/冻结预登记/训练；完整方向仍在上文 `[ ]`，A2-R/F1 排程未动。
+- 文档：`docs/geometry_multiscale_fusion_design_20261013.md`；CPU 证据：`docs/geometry_multiscale_fusion_audit_20261013.json`。
 
 > 归档区（2026-10-13 整理）：原正文中的已完成 / 已收尾条目按主题移入此处，保留移入时的原文与出处；
 > 每条后的「后续」行为 2026-10-13 整理时补注的状态收敛说明，不改变历史判定。
