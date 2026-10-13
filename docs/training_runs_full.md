@@ -18147,3 +18147,93 @@ CPU 门禁不是形式化签字：它抓到 5 个会导致真实数据上**静�
 1. 在 `R4Det.py` 融合调用点接入 `geo`（原生 image 三级、radar 原生三级、预测 depth、标定/augmentation/ori_shape/bda/points），并加一个只切换 `RCFusion.type` 的 arm config。
 2. 真实数据 GPU S0（仅用 GPU 5/6/7）：同 batch/N4 下 step-0 逐位等价、显存/步时 ≤1.2×、零雷达回退、地址有界、两步梯度；任何一项不过就停下改实现，不进训练。
 3. S0 通过后才做冻结预登记与四臂（B0 / 同容量普通 residual conv / 同 source 固定几何采样 / 完整 GP-MSF），并按统一口径记录区间均值与全轮峰值。
+
+
+## 96. z 的证据闭环与预测级四臂工具（2026-10-13，无新训练/val）
+
+### 96.1 本任务范围与必填口径
+
+用户要求不再停留于“不确定/没有证据”，明确怎样取得可归因的完整证据，以及怎样让 z 提供有效任务信息。
+本任务交付**可执行的预测级入口 + 有终点的实验/改造契约**，不修改现役模型、config、权重、冻结门或训练队列。
+
+- **区间均值**：N/A（本任务没有新增 val，ep12–16 n=0）。
+- **全轮峰值**：N/A（本任务无新增 epoch/AP，因此没有可写的“指标值+epoch”）。
+- **best saved**：N/A（未生成新 checkpoint）。
+- 正式训练逐 epoch 曲线：本任务没有正式训练/新曲线；既有 A2-R 曲线仍归其运行节，本次不拼接或重新宣布成熟窗口。
+
+CPU preflight 使用既有 A2-R seed0 `epoch_6.pth`；ep6 表示证据源权重，不是本次新训练。
+
+### 96.2 交付与唯一干预
+
+新增：
+
+1. `me_rssm/sanity/paired_z_prediction.py`：依次运行 unwrapped reference、只读 identity、
+   residual_off、当前帧 prior_only；调用真实 detector/decoder/KITTI evaluator，不自行实现 AP。
+2. `me_rssm/sanity/test_paired_z_prediction.py`：11 条 CPU contract 单测。
+3. `docs/rssm_z_evidence_contract_20261013.md`：逐框对账、匹配训练、任务读出与对象状态路线、排程/止损边界。
+4. `docs/rssm_z_prediction_preflight_20261013.json`：真实 CPU preflight、输入/checkpoint/代码 SHA 与未执行项。
+
+四臂固定 same checkpoint / val / N4 / eval / posterior mean / bs1。
+residual_off 仅在部署 head 调用去掉直接 class residual；prior_only 仅把当前帧 RSSM 的 posterior
+选择改为 prior，历史正常。所有改写均限诊断进程内 wrapper，异常退出恢复原方法；不写模型源文件。
+
+工具冻结/复核输入、权重与 persistent buffers、关键源文件与 resolved config。
+identity 必须和 reference 逐位同预测、同 AP。off 另断言全部 raw bbox/dir、IoU auxiliary、z、
+检测特征与原 residual 不变；只允许 cls/候选筛选变化。prior 断言实际返回 z 等于该次 prior。
+真实部署 top-k 候选逐帧落盘，包含 anchor ID、scores/codes/anchors/方向、direction-correction 前 decoded boxes。
+
+`--limit` 禁止 AP，单独输出 `smoke_complete_no_ap`；正式 full-val 才记录全部 AP 与配对差。
+四臂 full-val 共 8160 次 N4 clip 推理；耗时没有实测，不预报速度。
+
+### 96.3 实际预检与回归证明
+
+2026-10-13 本轮完成：
+
+- **11/11 CPU tests PASS**：identity 输出与方法恢复、score-only 回归/方向/IoU 不变量、
+  缺失历史 0/1/3 次情况下正确干预当前帧、错误 prior 未到 z 时拒绝、缺少调用拒绝、
+  隔离不变量被破坏时拒绝、top-k 与 decoder 一致、candidate artifact 不改变输出、
+  shape/dtype/content/order 指纹与未知输入类型拒绝、非法臂拒绝。
+- 旧审计 **7/7 tests PASS**；新增两个 Python 文件语法检查 PASS，标准库环境 `--help` PASS。
+- **真实 val pipeline CPU 预检 PASS**：`compat_cfg` 后构建，2040 样本，val/test 配置相同；
+  第一批输入含 points/img/img_metas/gt_bboxes_3d/gt_labels_3d，完整输入指纹在 JSON。
+- **真实 ep6 checkpoint strict load PASS**：全部参数在 CPU；标准 `SemanticReadoutRSSMFusion`
+  + `Anchor3DHead`，真实 head `use_iou_branch=True`。小尺寸 2×3 CPU 特征下 on/off 的
+  cls 不同、raw bbox/dir 与 IoU branch 输出逐位相同；resolved config dump PASS。
+- GPU 5/6/7 仍由现役 A2-R 占用。本轮没有真实传感器 GPU forward、GPU S0、full-val、
+  新训练或队列调整；**constructor 会初始化 CUDA context，不把模型构建误记成完全未接触 GPU**。
+  preflight 的模型参数与 head 运算在 CPU，进程已退出；不存在本轮新增常驻 trainer。
+
+预检发现并避免两处误用：
+
+1. 原始 Config 的 val 内含 `samples_per_gpu`，未先 `compat_cfg` 会传给 dataset constructor 并报错；
+   正式 runner 已先执行兼容转换（预检初次绕过转换的失败不计通过）。
+2. 真实 A2-R 启用了 IoU auxiliary branch。不能将其误当成“不支持”而拒绝现役配置，更不能为
+   跑工具偷偷关闭；runner 保持该分支并记录其指纹。当前实际 decode 没使用该辅助预测改分，
+   部署 scores/top-k 仍按现有 `get_bboxes_single` 复现。
+
+### 96.4 归因与设计决策，不把工具测试当机制成功
+
+当前可确定的设计断点：独立辅助 sem_head 不部署、另一 1×1 直接读出，同格同类共享全部
+anchor 增量，新增路径只改 cls。下一步必须直接评价实际候选的类别、几何与质量/排序，不能
+继续把辅助 AUC、GT 格 CE、KL 激活或 z 张量变化当成检测成功。
+
+干预需同时避免三种归因错误：
+
+- off 固定全部 raw 回归候选，但最终框集合可以随 score/NMS 变化；那是选择效应，不是修框。
+- off 不是去掉全 z；prior_only 仍保留 z、当前视觉/雷达旁路及当前 feat 条件的历史对齐，不是纯历史预测。
+- 任一 frozen-weight 干预掉 AP 都不等于 stochastic 必要性；后者必须同容量、同目标、配对 seed 重训。
+
+**完整闭环次序**：先 identity/干预证明与真实 full-val，再逐框 TP/FP/top-k/IoU/PR 对账；
+确有必要才补梯度/几何 oracle；最后做无时序/同容量 deterministic/mean-only/完整 RSSM 的匹配控制。
+通过后才将 latent 与真实任务 decoder 对齐；几何 fusion 的观测收益与 z 的机制收益分开消融。
+真正对象级 `(h_i,z_i)` 依赖可靠对象观测/关联/birth，不重包装历史 dense heatmap 或未来模板失败臂。
+
+### 96.5 未完成与下一步
+
+**本轮工具就绪，证据尚未全部获得，z 总目标未解决**。未完成：真实 GPU 接线/identity、ep6 与
+预登记 ep16 full-val、TP/FP/PR/oracle 分解器、top-k 前完整池上限、匹配多 seed 训练。
+本工具只保存部署 top-k，不能据两个臂都淘汰的候选未落盘就宣称不存在几何召回空间。
+
+执行入口、冻结判定与命令见契约 §6。建议 A2-R 正常结束后先留诊断窗口，F1 后置；
+**这只是建议，本轮未撤掉、延后或另建自动队列**。当前原 F1 队列仍可能自动启动，改排程须显式批准。
+TODO 的工具项标完成，预测级归因与 z 修复总项保留未完成。其他线程 GP-MSF 的未提交改动未编辑、未纳入本任务提交。

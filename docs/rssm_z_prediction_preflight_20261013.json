@@ -1,0 +1,56 @@
+{
+  "all_epoch_peak": null,
+  "all_parameters_cpu": true,
+  "checkpoint": "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_semA2R_seed0/epoch_6.pth",
+  "checkpoint_epoch": 6,
+  "checkpoint_state_sha": "5a549f5735c907ec3c8fa6dc28befca13355a35a10b20090827d56436217b386",
+  "config": "me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_semA2R_24e.py",
+  "contract_tests": {
+    "command": "/home/lurui/envs/miniforge3/envs/r4det/bin/python -m unittest discover -s me_rssm/sanity -p test_paired_z_prediction.py -v",
+    "n_tests": 11,
+    "result": "PASS"
+  },
+  "created_utc": "2026-10-13T09:58:05.695334+00:00",
+  "cuda_context_initialized_by_constructor": true,
+  "cuda_note": "Constructor may initialize CUDA; all model parameters and 2x3 head test remain CPU. No sensor/model GPU forward or validation AP.",
+  "cuda_visible_devices": "5",
+  "first_real_batch_sha": "61a06b6d5e8d71e9ead7b00fdabbcb3606cf3847a3c4e2a78c3c44db0b2d6800",
+  "fixed_window_mean": null,
+  "full_val_executed": false,
+  "fusion_class": "SemanticReadoutRSSMFusion",
+  "gpu_smoke_executed": false,
+  "head_class": "Anchor3DHead",
+  "input_keys": [
+    "gt_bboxes_3d",
+    "gt_labels_3d",
+    "img",
+    "img_metas",
+    "points"
+  ],
+  "kind": "preflight_not_full_detector_inference",
+  "previous_audit_tests": {
+    "n_tests": 7,
+    "result": "PASS"
+  },
+  "primary_ap": null,
+  "real_head_score_only": {
+    "bbox_dir_equal": true,
+    "cls_changed": true,
+    "iou_equal": true
+  },
+  "resolved_config_dump": true,
+  "source_hash_note": "Diagnostic source SHA updated after final CPU contract tests; real checkpoint/head preflight unchanged.",
+  "sources": {
+    "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_semA2R_seed0/epoch_6.pth": "a6c6588c6f0341283eeb62dadf941aa02d357a478e3d385b0f93667a505e71da",
+    "data/TJ4D/TJ4D_infos_val.pkl": "8c27e699d11fc07204d8802a54819d11114905dc74782122da41b3510e4f9af6",
+    "me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_semA2R_24e.py": "521a1559a4b215714cf7edbb54b422caab2d2074e4a1fa08ac82733fb249a6e1",
+    "me_rssm/sanity/paired_z_prediction.py": "71799b9ec7b537b2a67023c82ec5fdb59f0b1eb28b9f78f8fb933cb02db026ac",
+    "me_rssm/sanity/test_paired_z_prediction.py": "37318752a6c8d0b606ebac72b9ff7f61a8036f88591af17919eb809802f55612",
+    "mmdet3d/models/dense_heads/anchor3d_head.py": "9ece5372d325a72c601377f6e2c390f90214f9a1fa68ca091bc84709fc0c2a03",
+    "mmdet3d/models/detectors/R4Det.py": "2676ecde3e2faff8d608be7bec6684ab64e051a4d0b7af34466abd0bf7d0f340"
+  },
+  "strict_checkpoint_load": true,
+  "test_val_same_config": true,
+  "use_iou_branch": true,
+  "val_count": 2040
+}
