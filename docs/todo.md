@@ -54,7 +54,7 @@
 
 - [ ] **方向 1：几何约束、多尺度 deformable cross-modal fusion（优先）**
   - **完整方案状态：设计论证（§91）、CPU 数学/训练集几何核验（§91）、首版实现 + CPU 接线门禁 10/10（§95）、
-    真实管线接线 + 排队审查/硬门修复 + CPU 回归（2026-10-13，§97/§98）均已完成；GPU S0 已启动但未通过，正式训练与 AP 仍待完成。**
+    真实管线接线 + 排队审查/硬门修复 + CPU 回归（2026-10-13，§97/§98）均已完成；两臂450iter已完成，GPU S0资源硬门FAIL（6.7145×），正式训练与 AP 仍待完成。**
     **2026-10-13 首次冒烟诊断（§99）：确诊 query/channel 轴混排；原 chunk 等价测试被零残差遮蔽。此前 CPU PASS 不代表完整空间接线正确。**
     详见 `docs/geometry_multiscale_fusion_design_20261013.md`（GP-MSF：共享米制地址、原生 image/radar 多尺度配对取证、null+camera fallback、基线保持残差）；首轮保留现有 RSSM/head。
     实现 `mmdet3d/models/fusion_layers/geometry_multiscale_fusion.py`（新增 0.1777 M 参数，step-0 与基线逐位一致），门禁 `me_rssm/sanity/gpmsf_cpu_checks.py`（10/10）；
@@ -66,7 +66,8 @@
     **不是**几何约束、多尺度可变形跨模态采样；不能只恢复它再称新方案，也不能据此否定完整候选。
   - **已有基础/正在排队的相关项**：同文件有 `Virtual_pts_BEV_Warp`、`RadarBEVFusionWithDCN`；
     DCN+SE 堆叠不等同完整方案。F1 已实现但**已让位**：2026-10-13 用户指令「替换当前训练队列的 F1，在当前训练结束后直接接上」，
-    GP-MSF 队列 `me_rssm/sanity/queue_gpmsf.sh` 已 armed（§97），F1 仍是 ConcatConv+雷达可靠性门，实现与预登记保留、可随时重排。
+    GP-MSF 队列 `me_rssm/sanity/queue_gpmsf.sh` 曾 armed（§97），2026-10-13 15:02前因S0资源硬门自行退出，24e未开（§99.6）；
+    F1 仍是 ConcatConv+雷达可靠性门，实现与预登记保留、可随时重排。
   - [x] **首次 GPU 冒烟只读诊断与 CPU 反例取证（2026-10-13，§99）**：确认资源超限、复现消息轴混排；
     独立进程仅补转置后非零残差的 chunk 等价恢复。当前仓库研究代码未修、未停队列、未启动额外 GPU 任务。
   - **下一步**：①保留当前冒烟证据，禁止直接开 24e；修 query/channel 轴及非零残差/梯度/空间 impulse 回归，不能先盲调 chunk；

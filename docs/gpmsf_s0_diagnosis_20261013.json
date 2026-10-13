@@ -962,5 +962,698 @@
     "Increasing query_chunk before repairing axes changes the implemented model, not only runtime",
     "High global null means do not establish high conditional refusal in available/GT regions",
     "The resource overrun is measured; attribution to pure arithmetic compute has not been measured"
-  ]
+  ],
+  "completion_check": {
+    "checked_at_utc": "2026-10-13T15:03:05.922531+00:00",
+    "phase_finished_at_utc": "2026-10-13T15:01:01.181536+00:00",
+    "phase_exit_code": 0,
+    "all_logged_train_rows": [
+      {
+        "mode": "train",
+        "epoch": 1,
+        "iter": 50,
+        "lr": 0.00015,
+        "memory": 17869,
+        "data_time": 0.09972,
+        "loss_rssm_kl": 2.41566,
+        "loss_rssm_recon": 0.96061,
+        "stat_kl_raw_mean": 1.7437,
+        "stat_kl_effective_mean": 2.42006,
+        "stat_clamped_ratio": 0.85422,
+        "stat_mu_diff_sq": 0.3353,
+        "stat_posterior_std": 0.2108,
+        "stat_prior_std": 0.22435,
+        "loss_cls": 1.1558,
+        "loss_bbox": 1.69623,
+        "loss_dir": 0.12053,
+        "loss_iou": 0.31448,
+        "depth_loss_prob": 0.0,
+        "depth_loss_abs": 0.0,
+        "depth_loss_sam2": 0.0,
+        "loss_depth_relative": 0.05919,
+        "bev_mask_ce_loss_former": 0.08802,
+        "bev_mask_dc_loss_former": 0.69206,
+        "range_loss_box": 0.0524,
+        "range_loss_seg": 0.03739,
+        "loss": 7.59236,
+        "time": 10.36165,
+        "grad_norm": 12.11069
+      },
+      {
+        "mode": "train",
+        "epoch": 1,
+        "iter": 100,
+        "lr": 0.00013,
+        "memory": 17869,
+        "data_time": 0.06967,
+        "loss_rssm_kl": 1.10566,
+        "loss_rssm_recon": 0.54833,
+        "stat_kl_raw_mean": 0.47255,
+        "stat_kl_effective_mean": 1.10414,
+        "stat_clamped_ratio": 0.9405,
+        "stat_mu_diff_sq": 0.17203,
+        "stat_posterior_std": 0.20047,
+        "stat_prior_std": 0.33904,
+        "loss_cls": 1.01332,
+        "loss_bbox": 1.33653,
+        "loss_dir": 0.1099,
+        "loss_iou": 0.22074,
+        "depth_loss_prob": 0.0,
+        "depth_loss_abs": 0.0,
+        "depth_loss_sam2": 0.0,
+        "loss_depth_relative": 0.04775,
+        "bev_mask_ce_loss_former": 0.05264,
+        "bev_mask_dc_loss_former": 0.5253,
+        "range_loss_box": 0.04136,
+        "range_loss_seg": 0.03153,
+        "loss": 5.03307,
+        "time": 10.33859,
+        "grad_norm": 12.397
+      },
+      {
+        "mode": "train",
+        "epoch": 1,
+        "iter": 150,
+        "lr": 0.00011,
+        "memory": 17881,
+        "data_time": 0.06401,
+        "loss_rssm_kl": 1.04976,
+        "loss_rssm_recon": 0.38535,
+        "stat_kl_raw_mean": 0.39081,
+        "stat_kl_effective_mean": 1.05086,
+        "stat_clamped_ratio": 0.97322,
+        "stat_mu_diff_sq": 0.08448,
+        "stat_posterior_std": 0.17815,
+        "stat_prior_std": 0.32722,
+        "loss_cls": 0.71626,
+        "loss_bbox": 1.30142,
+        "loss_dir": 0.09509,
+        "loss_iou": 0.08237,
+        "depth_loss_prob": 0.0,
+        "depth_loss_abs": 0.0,
+        "depth_loss_sam2": 0.0,
+        "loss_depth_relative": 0.03867,
+        "bev_mask_ce_loss_former": 0.04406,
+        "bev_mask_dc_loss_former": 0.49296,
+        "range_loss_box": 0.03553,
+        "range_loss_seg": 0.02819,
+        "loss": 4.26969,
+        "time": 10.52174,
+        "grad_norm": 18.00745
+      },
+      {
+        "mode": "train",
+        "epoch": 1,
+        "iter": 200,
+        "lr": 9e-05,
+        "memory": 17881,
+        "data_time": 0.06344,
+        "loss_rssm_kl": 1.03483,
+        "loss_rssm_recon": 0.28871,
+        "stat_kl_raw_mean": 0.25141,
+        "stat_kl_effective_mean": 1.03467,
+        "stat_clamped_ratio": 0.98481,
+        "stat_mu_diff_sq": 0.05832,
+        "stat_posterior_std": 0.17566,
+        "stat_prior_std": 0.25817,
+        "loss_cls": 0.65635,
+        "loss_bbox": 1.21117,
+        "loss_dir": 0.0884,
+        "loss_iou": 0.07567,
+        "depth_loss_prob": 0.0,
+        "depth_loss_abs": 0.0,
+        "depth_loss_sam2": 0.0,
+        "loss_depth_relative": 0.03465,
+        "bev_mask_ce_loss_former": 0.04145,
+        "bev_mask_dc_loss_former": 0.47134,
+        "range_loss_box": 0.03227,
+        "range_loss_seg": 0.02623,
+        "loss": 3.96108,
+        "time": 10.33527,
+        "grad_norm": 21.66006
+      },
+      {
+        "mode": "train",
+        "epoch": 1,
+        "iter": 250,
+        "lr": 6e-05,
+        "memory": 17881,
+        "data_time": 0.06736,
+        "loss_rssm_kl": 1.02576,
+        "loss_rssm_recon": 0.23798,
+        "stat_kl_raw_mean": 0.20929,
+        "stat_kl_effective_mean": 1.02204,
+        "stat_clamped_ratio": 0.98912,
+        "stat_mu_diff_sq": 0.04471,
+        "stat_posterior_std": 0.17263,
+        "stat_prior_std": 0.24199,
+        "loss_cls": 0.59295,
+        "loss_bbox": 1.13083,
+        "loss_dir": 0.09971,
+        "loss_iou": 0.06661,
+        "depth_loss_prob": 0.0,
+        "depth_loss_abs": 0.0,
+        "depth_loss_sam2": 0.0,
+        "loss_depth_relative": 0.03369,
+        "bev_mask_ce_loss_former": 0.04363,
+        "bev_mask_dc_loss_former": 0.45609,
+        "range_loss_box": 0.03567,
+        "range_loss_seg": 0.02951,
+        "loss": 3.75243,
+        "time": 10.40171,
+        "grad_norm": 18.77791
+      },
+      {
+        "mode": "train",
+        "epoch": 1,
+        "iter": 300,
+        "lr": 4e-05,
+        "memory": 17881,
+        "data_time": 0.07755,
+        "loss_rssm_kl": 1.02078,
+        "loss_rssm_recon": 0.21283,
+        "stat_kl_raw_mean": 0.21688,
+        "stat_kl_effective_mean": 1.01988,
+        "stat_clamped_ratio": 0.99026,
+        "stat_mu_diff_sq": 0.03933,
+        "stat_posterior_std": 0.1703,
+        "stat_prior_std": 0.23756,
+        "loss_cls": 0.60285,
+        "loss_bbox": 1.10751,
+        "loss_dir": 0.094,
+        "loss_iou": 0.06377,
+        "depth_loss_prob": 0.0,
+        "depth_loss_abs": 0.0,
+        "depth_loss_sam2": 0.0,
+        "loss_depth_relative": 0.0318,
+        "bev_mask_ce_loss_former": 0.04115,
+        "bev_mask_dc_loss_former": 0.45517,
+        "range_loss_box": 0.03276,
+        "range_loss_seg": 0.02781,
+        "loss": 3.69043,
+        "time": 10.42523,
+        "grad_norm": 16.6893
+      },
+      {
+        "mode": "train",
+        "epoch": 1,
+        "iter": 350,
+        "lr": 2e-05,
+        "memory": 17881,
+        "data_time": 0.06941,
+        "loss_rssm_kl": 1.01751,
+        "loss_rssm_recon": 0.1995,
+        "stat_kl_raw_mean": 0.19949,
+        "stat_kl_effective_mean": 1.01693,
+        "stat_clamped_ratio": 0.9905,
+        "stat_mu_diff_sq": 0.03562,
+        "stat_posterior_std": 0.16925,
+        "stat_prior_std": 0.2283,
+        "loss_cls": 0.56933,
+        "loss_bbox": 1.05383,
+        "loss_dir": 0.10162,
+        "loss_iou": 0.0628,
+        "depth_loss_prob": 0.0,
+        "depth_loss_abs": 0.0,
+        "depth_loss_sam2": 0.0,
+        "loss_depth_relative": 0.03015,
+        "bev_mask_ce_loss_former": 0.03647,
+        "bev_mask_dc_loss_former": 0.42211,
+        "range_loss_box": 0.02715,
+        "range_loss_seg": 0.02594,
+        "loss": 3.54641,
+        "time": 10.43576,
+        "grad_norm": 16.09732
+      },
+      {
+        "mode": "train",
+        "epoch": 1,
+        "iter": 400,
+        "lr": 0.0,
+        "memory": 17881,
+        "data_time": 0.07264,
+        "loss_rssm_kl": 1.0177,
+        "loss_rssm_recon": 0.19585,
+        "stat_kl_raw_mean": 0.19807,
+        "stat_kl_effective_mean": 1.01996,
+        "stat_clamped_ratio": 0.98968,
+        "stat_mu_diff_sq": 0.03432,
+        "stat_posterior_std": 0.17108,
+        "stat_prior_std": 0.22525,
+        "loss_cls": 0.5556,
+        "loss_bbox": 1.02883,
+        "loss_dir": 0.09731,
+        "loss_iou": 0.06053,
+        "depth_loss_prob": 0.0,
+        "depth_loss_abs": 0.0,
+        "depth_loss_sam2": 0.0,
+        "loss_depth_relative": 0.02986,
+        "bev_mask_ce_loss_former": 0.03741,
+        "bev_mask_dc_loss_former": 0.42508,
+        "range_loss_box": 0.02794,
+        "range_loss_seg": 0.02463,
+        "loss": 3.50074,
+        "time": 10.38816,
+        "grad_norm": 16.60701
+      },
+      {
+        "mode": "train",
+        "epoch": 1,
+        "iter": 450,
+        "lr": 0.0,
+        "memory": 17881,
+        "data_time": 0.06885,
+        "loss_rssm_kl": 1.01509,
+        "loss_rssm_recon": 0.19392,
+        "stat_kl_raw_mean": 0.18721,
+        "stat_kl_effective_mean": 1.01535,
+        "stat_clamped_ratio": 0.99097,
+        "stat_mu_diff_sq": 0.03343,
+        "stat_posterior_std": 0.1713,
+        "stat_prior_std": 0.22345,
+        "loss_cls": 0.56055,
+        "loss_bbox": 1.0424,
+        "loss_dir": 0.08899,
+        "loss_iou": 0.06068,
+        "depth_loss_prob": 0.0,
+        "depth_loss_abs": 0.0,
+        "depth_loss_sam2": 0.0,
+        "loss_depth_relative": 0.03096,
+        "bev_mask_ce_loss_former": 0.0357,
+        "bev_mask_dc_loss_former": 0.429,
+        "range_loss_box": 0.029,
+        "range_loss_seg": 0.02597,
+        "loss": 3.51225,
+        "time": 10.44194,
+        "grad_norm": 15.97781
+      }
+    ],
+    "wiring_probe": {
+      "collect_stats": true,
+      "completed_iters": 450,
+      "ddp_parameter_sha": [
+        "eb32766eacd61c8a9aed7a1e6f0dc4aa685f868b6ecc4451e3ee194ab34df441",
+        "eb32766eacd61c8a9aed7a1e6f0dc4aa685f868b6ecc4451e3ee194ab34df441",
+        "eb32766eacd61c8a9aed7a1e6f0dc4aa685f868b6ecc4451e3ee194ab34df441"
+      ],
+      "ddp_world_size": 3,
+      "new_param_seed": 20261013,
+      "records": [
+        {
+          "iter": 50,
+          "stats": {
+            "checkpoint_active": true,
+            "level_img_weight": [
+              0.0472175110205357,
+              0.04668758822487625,
+              0.05126436259415684
+            ],
+            "level_rad_weight": [
+              0.3433044062595783,
+              0.3294675264600998,
+              0.3235720861421855
+            ],
+            "native_image_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_image_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "null_img_weight": 0.811715633496019,
+            "null_rad_weight": 0.9753296144547001,
+            "radar_support_rate": 0.022543192764336917
+          }
+        },
+        {
+          "iter": 100,
+          "stats": {
+            "checkpoint_active": true,
+            "level_img_weight": [
+              0.0346227264568085,
+              0.03561169884680562,
+              0.033785234865250695
+            ],
+            "level_rad_weight": [
+              0.34429579839697877,
+              0.32968074702874733,
+              0.322358134033843
+            ],
+            "native_image_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_image_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "null_img_weight": 0.886084252360901,
+            "null_rad_weight": 0.9625687468151608,
+            "radar_support_rate": 0.03318270702658303
+          }
+        },
+        {
+          "iter": 150,
+          "stats": {
+            "checkpoint_active": true,
+            "level_img_weight": [
+              0.0655924142210376,
+              0.06155215693068031,
+              0.06073890216542873
+            ],
+            "level_rad_weight": [
+              0.34466444451713507,
+              0.3288617792673934,
+              0.3228300385099734
+            ],
+            "native_image_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_image_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "null_img_weight": 0.7778788142556073,
+            "null_rad_weight": 0.9757026788581656,
+            "radar_support_rate": 0.021752142137096774
+          }
+        },
+        {
+          "iter": 200,
+          "stats": {
+            "checkpoint_active": true,
+            "level_img_weight": [
+              0.020809106342939563,
+              0.023783482661806802,
+              0.020725482251392754
+            ],
+            "level_rad_weight": [
+              0.34513359166138774,
+              0.3284000178026825,
+              0.3228984950440299
+            ],
+            "native_image_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_image_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "null_img_weight": 0.8998620752222934,
+            "null_rad_weight": 0.9844387662880737,
+            "radar_support_rate": 0.012899492234169653
+          }
+        },
+        {
+          "iter": 250,
+          "stats": {
+            "checkpoint_active": true,
+            "level_img_weight": [
+              0.05198595063716925,
+              0.05159463522245878,
+              0.04960691577406086
+            ],
+            "level_rad_weight": [
+              0.34488816080412416,
+              0.3290077923277444,
+              0.3225233133339082
+            ],
+            "native_image_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_image_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "null_img_weight": 0.7873333576296677,
+            "null_rad_weight": 0.9664900915312226,
+            "radar_support_rate": 0.028951519563918757
+          }
+        },
+        {
+          "iter": 300,
+          "stats": {
+            "checkpoint_active": true,
+            "level_img_weight": [
+              0.005882930936316293,
+              0.005286276861224124,
+              0.004616803036760116
+            ],
+            "level_rad_weight": [
+              0.34496922991288603,
+              0.32925294786513637,
+              0.3221947601331703
+            ],
+            "native_image_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_image_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "null_img_weight": 0.9587465967613594,
+            "null_rad_weight": 0.9755618210476928,
+            "radar_support_rate": 0.019703344347371567
+          }
+        },
+        {
+          "iter": 350,
+          "stats": {
+            "checkpoint_active": true,
+            "level_img_weight": [
+              0.03253991688237823,
+              0.03276815306364137,
+              0.02991591596012332
+            ],
+            "level_rad_weight": [
+              0.344972124102936,
+              0.3292240089956079,
+              0.3222324728288478
+            ],
+            "native_image_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_image_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "null_img_weight": 0.8851213569139779,
+            "null_rad_weight": 0.9737945178361207,
+            "radar_support_rate": 0.022026326351553167
+          }
+        },
+        {
+          "iter": 400,
+          "stats": {
+            "checkpoint_active": true,
+            "level_img_weight": [
+              0.051885266669193734,
+              0.0487823411260323,
+              0.04573801534379277
+            ],
+            "level_rad_weight": [
+              0.3448977896603205,
+              0.3288633056038383,
+              0.32266575306572576
+            ],
+            "native_image_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_image_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "null_img_weight": 0.8000486902759066,
+            "null_rad_weight": 0.9625159979507487,
+            "radar_support_rate": 0.033425389225744916
+          }
+        },
+        {
+          "iter": 450,
+          "stats": {
+            "checkpoint_active": true,
+            "level_img_weight": [
+              0.03454740393768858,
+              0.0316739595175822,
+              0.030304122973220108
+            ],
+            "level_rad_weight": [
+              0.34455087490762576,
+              0.32883560629016323,
+              0.32305670093927963
+            ],
+            "native_image_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_image_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_has_grad_fn": [
+              true,
+              true,
+              true
+            ],
+            "native_radar_requires_grad": [
+              true,
+              true,
+              true
+            ],
+            "null_img_weight": 0.890004238917124,
+            "null_rad_weight": 0.979788859970111,
+            "radar_support_rate": 0.017753136200716845
+          }
+        }
+      ],
+      "require_geo": true
+    },
+    "final_verdict": {
+      "S0_ALL_PASS": false,
+      "failure": "ValueError('matched resource budget exceeded 1.20x; manual review required')",
+      "perf_ratio_time": 6.714510522208535,
+      "perf_ratio_memory": 1.0543664131139807,
+      "smoke_perf": {
+        "max_memory_mib": 17881,
+        "mean_iter_time_s": 10.41105,
+        "n_time_rows": 8
+      },
+      "matched_b0_perf": {
+        "max_memory_mib": 16959,
+        "mean_iter_time_s": 1.55053,
+        "n_time_rows": 8
+      },
+      "checkpoint_projection_stats": {
+        "proj_i2r.bias": {
+          "abs_max": 0.00709910411387682,
+          "abs_mean": 0.0022004840429872274
+        },
+        "proj_i2r.weight": {
+          "abs_max": 0.006974963936954737,
+          "abs_mean": 0.0014891010941937566
+        },
+        "proj_r2c.bias": {
+          "abs_max": 0.0066892956383526325,
+          "abs_mean": 0.0015505908522754908
+        },
+        "proj_r2c.weight": {
+          "abs_max": 0.006371250841766596,
+          "abs_mean": 0.0012600964400917292
+        }
+      }
+    },
+    "research_source_hashes_still_match": true,
+    "queue_log_tail": [
+      "  @numba.jit(nopython=False)",
+      "",
+      "[gpmsf] 2026-10-13 15:01:17 FAILED exit=1; no automatic continuation"
+    ],
+    "formal_epoch_checkpoints": [],
+    "formal_train_log_exists": false
+  }
 }

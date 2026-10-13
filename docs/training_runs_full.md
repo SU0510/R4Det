@@ -18544,7 +18544,7 @@ m_i = torch.stack(m_i, dim=1).permute(0, 1, 3, 2).reshape(b, self.embed_dim, qc)
 
 - 按当前 qc4096/dk16，输出单 head 的 channel `j`、query `p` 对应旧消息的
   `query=floor((j*4096+p)/16)`、`channel=(j*4096+p)%16`，一般**不是 query=p/channel=j**。
-  query0 的64维向量也不再是同一个米制地址的64维证据。
+  query0 的64维向量也不再是同一query的地址集合对应的64维证据。
 - valid mask 本身按正确 query 顺序构造；投影前消息已经错排，因而
   「整投影按 valid gate」仍不能把错误内容恢复到正确位置。梯度可达也不证明空间对应正确。
 - **因此 query_chunk 在当前实现中会改变消息的空间重排，而不只是资源开销**；
@@ -18644,3 +18644,33 @@ K=4，故 **s≤v≤min(4s,1)**，另有 **a≤v**；无可用候选的 query nu
 **结论**：首次实现存在已复现的空间接线缺陷，资源也超预算；当前只能判
 「这一版不具备正式开训资格」。不能判正确实现的GP-MSF方法/AP失败，也不能据全局null宣判目标缺证据。
 本轮记录的是诊断完成，**不是修复、GPU S0或方向1完成**。
+
+
+### 99.6 收尾补证：450iter 完成，S0 资源硬门实际拒绝（2026-10-13 15:03:05 UTC 核验）
+
+本节补齐99.1–99.4保留的14:51过程快照，**不覆写早先的取证时间**。
+GP-MSF phase `finished_at` 为 **2026-10-13 15:01:01 UTC**、exit_code=0；
+`iter_450.pth` 已保存，ranks已退出。正式epoch权重与`train_gpmsf.log`均不存在，24e未开。
+现役queue最终写 `FAILED exit=1; no automatic continuation`，没有人为停训练或放宽门。
+
+- 最终配对资源窗口两臂均 iter100–450、n=8：B0 **1.550530 s/iter、16959 MiB**；
+  GP-MSF **10.411050 s/iter、17881 MiB**；time **6.7145105×**，memory **1.0543664×**。
+- `s0_verdict.json`：**S0_ALL_PASS=False**，failure为
+  `ValueError('matched resource budget exceeded 1.20x; manual review required')`。
+  这是既有资源门的实际拒绝；99.3消息轴bug是本轮另补的独立反例，原验收尚无有效测试检测它。
+- wiring stats含全部 iter50/100/.../450；每点当前native三层image/radar都requires_grad且有grad_fn，checkpoint_active=true。
+  DDP world=3、全部参数SHA一致：`eb32766eacd61c8a9aed7a1e6f0dc4aa685f868b6ecc4451e3ee194ab34df441`。
+- 两方向投影已离零：weight abs_mean分别 R→C **0.00126010**、I→R **0.00148910**；
+  所以不能把99.3的错误当作正式冒烟中「投影一直是零，所以无影响」。
+- iter450全画布支持候选率 **1.7753%**、null_R **97.9789%**、null_I **89.0004%**；
+  radar level **0.344551/0.328836/0.323057**。仍只是背景混合均值，不补造目标分层或AP结论。
+- **主指标区间均值仍N/A（ep12–16未形成，val n=0）；全轮峰值仍N/A（无val，epoch=N/A）；
+  best saved val仍N/A。** 最终完整train标量、wiring、verdict摘要已补入JSON的`completion_check`。
+  历史过程快照与最终值可同时追溯。
+
+补齐最后两行冒烟曲线（其余行见99.2；完整loss/stats另见JSON）：
+
+| arm | iter | time s | data_time s | memory MiB | loss | grad_norm | loss_rssm_kl | clamped_ratio |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| GP-MSF | 400 | 10.38816 | 0.07264 | 17881 | 3.50074 | 16.60701 | 1.01770 | 0.98968 |
+| GP-MSF | 450 | 10.44194 | 0.06885 | 17881 | 3.51225 | 15.97781 | 1.01509 | 0.99097 |
