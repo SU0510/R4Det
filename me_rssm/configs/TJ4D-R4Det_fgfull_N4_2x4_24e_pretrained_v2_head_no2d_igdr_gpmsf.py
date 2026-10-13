@@ -6,7 +6,8 @@
 # type changes, from ``ConcatConvFusion`` to ``GeometryPairedMultiScaleFusion``.
 # The fusion keeps the same 640->256 k=3 conv on cat([camera, radar]) and adds a
 # zero-initialised, geometry-grounded evidence path on top of it:
-#   C' = C + W_RtoC(M_R)      R' = R + W_ItoR(M_I)      out = conv([C', R'])
+#   C' = C + valid_R * W_RtoC(M_R); R' = R + valid_I * W_ItoR(M_I)
+#   out = conv([C', R']); validity gates learned biases as well as weights.
 # where M_R / M_I come from bounded metric addresses that read the *native*
 # radar levels (0.32/0.64/1.28 m) and P2/P3/P4 through three train-only height
 # references.  W_RtoC / W_ItoR are zero at step 0, so the arm is bitwise
@@ -85,7 +86,7 @@ model = dict(
         query_chunk=4096,
         grad_checkpoint=True,
         new_param_seed=20261013,
-        # Training must fail loudly if the detector ever stops passing `geo`;
+        # Train/eval must fail loudly if the detector ever stops passing `geo`;
         # a silent unwired arm would just be the concat baseline.
         require_geo=True,
     ),

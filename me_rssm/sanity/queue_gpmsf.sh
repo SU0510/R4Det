@@ -1,113 +1,166 @@
 #!/usr/bin/env bash
-# Queue for GP-MSF (geometry-paired multi-scale fusion), serial behind A2-R.
-# Pre-registration: docs/gpmsf_prereg_20261013.md
-#
-# This REPLACES the previous F1 (reliability-gated) queue slot at the user's
-# request (2026-10-13): when the running A2-R resume finishes, GP-MSF starts
-# instead of F1.  F1 stays implemented and can be re-armed later.
-#
-#   wait for the A2-R queue to finish -> wiring unit test -> drain GPUs 5-7
-#   -> 450-iter S0 smoke -> S0 verdict (artifact-only)
-#   -> 24e run -> ep6 task-harm check -> ep12-16 mature window report
-#
-# Stops (does NOT continue to the 24e run) if the wiring test fails, if the
-# smoke throws, or if S0 fails.
-set -u
+# GP-MSF replaces F1. Serial after A2-R; owns/kills ONLY its spawned sessions.
+# Fail closed: CPU -> real preflight -> matched B0/arm DDP S0 -> 24e.
+set -eo pipefail
 cd /home/lurui/workspace/R4Det
 source .envrc
-
+set -u
+export CUDA_VISIBLE_DEVICES=5,6,7
+export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 WD=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0
-SMOKE_WD=$WD/smoke_450iter
 CFG=me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py
-SMOKE_CFG=me_rssm/sanity/gpmsf_smoke_450iter.py
+MAIN_CFG=configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr.py
 B0=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_seed0
-A2R_QLOG=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_semA2R_seed0/queue_semA2R_resume.log
-LOG=/tmp/gpmsf_24e.log
-SMOKE_LOG=/tmp/gpmsf_smoke.log
+A2R=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_semA2R_seed0
 QLOG=$WD/queue_gpmsf.log
-mkdir -p "$WD" "$SMOKE_WD"
-
+CHECK=(python me_rssm/sanity/gpmsf_run_checks.py)
+mkdir -p "$WD"
+exec 9>"$WD/queue_gpmsf.lock"
+flock -n 9 || { echo 'GP-MSF queue already armed'; exit 1; }
+CHILD=0
 say(){ echo "[gpmsf] $(date -u '+%F %T') $*" >> "$QLOG"; }
-say "armed; waiting for the A2-R resume queue to finish (F1 queue replaced)"
-
-# ---- 1) wait for the A2-R queue (log DONE + no job process) -----------------
-while :; do
-  if grep -q 'DONE' "$A2R_QLOG" 2>/dev/null && ! pgrep -f '[s]emA2R_24e' >/dev/null 2>&1; then
-    break
+stop_owned(){
+  if [ "$CHILD" -gt 0 ]; then
+    # CHILD is a new setsid session created by this queue, never A2-R's group.
+    kill -TERM -- "-$CHILD" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 -- "-$CHILD" 2>/dev/null || break
+      sleep 1
+    done
+    kill -KILL -- "-$CHILD" 2>/dev/null || true
+    wait "$CHILD" 2>/dev/null || true
+    CHILD=0
   fi
-  sleep 60
-done
-say "A2-R queue finished"
+}
+on_exit(){
+  code=$?
+  trap - EXIT
+  stop_owned
+  if [ "$code" -ne 0 ]; then say "FAILED exit=$code; no automatic continuation"; fi
+  exit "$code"
+}
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-# ---- 2) wiring unit test (cheap, before any GPU time) -----------------------
-# ``-p no:hydra_pytest``: hydra-core 1.4.0.dev6 is installed as an egg and its
-# pytest11 plugin imports ``omegaconf.vendor``, which the installed omegaconf
-# no longer ships.  Without this flag pytest dies at collection, before any of
-# these tests run.
-if python -m pytest -q -p no:hydra_pytest me_rssm/sanity/test_gpmsf_wiring.py >> "$QLOG" 2>&1; then
-  say "wiring unit test PASS"
-else
-  say "wiring unit test FAILED -> not launching the smoke"
-  exit 1
-fi
-
-# ---- 3) drain GPUs 5-7 ------------------------------------------------------
-used=99999
-for _ in $(seq 1 240); do
-  used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i 5,6,7 \
-         | tr -d ' ' | paste -sd+ | bc)
-  [ "${used:-99999}" -lt 3000 ] && break
-  sleep 60
-done
-say "gpu used=${used} MiB"
-
-# ---- 4) 450-iter real-data S0 smoke ----------------------------------------
-if [ ! -f "$SMOKE_WD/iter_450.pth" ]; then
-  setsid bash -c "source .envrc; CUDA_VISIBLE_DEVICES=5,6,7 bash tools/dist_train.sh $SMOKE_CFG 3 --seed 0 --deterministic --work-dir $SMOKE_WD" < /dev/null > "$SMOKE_LOG" 2>&1 &
-  say "smoke launched pid $!"
-  for _ in $(seq 1 180); do
-    [ -f "$SMOKE_WD/iter_450.pth" ] && break
-    grep -qi 'CAUGHT AN EXCEPTION' "$SMOKE_LOG" 2>/dev/null && { say "SMOKE EXCEPTION"; break; }
+drain(){
+  local deadline=$((SECONDS + 14400))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    # Query failures and malformed/missing GPU rows are errors, not free GPUs.
+    local memory
+    memory=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i 5,6,7)
+    if MEMORY="$memory" python -c 'import os,sys; x=[int(v.strip()) for v in os.environ["MEMORY"].splitlines()]; assert len(x)==3 and min(x)>=0; sys.exit(0 if max(x)<1000 else 2)'; then
+      say "GPU 5/6/7 drained"
+      return 0
+    else
+      local code=$?
+      [ "$code" -eq 2 ] || { say 'GPU query invalid'; return 1; }
+    fi
     sleep 60
   done
-  sleep 60
-else
-  say "smoke checkpoint already present"
-fi
+  say 'GPU drain deadline exceeded; NOT launching'
+  return 1
+}
 
-# ---- 5) S0 verdict ----------------------------------------------------------
-if python me_rssm/sanity/gpmsf_s0_verdict.py --work-dir "$SMOKE_WD" \
-     --out "$SMOKE_WD/s0_verdict.json" >> "$QLOG" 2>&1; then
-  say "S0_ALL_PASS -> launching the 24e run"
-else
-  say "S0 FAILED -> NOT launching the 24e run (see $SMOKE_WD/s0_verdict.json)"
+run_owned(){
+  local limit=$1 logfile=$2 monitor=$3
+  shift 3
+  local deadline=$((SECONDS + limit)) early=0 mature=0 code=0
+  setsid "$@" < /dev/null > "$logfile" 2>&1 &
+  CHILD=$!
+  say "launched pid/pgid=$CHILD log=$logfile"
+  while kill -0 "$CHILD" 2>/dev/null; do
+    if [ "$SECONDS" -ge "$deadline" ]; then say 'phase timed out'; return 1; fi
+    if grep -Eqi 'CAUGHT AN EXCEPTION|Traceback \(most recent call last\)|CUDA out of memory' "$logfile"; then
+      say 'phase exception; stopping owned session'
+      return 1
+    fi
+    if [ "$monitor" = yes ]; then
+      if [ "$early" -eq 0 ]; then
+        if "${CHECK[@]}" ready --work-dir "$WD" --expected-epochs 6 > "$ATTEMPT/ready.log" 2>&1; then
+          if "${CHECK[@]}" curve --work-dir "$WD" --b0 "$B0" --window 1-6 --early-stop --live \
+                --out "$WD/gpmsf_ep6_report.json" >> "$QLOG" 2>&1; then
+            early=1
+            say 'ep1-6 complete; no >2 AP task harm'
+          else
+            say 'ep6 harm or evidence failure; stop for manual review (not final morphology rejection)'
+            return 1
+          fi
+        else
+          code=$?
+          [ "$code" -eq 3 ] || { say 'invalid live training evidence'; return 1; }
+        fi
+      fi
+      if [ "$mature" -eq 0 ]; then
+        if "${CHECK[@]}" ready --work-dir "$WD" --expected-epochs 16 > "$ATTEMPT/ready.log" 2>&1; then
+          "${CHECK[@]}" curve --work-dir "$WD" --b0 "$B0" --window 12-16 --live \
+            --out "$WD/gpmsf_ep16_report.json" >> "$QLOG" 2>&1 || return 1
+          mature=1
+          say 'ep12-16 complete; report only, training continues to epoch 24'
+        else
+          code=$?
+          [ "$code" -eq 3 ] || { say 'invalid live training evidence'; return 1; }
+        fi
+      fi
+    fi
+    sleep 60
+  done
+  wait "$CHILD" || return 1
+  # A successful launcher must not leave a rank holding GPUs in its session.
+  if kill -0 -- "-$CHILD" 2>/dev/null; then say 'orphaned phase ranks'; return 1; fi
+  CHILD=0
+}
+
+say 'armed (reviewed gates); waiting for A2-R; F1 slot remains replaced'
+while :; do
+  if grep -q 'DONE' "$A2R/queue_semA2R_resume.log" 2>/dev/null && \
+      ! pgrep -f '[s]emA2R_24e|[q]ueue_semA2R_resume.sh' >/dev/null; then break; fi
+  sleep 60
+done
+[ -f "$A2R/epoch_16.pth" ] || { say 'predecessor checkpoint missing'; exit 1; }
+"${CHECK[@]}" curve --work-dir "$A2R" --window 12-16 --expected-epochs 16 \
+  --out "$WD/a2r_predecessor_checked.json" >> "$QLOG" 2>&1
+say 'A2-R completed with full ep1-16 evidence; not relying on DONE alone'
+# Fresh phases only. Never reuse old checkpoint or silently resume formal run.
+if compgen -G "$WD/*.log.json" >/dev/null || compgen -G "$WD/epoch_*.pth" >/dev/null; then
+  say 'existing formal artifacts; explicit resume/review required'
   exit 1
 fi
-
-# ---- 6) 24e run -------------------------------------------------------------
-setsid bash -c "source .envrc; CUDA_VISIBLE_DEVICES=5,6,7 bash tools/dist_train.sh $CFG 3 --seed 0 --deterministic --work-dir $WD" < /dev/null > "$LOG" 2>&1 &
-say "24e launched pid $! at $(date -u '+%F %T')"
-
-# ---- 7) ep6 early task-harm check ------------------------------------------
-for _ in $(seq 1 720); do
-  grep -q 'Epoch(val) \[6\]' "$LOG" 2>/dev/null && break
-  grep -qi 'CAUGHT AN EXCEPTION' "$LOG" 2>/dev/null && { say "24e EXCEPTION"; break; }
-  sleep 60
+ATTEMPT=$WD/s0_$(date -u '+%Y%m%dT%H%M%SZ')_$$
+mkdir "$ATTEMPT"
+python -m pytest -q -p no:hydra_pytest me_rssm/sanity/test_gpmsf_wiring.py \
+  me_rssm/sanity/test_gpmsf_queue_checks.py >> "$QLOG" 2>&1
+python me_rssm/sanity/gpmsf_cpu_checks.py >> "$QLOG" 2>&1
+say 'CPU geometry/wiring/queue gates PASS'
+drain
+run_owned 3600 "$ATTEMPT/preflight.log" no env CUDA_VISIBLE_DEVICES=5 \
+  python me_rssm/sanity/gpmsf_real_preflight.py --config "$CFG" \
+  --baseline "$MAIN_CFG" --out-dir "$ATTEMPT/preflight"
+for arm in baseline gpmsf; do
+  drain
+  PHASE_WD=$ATTEMPT/${arm}_450iter
+  mkdir "$PHASE_WD"
+  if [ "$arm" = baseline ]; then SMOKE_CFG=me_rssm/sanity/gpmsf_baseline_smoke_450iter.py
+  else SMOKE_CFG=me_rssm/sanity/gpmsf_smoke_450iter.py; fi
+  "${CHECK[@]}" start --work-dir "$PHASE_WD" --config "$SMOKE_CFG"
+  run_owned 21600 "$ATTEMPT/${arm}_smoke.log" no bash tools/dist_train.sh \
+    "$SMOKE_CFG" 3 --seed 0 --deterministic --work-dir "$PHASE_WD"
+  "${CHECK[@]}" finish --work-dir "$PHASE_WD"
 done
-python me_rssm/sanity/c1valid_curve_check.py --log "$WD" --work-dir "$WD" \
-  --b0-log "$B0" --window 1-6 --out "$WD/gpmsf_ep6_early_check.json" >> "$QLOG" 2>&1
-if python - <<'PY' >> "$QLOG" 2>&1
-import json, sys
-d = json.load(open('/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/gpmsf_ep6_early_check.json'))
-sys.exit(0 if d.get('early_check', {}).get('pass') else 1)
-PY
-then say "ep6 early check PASS -> continuing"; else say "ep6 early check FAIL -> flagged for review"; fi
-
-# ---- 8) ep12-16 mature window ----------------------------------------------
-for _ in $(seq 1 2880); do
-  grep -q 'Epoch(val) \[16\]' "$LOG" 2>/dev/null && break
-  sleep 60
-done
-python me_rssm/sanity/c1valid_curve_check.py --log "$WD" --work-dir "$WD" \
-  --b0-log "$B0" --window 12-16 --out "$WD/gpmsf_ep16_window_check.json" >> "$QLOG" 2>&1
-say "report -> $WD/gpmsf_ep16_window_check.json ; DONE (decisions remain manual)"
+python me_rssm/sanity/gpmsf_s0_verdict.py --work-dir "$ATTEMPT/gpmsf_450iter" \
+  --baseline-dir "$ATTEMPT/baseline_450iter" \
+  --real-preflight "$ATTEMPT/preflight/real_preflight.json" \
+  --out "$ATTEMPT/s0_verdict.json" >> "$QLOG" 2>&1
+say "S0_ALL_PASS including matched <=1.20x resources; artifacts=$ATTEMPT"
+drain
+"${CHECK[@]}" start --work-dir "$WD" --config "$CFG"
+run_owned 259200 "$WD/train_gpmsf.log" yes bash tools/dist_train.sh "$CFG" 3 \
+  --seed 0 --deterministic --work-dir "$WD"
+"${CHECK[@]}" finish --work-dir "$WD"
+[ -f "$WD/epoch_24.pth" ] || { say 'epoch_24 checkpoint missing'; exit 1; }
+# Recheck ep6 even if the trainer finished between two watchdog polls.
+"${CHECK[@]}" curve --work-dir "$WD" --b0 "$B0" --window 1-6 --early-stop \
+  --out "$WD/gpmsf_ep6_report.json" >> "$QLOG" 2>&1
+"${CHECK[@]}" curve --work-dir "$WD" --b0 "$B0" --window 12-16 --expected-epochs 24 \
+  --out "$WD/gpmsf_full_curve_report.json" >> "$QLOG" 2>&1
+say 'DONE: trainer exited 0; ep24 saved; full ep1-24 curve and ep12-16 report verified'

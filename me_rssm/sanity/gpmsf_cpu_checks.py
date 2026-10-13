@@ -299,7 +299,7 @@ def t5_zero_radar():
         ctx = fz._build_context(geo, B, DEV, torch.float32)
         assert float(ctx['support'].sum()) == 0.0
         q_cam, q_rad, f_cat = _queries(fz, img, rad)
-        m_r, m_i, _ = fz._chunk(q_cam, q_rad, f_cat, ctx, 0)
+        m_r, m_i, *_ = fz._chunk(q_cam, q_rad, f_cat, ctx, 0)
         c_new = img + fz.proj_r2c(m_r.view(B, -1, *TOY['bev_shape']))
         r_new = rad + fz.proj_i2r(m_i.view(B, -1, *TOY['bev_shape']))
     assert float(m_r.abs().sum()) == 0.0, 'radar message not exactly zero without support'
@@ -316,7 +316,7 @@ def t6_no_image():
     with torch.no_grad():
         ctx = fz._build_context(geo, B, DEV, torch.float32)
         q_cam, q_rad, f_cat = _queries(fz, img, rad)
-        m_r, m_i, _ = fz._chunk(q_cam, q_rad, f_cat, ctx, 0)
+        m_r, m_i, *_ = fz._chunk(q_cam, q_rad, f_cat, ctx, 0)
         r_new = rad + fz.proj_i2r(m_i.view(B, -1, *TOY['bev_shape']))
     assert float(m_i.abs().sum()) == 0.0, 'image message not zero with all-invalid projections'
     assert torch.equal(r_new, rad), 'radar BEV changed despite zero image message'

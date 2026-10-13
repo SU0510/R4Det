@@ -6,7 +6,14 @@
 - 冒烟配置：`me_rssm/sanity/gpmsf_smoke_450iter.py`
 - 运行目录（待建）：`/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0`
 - 设计（权威）：`docs/geometry_multiscale_fusion_design_20261013.md`
-- CPU 证据：`docs/geometry_multiscale_fusion_audit_20261013.json`；接线单测：`me_rssm/sanity/test_gpmsf_wiring.py`（7/7 PASS）
+- CPU 证据：`docs/geometry_multiscale_fusion_audit_20261013.json`；接线单测：`me_rssm/sanity/test_gpmsf_wiring.py`（原7项；§98 增至10项，连队列回归共37项 PASS）
+
+## 首次 GPU 前勘误：v1.1（2026-10-13，训练记录 §98）
+
+排队审查发现旧实现会把缺失诊断、未成功退出、不同 RSSM 的资源参照放成 PASS，且资源“只告警”
+与权威设计 §10.2 / TODO 的硬预算冲突。**尚无 GP-MSF GPU 前向/冒烟/val**，此次修订不根据结果调阈值：
+AP 门限、容量、bs/N4/LR/RSSM/head 均不变。修复后的 §3–6 为现行执行合同；§97 保留原排队历史。
+资源超限必须停止自动放行，人工复核后才可另行修订；不把资源 FAIL 当方法/AP FAIL。
 
 ---
 
@@ -40,8 +47,8 @@ Ped/Cyc 或 low/zero 变差，则本假设不成立（§6/§7）。
 ## 2. 唯一研究因素（公式与几何冻结）
 
 ```
-C_new = C + W_{R->C}(M_R)        # (B,64) -> (B,256)，零初始化
-R_new = R + W_{I->R}(M_I)        # (B,64) -> (B,384)，零初始化
+C_new = C + valid_R * W_{R->C}(M_R)        # (B,64) -> (B,256)，零初始化
+R_new = R + valid_I * W_{I->R}(M_I)        # (B,64) -> (B,384)，零初始化
 O_t   = fusion_conv(cat([C_new, R_new], dim=1))   # 与基线同一 conv、同一权重
 ```
 
@@ -54,6 +61,7 @@ O_t   = fusion_conv(cat([C_new, R_new], dim=1))   # 与基线同一 conv、同�
 - **缺测处理**：新增 **雷达→相机** 直接证据要求该地址在 0.16 m scatter 网格上有局部回波支持
   （5×5 窗口，来自**输入 xyz**）；**图像→融合**消息在没有回波时仍然可用。
   新增雷达候选全部无支持 ⇒ 雷达消息为 0；图像候选全部无效 ⇒ 图像消息为 0。
+  `valid_R/valid_I` 是逐 query 的实际支持/可见性布尔量，投影**之后**乘 mask；训练后 bias 非零也必须恒等回退。
 - **冻结几何（拷贝自 resolved 主线配置，不随训练变化）**：
   `bev_shape=(248,216)`（行=y/列=x）、`bev_origin=(0.0,-39.68)`、`bev_cell=0.32`；
   `radar_origin=(0.08,-39.60)`、`radar_base_cell=0.16`、`radar_base_shape=(496,432)`、
@@ -84,7 +92,7 @@ O_t   = fusion_conv(cat([C_new, R_new], dim=1))   # 与基线同一 conv、同�
   投影后按 `post_rots/post_trans` 校正；相机深度取齐次分量 **index 2**；采样 `align_corners=False`。
   `_gpmsf_geometry` 对形状**硬断言**（B/N 一致、三层雷达、≥3 层图像、`post_rots` 2×2/3×3、
   `post_trans` 末维 2/3），错接线在第一 iter 就报错，不会静默退化成 concat 基线。
-- `require_geo=True`：训练期若检测器不再传 `geo`，**直接 RuntimeError**；eval 下保留 concat 回退。
+- `require_geo=True`：train/eval 任一模式未传 `geo`，**直接 RuntimeError**。只有显式 `require_geo=False` 的调试调用允许 concat 回退，避免评测静默走错臂。
 - 静态核验：CPU gate `t3` 断言三层雷达/三层图像各自的 cell centre 精确读回，`t4` 断言 P3 与三个高度
   reference 的行位置（读回误差 ≤ 2.4e-07），`t9` 断言地址半径 ≤ per-head 上限。
   **布局/投影错误会静默镜像或错行**，因此三者都是硬门。
@@ -95,27 +103,32 @@ O_t   = fusion_conv(cat([C_new, R_new], dim=1))   # 与基线同一 conv、同�
 - 队列：**替换原 F1 槽位**（`queue_relfus.sh` → `queue_gpmsf.sh`），串联在 **A2-R 续训队列之后**，
   同一时刻只占用 5/6/7；A2-R 未结束前 GP-MSF 不启动。
 - 冒烟：450 iter（`IterBasedRunner`），`me_rssm/sanity/gpmsf_smoke_450iter.py`，
-  带 `GPMSFWiringStatsHook`（每 50 iter 落 `gpmsf_wiring_stats.json`）与保留的 KL 日程 hook。
+  带 `GPMSFWiringStatsHook`（仅每第 50 iter 收集，rank0 原子落 `gpmsf_wiring_stats.json`）与保留的 KL 日程 hook。统计不得关闭 gradient checkpoint；结束时三 rank 对所有 fusion 参数 hash 必须一致。
+- 资源参考新增 `gpmsf_baseline_smoke_450iter.py`，严格同 B0 RSSM/bs/N4/梯度累积/solver/450 iter/三 rank；与 arm 串行运行，不再使用 C1/DC 历史冒烟。
 - 冒烟与正式 run 均为原 batch / 原 N4 口径；**不得偷偷降 batch 后继续称单变量对照**。
 
 ## 5. S0 接线门（先冒烟，后判定）
 
-先跑便宜门：`test_gpmsf_wiring.py`（7 项，接线/配置/step-0）与 `gpmsf_cpu_checks.py`（10 项，含
+先跑便宜门：`test_gpmsf_wiring.py` + `test_gpmsf_queue_checks.py`（共37项，接线/配置/step-0/排队证据）与 `gpmsf_cpu_checks.py`（10 项，含
 分块等价、双向梯度、零雷达/无图像退化、边界）；任一失败 ⇒ 不启动冒烟。
 
 | 判据 | 内容 | 判定器 |
 | --- | --- | --- |
-| S0-1 | 跑到 450 iter、写出 `iter_450.pth`、被记录的 loss/`stat_*` 无 NaN | `gpmsf_s0_verdict.py` |
-| S0-2 | 臂/主线差异键恰为 `['RCFusion']`；新建 `proj_r2c`/`proj_i2r` 零初始化；`fusion_conv` 形状与基线一致；`height_refs` 与主线冻结值一致；`require_geo=True` | 同上 + 单测 |
-| S0-3 | 训练后 checkpoint 中 `proj_r2c/proj_i2r` 权重**已离开零** ⇒ 几何通路确实跑了（该通路只能由原生多尺度证据到达，闲置参数不可能自发移动） | 同上 |
-| S0-4 | 容量冻结：新增 177,726、`fusion_conv` 1,475,072 | 同上 |
-| 附加 | 性能对照（时间/显存 vs 既存 baseline 前端冒烟中位数）：任一比 > 1.2× ⇒ 记 `S0_PERF_REVIEW` 供人工复核，**不自动停机** | 同上 |
+| 完成/数值 | 新建独立 smoke 目录、trainer 真正 exit=0、iter450 日志 + checkpoint `meta.iter=449`（本机 MMCV 在 iter450 完成但 runner 自增前零基保存，日志/hook 完成计数为450）、全日志 numeric 字段/全部 checkpoint state 有限；NaN/±Inf/缺失均失败 | `gpmsf_s0_verdict.py` + phase manifest |
+| 配方/容量 | model 差异仅 `RCFusion`，数据/solver/初始化权重/RSSM/head 不变；零初始化、同 conv 形状、冻结高度与新增 177,726 / 共享 1,475,072 | 同上 + 单测 |
+| 真实 step0 | 同初值/seed：共用 state 与 RNG hash，真实 train bs2/N4 loss/head 和 val 预测/head 与 concat 完全等价，输入值不变；真实 augmentation 对原始标定独立投影核验 | `gpmsf_real_preflight.py`（GPU5，先于 DDP smoke） |
+| 缺测/梯度 | 真实 current-frame native 特征两步 backward，全部参数梯度有限、offset 第二步非零、native source 梯度非零；已非零投影 bias 下零雷达/部分 batch 零点/全 image invalid 恒等回退 | 同上 + CPU 门 |
+| 通路/DDP | 两条 projection **weight** 必须存在、有限且离零；9 条完整 stats、current native features 未 detach、checkpoint 活跃；三 rank fusion 参数一致 | stats hook + checkpoint 判定 |
+| 资源硬门 | 配对同配方 B0/arm：原 bs2/rank/N4/累积2、GPU5/6/7；稳态记录（排除前50 iter）步时与训练峰值显存各 ≤1.20×；缺测量或超限均停止自动开训 | 同上 |
+
+前向验收与资源测量不可互相替代；只读真实 preflight 不报告 AP、不把两步隔离梯度探针冒充正式训练。
+队列等待 GPU 超时/查询错误均失败；不复用旧 checkpoint；源文件/预训练权重 hash 漂移失败。
 
 S0 任一 FAIL ⇒ 修实现后重跑冒烟；连续两次 FAIL ⇒ 停并报硬问题（不调阈值）。
 
 ## 6. 判定（三层，遵循 2026-10-12 的附录 B 政策）
 
-1. **ep6 早期检查（只查任务损害）**：`c1valid_curve_check.py --window 1-6`，GP-MSF 的 ep1-6 区间均值
+1. **ep6 早期检查（只查任务损害）**：`gpmsf_run_checks.py curve --window 1-6 --early-stop`（双方六轮必须齐全），GP-MSF 的 ep1-6 区间均值
    低于 B0 同窗（**29.0420**）**超过 2.0 点** ⇒ 停并复查。机制读数不参与裁决。
 2. **ep12-16 成熟窗口（主对照，n=5）**：按统一口径报**区间均值 + 全轮峰值（值 + epoch）**，
    并与 B0 同窗口逐类比较（Car/Truck/Ped/Cyc）。**必须同时看**四类、high/low/zero、
@@ -124,9 +137,13 @@ S0 任一 FAIL ⇒ 修实现后重跑冒烟；连续两次 FAIL ⇒ 停并报硬
    单 seed 只作为方向性证据，并同时报告全部 val epoch 的峰值及各类代价。
 
 **止损/失败判据（任一成立即判定该形态不成立，需机制归因而非加超参）**：
-- ep6 早期检查不通过，且 ep8-10 未见回升；
+- ep6 不通过先**操作性停并复查**；不能凭六轮自动判形态失败。只有另行获批继续取到 ep8-10，且仍未见回升，才具备此项否定证据；不得用“等 ep8-10”绕过 ep6 停机。
 - ep12-16 区间均值不优于同容量 residual conv 对照；
 - 仅 Car/Truck 变好而 Ped/Cyc 或 low/zero 变差 ⇒ **不能宣称解决了当前主要问题**。
+
+队列 ep16 仅出完整成熟窗口报告，**24e run 不记 DONE**。trainer exit=0、ep24 权重与 ep1–24
+完整 val 曲线齐全后才 DONE。新报告保留全部逐 epoch/逐指标窗口均值/全轮峰值“值+epoch”/best saved，
+不调用 C1 的 Overall≥40 等绝对门限；coverage/FP-FN/借点率等未测时明确待补，不自动宣称机制成立。
 
 ## 7. 归因、控制臂与优先级
 

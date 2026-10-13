@@ -12,14 +12,11 @@
   **NOT ALL PASS**（M1/M3/M4 FAIL，§75），本次续训用于取得成熟窗口与三口径。
   - 收尾动作：确认 ep16 val/权重/完整窗口 → `merge_val_curves.py` 出三口径 → 归档；
     异常/报告失败不得写成功 DONE，停训限定自有进程组（§85）。
-- **F1（可靠性感知前端融合）已排队**（§83/§85；`queue_relfus.sh` 2026-10-12 15:13:16 武装，
-  排在 C1 → A2-R 之后）：
-  - 待执行：450-iter 冒烟 → S0 判定 → 24e 训练 → ep6 任务损害检查 → ep12-16 三口径；
-    α 机制探针在 ep14 前补（不阻塞开训）。
-  - 实现已完成（唯一变量 `RCFusion`，零初始化 step 0 与基线逐位相同；`test_reliability_fusion.py` 8 passed），
-    详见文末归档「四、候选 C1、队列决策与 F1」。
-  - **与候选池的区别**：F1 是 ConcatConv+雷达可靠性门，不是下文方向 1 的几何约束跨位置采样；不标成该方向已开训。
-  - **2026-10-13 优先级建议（§92，未执行排程变更）**：优先实现方向 1，不将 F1 的 24e 作为前置条件；F1 保留为后续同位置标量门对照。06:49 UTC 核验 F1 尚无冒烟/正式训练产物，仅队列等待 A2-R；原队列仍有效，取消或延后须另行确认。
+- **GP-MSF（几何配对多尺度 fusion）已替换 F1 槽位，排在 A2-R 后**（§97/§98；2026-10-13 12:00:27 UTC重新armed，PID/PGID3066450）：
+  - 审查后流程：CPU 门 → 真实 train/val preflight → 同配方 B0/GP-MSF 两次 450-iter DDP 冒烟 → S0 硬门 → 24e。
+  - GPU 查询/等待超时、数值、缺测回退、真实接线/梯度/DDP、资源 ≤1.20× 任一失败均不自动开正式训练。
+  - ep6 完整双方六轮检查：低于 B0 超过2 AP 则停并复查；ep16 只出成熟窗口报告，epoch24 真正成功退出且全曲线齐全后才 DONE。
+  - 本轮 CPU 审查已完成；真实 GPU S0 / AP **仍未完成**。F1 实现、预登记保留，**当前没有 F1 待启动队列**；它是后续同位置门控对照，不是几何 fusion。
 
 ## 训练补充
 
@@ -57,7 +54,7 @@
 
 - [ ] **方向 1：几何约束、多尺度 deformable cross-modal fusion（优先）**
   - **完整方案状态：设计论证（§91）、CPU 数学/训练集几何核验（§91）、首版实现 + CPU 接线门禁 10/10（§95）、
-    真实管线接线 + 接线单测 7/7 + 冻结预登记（2026-10-13，§97）均已完成；GPU S0、正式训练与 AP 仍待完成。**
+    真实管线接线 + 排队审查/硬门修复 + CPU 回归（2026-10-13，§97/§98）均已完成；GPU S0、正式训练与 AP 仍待完成。**
     详见 `docs/geometry_multiscale_fusion_design_20261013.md`（GP-MSF：共享米制地址、原生 image/radar 多尺度配对取证、null+camera fallback、基线保持残差）；首轮保留现有 RSSM/head。
     实现 `mmdet3d/models/fusion_layers/geometry_multiscale_fusion.py`（新增 0.1777 M 参数，step-0 与基线逐位一致），门禁 `me_rssm/sanity/gpmsf_cpu_checks.py`（10/10）；
     arm config `me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py`（差异键恰为 `['RCFusion']`），
@@ -200,6 +197,13 @@
   GP-MSF 队列 `me_rssm/sanity/queue_gpmsf.sh` 于 2026-10-13 10:12:25 UTC armed（pid 2894048，独立会话），
   串在 A2-R 续训之后；A2-R 队列与训练未被触碰。F1 实现/预登记保留，可随时重排。
 - 状态边界：**无 GPU S0、无训练、无 AP**；GPU 5/6/7 仍由 A2-R 占用。记录：`docs/training_runs_full.md` §97。
+### 方向 1：排队脚本/config 审查与 fail-closed 修复（2026-10-13，§98）
+
+- [x] 修复统计关闭 checkpoint、投影 bias 破坏缺测恒等、eval 未接线静默回退、仅隔离 CPU 却重设 CUDA RNG、DDP 多 rank 写同一 JSON；bs2/N4/累积2/LR/24e/RSSM/head 保持不变。
+- [x] 队列补真实数据可运行 preflight、同配方 B0 资源 smoke、完成/新鲜度/NaN/Inf/完整诊断/DDP/资源硬门；只清理自有会话，ep6 执行止损，ep16 不冒充24e DONE，正式曲线独立于 C1 阈值。
+- [x] CPU 回归/整模型初值与 RNG/真实 train-val loader 验收，详见 §98；预登记 v1.1 在首次 GPU 前勘误。
+- **未完成**：GPU forward/DDP450/resource实测、正式训练/AP、控制臂与机制归因。整个方向保持 `[ ]`，不得把审查通过写成 S0 或 AP 成功。
+
 > 归档区（2026-10-13 整理）：原正文中的已完成 / 已收尾条目按主题移入此处，保留移入时的原文与出处；
 > 每条后的「后续」行为 2026-10-13 整理时补注的状态收敛说明，不改变历史判定。
 

@@ -1,204 +1,187 @@
-#!/usr/bin/env python
-"""S0 wiring gate for the GP-MSF arm (prereg §5).
-
-Artifact-only (no GPU, no training): reads the 450-iter smoke log, its
-checkpoint, the arm config, the wiring-probe JSON and the existing baseline
-front-end smokes for a throughput/memory reference.
-
-  S0-1  smoke reached iter 450, iter_450.pth exists, no NaN in any logged loss
-  S0-2  single-variable contract: only ``RCFusion`` differs from the mainline,
-        the fresh arm's residual projections are zero-initialised and its
-        fusion conv is shape-identical to the mainline's
-  S0-3  the geometry path really ran: ``proj_r2c`` / ``proj_i2r`` left their zero
-        initialisation during the smoke (they are only reached through the
-        native multi-scale evidence path -- an unwired arm would keep them at
-        exactly zero)
-  S0-4  frozen capacity: new params 177,726 and shared fusion_conv 1,475,072
-
-Memory / step time are reported against the existing baseline-front-end smokes
-as a review flag (``S0_PERF_REVIEW``); they are not an automatic stop because a
-450-iter window on a shared machine is noisy (prereg §5).
-"""
+#!/usr/bin/env python3
+"""Fail-closed S0: real preflight + two completed, recipe-matched DDP smokes."""
 import argparse
-import glob
 import json
-import os
+import math
+from pathlib import Path
 import sys
 
-import torch
-from mmcv import Config
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from me_rssm.sanity.gpmsf_run_checks import (  # noqa: E402
+    completed_phase, numeric_leaves, performance, read_rows, source_hashes, write_json)
 
-ARM_CFG = ('me_rssm/configs/'
-           'TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py')
-MAIN_CFG = ('configs/r4det/'
-            'TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr.py')
-FROZEN = {
-    'max_iters': 450,
-    'new_params': 177726,
-    'fusion_conv_params': 1475072,
-    'height_refs': (-1.1230436265, -0.3003779650, 0.6601446867),
-    'perf_ratio_cap': 1.2,
-}
-REF_SMOKES = [
-    '/data/lurui/work_dirs/c1valid_smoke_450iter',
-    '/data/lurui/work_dirs/dcrssm1_smoke_450iter',
-    '/data/lurui/work_dirs/dcrssm2_smoke_450iter',
-]
+ARM_CFG = 'me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py'
+MAIN_CFG = 'configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr.py'
+FROZEN = dict(max_iters=450, new_params=177726, fusion_conv_params=1475072,
+              height_refs=(-1.1230436265, -0.3003779650, 0.6601446867), perf_ratio_cap=1.2)
+REQUIRED_REAL = ('common_initial_state', 'initial_rng', 'zero_projections',
+                 'train_step0_outputs', 'train_step0_head', 'train_input_unchanged',
+                 'eval_step0_outputs', 'eval_step0_head', 'eval_input_unchanged',
+                 'real_aug_projection', 'no_gt_geometry', 'two_step_offsets',
+                 'native_source_gradients', 'zero_radar_identity',
+                 'mixed_batch_identity', 'invalid_image_identity')
 
 
-def _rows(work_dir):
-    f = sorted(glob.glob(os.path.join(work_dir, '*.log.json')))[-1]
-    return f, [json.loads(line) for line in open(f) if line.strip()]
+def projection_evidence(state):
+    result = {}
+    for name in ('proj_r2c', 'proj_i2r'):
+        for key in ('weight', 'bias'):
+            tensor = state.get(f'cross_attention.{name}.{key}')
+            if tensor is None:
+                raise ValueError(f'missing {name}.{key}')
+            import torch
+            if not torch.isfinite(tensor).all():
+                raise ValueError(f'non-finite {name}.{key}')
+            result[f'{name}.{key}'] = dict(abs_mean=float(tensor.abs().mean()),
+                                          abs_max=float(tensor.abs().max()))
+    if not all(result[f'{name}.weight']['abs_mean'] > 0
+               for name in ('proj_r2c', 'proj_i2r')):
+        raise ValueError('both projection weights must leave zero')
+    return result
 
 
-def _perf(work_dir):
+def smoke_artifacts(directory, expected_config):
+    import torch
+    phase = completed_phase(directory)
+    if phase.get('config') != expected_config:
+        raise ValueError('smoke manifest points to a different arm/config')
+    rows = read_rows(directory, since=phase['started_at'])
+    train = [r for r in rows if r.get('mode') == 'train']
+    if not train or max(r.get('iter', 0) for r in train) != 450:
+        raise ValueError('smoke did not log iter 450')
+    if not any('loss' in key for r in train for key in r):
+        raise ValueError('no logged training losses')
+    path = Path(directory) / 'iter_450.pth'
+    if path.stat().st_mtime < phase['started_at']:
+        raise ValueError('stale smoke checkpoint')
+    checkpoint = torch.load(str(path), map_location='cpu')
+    meta = checkpoint.get('meta', {})
+    # Installed MMCV saves runner.iter BEFORE its post-step increment.
+    # iter_450.pth therefore has meta.iter=449; log/hook completion is 450.
+    if meta.get('iter') != 449:
+        raise ValueError('checkpoint meta.iter is not zero-based 449 for iter_450')
+    from mmcv import Config
     try:
-        _, rows = _rows(work_dir)
-    except Exception:                                          # noqa: BLE001
-        return None
-    iters, mems = [], []
-    for r in rows:
-        if isinstance(r.get('time'), (int, float)):
-            iters.append(float(r['time']))
-        if isinstance(r.get('memory'), (int, float)):
-            mems.append(float(r['memory']))
-    if not iters:
-        return None
-    tail = iters[-100:]
-    return {
-        'n_time_rows': len(iters),
-        'mean_iter_time_s': sum(tail) / len(tail),
-        'max_memory_mib': max(mems) if mems else None,
-    }
+        from mmdet.utils import compat_cfg
+    except ImportError:
+        from mmdet3d.utils import compat_cfg
+    actual = compat_cfg(Config.fromstring(meta['config'], '.py'))
+    expected = compat_cfg(Config.fromfile(expected_config))
+    actual_model = dict(actual.model)
+    actual_model.pop('meta_info', None)
+    expected_model = dict(expected.model)
+    expected_model.pop('meta_info', None)
+    if actual_model != expected_model:
+        raise ValueError('actual smoke model differs from registered arm')
+    for key in ('data', 'optimizer', 'optimizer_config', 'runner', 'lr_config', 'custom_hooks'):
+        if actual.get(key) != expected.get(key):
+            raise ValueError('actual smoke recipe differs: ' + key)
+    if meta.get('seed') != 0 or len(actual.get('gpu_ids', [])) != 3:
+        raise ValueError('actual smoke seed/world differs')
+    if any(not torch.isfinite(v).all() for v in checkpoint['state_dict'].values()
+           if torch.is_tensor(v)):
+        raise ValueError('non-finite checkpoint state')
+    return rows, checkpoint
 
 
-def _median(values):
-    values = sorted(v for v in values if v is not None)
-    if not values:
-        return None
-    n = len(values)
-    return values[n // 2] if n % 2 else 0.5 * (values[n // 2 - 1] + values[n // 2])
+def single_variable_contract():
+    from mmcv import Config
+    import me_rssm  # noqa: F401
+    from mmdet3d.models.builder import FUSION_LAYERS
+    import torch
+    arm, main = Config.fromfile(ARM_CFG), Config.fromfile(MAIN_CFG)
+    diff = sorted(k for k in set(arm.model) | set(main.model)
+                  if arm.model.get(k) != main.model.get(k))
+    # Bootstrap-only values are not research/solver changes.
+    ignored = {'model', '_cfg_dir', 'custom_imports'}
+    recipe_diff = sorted(k for k in set(arm) | set(main) if k not in ignored
+                         and arm.get(k) != main.get(k))
+    if diff != ['RCFusion'] or recipe_diff:
+        raise ValueError(f'not a single-variable arm: model={diff}, recipe={recipe_diff}')
+    fresh = FUSION_LAYERS.build(dict(arm.model.RCFusion))
+    base = FUSION_LAYERS.build(dict(main.model.RCFusion))
+    if not fresh.require_geo or tuple(fresh.height_refs) != FROZEN['height_refs']:
+        raise ValueError('geometry contract changed')
+    if not all(torch.count_nonzero(p) == 0 for layer in (fresh.proj_r2c, fresh.proj_i2r)
+               for p in layer.parameters()):
+        raise ValueError('residual initialization is not zero')
+    if fresh.fusion_conv.conv.weight.shape != base.fusion_conv.conv.weight.shape:
+        raise ValueError('shared fusion conv shape changed')
+    shared = sum(p.numel() for p in fresh.fusion_conv.parameters())
+    new = sum(p.numel() for p in fresh.parameters()) - shared
+    if (new, shared) != (FROZEN['new_params'], FROZEN['fusion_conv_params']):
+        raise ValueError('frozen capacity changed')
+    a = Config.fromfile('me_rssm/sanity/gpmsf_smoke_450iter.py')
+    b = Config.fromfile('me_rssm/sanity/gpmsf_baseline_smoke_450iter.py')
+    if sorted(k for k in set(a.model) | set(b.model) if a.model.get(k) != b.model.get(k)) != ['RCFusion']:
+        raise ValueError('resource baseline model is not B0')
+    for key in set(a) | set(b):
+        if key not in ignored | {'custom_hooks'} and a.get(key) != b.get(key):
+            raise ValueError('resource smoke recipe differs: ' + key)
+    hooks = [dict(h) for h in a.custom_hooks if h['type'] != 'GPMSFWiringStatsHook']
+    if hooks != [dict(h) for h in b.custom_hooks]:
+        raise ValueError('non-diagnostic smoke hooks differ')
+    return dict(model_diff=diff, recipe_diff=recipe_diff, new_params=new, shared_params=shared)
+
+
+def verdict(work_dir, baseline_dir, real_path):
+    result = dict(S0_ALL_PASS=False, frozen=FROZEN)
+    try:
+        result['config_contract'] = single_variable_contract()
+        real = json.loads(Path(real_path).read_text())
+        if (real.get('status') != 'PASS' or real.get('source_sha') != source_hashes()
+                or any(real.get('checks', {}).get(k) is not True for k in REQUIRED_REAL)):
+            raise ValueError('missing/failed/stale real-batch preflight evidence')
+        result['real_preflight'] = real
+        rows, checkpoint = smoke_artifacts(work_dir, 'me_rssm/sanity/gpmsf_smoke_450iter.py')
+        baseline_rows, _ = smoke_artifacts(baseline_dir, 'me_rssm/sanity/gpmsf_baseline_smoke_450iter.py')
+        result['checkpoint_projection_stats'] = projection_evidence(checkpoint['state_dict'])
+        wiring = json.loads((Path(work_dir) / 'gpmsf_wiring_stats.json').read_text())
+        digests = wiring.get('ddp_parameter_sha', [])
+        if (wiring.get('collect_stats') is not True or wiring.get('require_geo') is not True
+                or wiring.get('ddp_world_size') != 3 or len(digests) != 3
+                or len(set(digests)) != 1 or not digests[0]
+                or wiring.get('completed_iters') != 450):
+            raise ValueError('missing wiring/DDP sync completion proof')
+        records = wiring.get('records', [])
+        if [r.get('iter') for r in records] != list(range(50, 451, 50)):
+            raise ValueError('incomplete wiring probe records')
+        for record in records:
+            stats = record.get('stats') or {}
+            if (stats.get('checkpoint_active') is not True or
+                    stats.get('native_radar_requires_grad') != [True] * 3 or
+                    stats.get('native_image_requires_grad') != [True] * 3 or
+                    stats.get('native_radar_has_grad_fn') != [True] * 3 or
+                    stats.get('native_image_has_grad_fn') != [True] * 3):
+                raise ValueError('native current-frame evidence detached or checkpoint disabled')
+            if any(not math.isfinite(v) for _, v in numeric_leaves(stats)):
+                raise ValueError('non-finite wiring stats')
+        result['wiring_probe'] = wiring
+        arm_perf, base_perf = performance(rows), performance(baseline_rows)
+        result.update(smoke_perf=arm_perf, matched_b0_perf=base_perf,
+                      perf_ratio_time=arm_perf['mean_iter_time_s'] / base_perf['mean_iter_time_s'],
+                      perf_ratio_memory=arm_perf['max_memory_mib'] / base_perf['max_memory_mib'])
+        if max(result['perf_ratio_time'], result['perf_ratio_memory']) > FROZEN['perf_ratio_cap']:
+            raise ValueError('matched resource budget exceeded 1.20x; manual review required')
+        result['S0_ALL_PASS'] = True
+    except Exception as exc:
+        result['failure'] = repr(exc)
+    return result
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--work-dir', required=True)
-    ap.add_argument('--out', default=None)
-    args = ap.parse_args()
-
-    log_json, rows = _rows(args.work_dir)
-    loss_keys = [k for k in rows[-1] if k.startswith('loss') or k.startswith('stat_')]
-    nans, max_iter = [], 0
-    for r in rows:
-        if r.get('iter') is not None:
-            max_iter = max(max_iter, r['iter'])
-        for k in loss_keys:
-            v = r.get(k)
-            if isinstance(v, (int, float)) and v != v:
-                nans.append((r.get('iter'), k))
-    ckpt_path = os.path.join(args.work_dir, 'iter_450.pth')
-    s0_1 = bool(max_iter >= FROZEN['max_iters'] and os.path.exists(ckpt_path)
-                and not nans)
-
-    arm = Config.fromfile(ARM_CFG)
-    main = Config.fromfile(MAIN_CFG)
-    diff = sorted(k for k in set(arm.model) | set(main.model)
-                  if arm.model.get(k) != main.model.get(k))
-    fusion_cfg = arm.model['RCFusion']
-    height_refs = tuple(float(z) for z in fusion_cfg['height_refs'])
-
-    import me_rssm                                           # noqa: F401
-    from mmdet3d.models.builder import FUSION_LAYERS
-    fresh = FUSION_LAYERS.build(dict(fusion_cfg))
-    baseline = FUSION_LAYERS.build(dict(main.model['RCFusion']))
-    fresh_zero = all(float(m.weight.abs().sum()) == 0.0 and float(m.bias.abs().sum()) == 0.0
-                     for m in (fresh.proj_r2c, fresh.proj_i2r))
-    conv_shape_ok = (list(fresh.fusion_conv.conv.weight.shape)
-                     == list(baseline.fusion_conv.conv.weight.shape))
-    new_params = sum(p.numel() for p in fresh.parameters()) \
-        - sum(p.numel() for p in fresh.fusion_conv.parameters())
-    conv_params = sum(p.numel() for p in fresh.fusion_conv.parameters())
-    s0_2 = bool(diff == ['RCFusion'] and fresh_zero and conv_shape_ok
-                and fusion_cfg['type'] == 'GeometryPairedMultiScaleFusion'
-                and main.model['RCFusion']['type'] == 'ConcatConvFusion'
-                and height_refs == FROZEN['height_refs']
-                and bool(fusion_cfg.get('require_geo')))
-
-    proj_stats, conv_moved = None, None
-    if os.path.exists(ckpt_path):
-        sd = torch.load(ckpt_path, map_location='cpu')
-        sd = sd.get('state_dict', sd)
-        proj_stats = {}
-        for name in ('proj_r2c', 'proj_i2r'):
-            for key in ('weight', 'bias'):
-                t = sd.get(f'cross_attention.{name}.{key}')
-                if t is not None:
-                    proj_stats[f'{name}.{key}'] = {
-                        'abs_mean': float(t.abs().mean()),
-                        'abs_max': float(t.abs().max()),
-                    }
-        cv = sd.get('cross_attention.fusion_conv.conv.weight')
-        if cv is not None:
-            base_cv = sd.get('cross_attention.fusion_conv.conv.weight')
-            conv_moved = {'abs_mean': float(base_cv.abs().mean())}
-    proj_left_zero = bool(proj_stats) and all(
-        v['abs_mean'] > 0.0 for k, v in proj_stats.items() if k.endswith('weight'))
-    s0_3 = bool(proj_left_zero)
-
-    s0_4 = bool(new_params == FROZEN['new_params']
-                and conv_params == FROZEN['fusion_conv_params'])
-
-    smoke_perf = _perf(args.work_dir)
-    ref_perf = [_perf(d) for d in REF_SMOKES]
-    ref_time = _median([p['mean_iter_time_s'] for p in ref_perf if p])
-    ref_mem = _median([p['max_memory_mib'] for p in ref_perf if p])
-    time_ratio = (smoke_perf['mean_iter_time_s'] / ref_time
-                  if smoke_perf and ref_time else None)
-    mem_ratio = (smoke_perf['max_memory_mib'] / ref_mem
-                 if smoke_perf and smoke_perf.get('max_memory_mib') and ref_mem
-                 else None)
-    perf_review = bool((time_ratio is not None and time_ratio > FROZEN['perf_ratio_cap'])
-                       or (mem_ratio is not None and mem_ratio > FROZEN['perf_ratio_cap']))
-
-    wiring = None
-    wiring_path = os.path.join(args.work_dir, 'gpmsf_wiring_stats.json')
-    if os.path.exists(wiring_path):
-        with open(wiring_path) as f:
-            wiring = json.load(f)
-        recs = [r for r in wiring.get('records', []) if r.get('stats')]
-        wiring = {
-            'collect_stats': wiring.get('collect_stats'),
-            'require_geo': wiring.get('require_geo'),
-            'n_records_with_stats': len(recs),
-            'first': recs[0]['stats'] if recs else None,
-            'last': recs[-1]['stats'] if recs else None,
-        }
-
-    verdict = {
-        'log_json': log_json, 'max_iter': max_iter, 'rows': len(rows),
-        'nan_entries': nans, 'config_diff_keys': diff,
-        'fresh_residual_zero_init': fresh_zero,
-        'fusion_conv_shape_ok': conv_shape_ok,
-        'fusion_conv_shape_fresh': list(fresh.fusion_conv.conv.weight.shape),
-        'new_params': new_params, 'fusion_conv_params': conv_params,
-        'checkpoint_projection_stats': proj_stats,
-        'checkpoint_fusion_conv': conv_moved,
-        'height_refs_frozen': height_refs == FROZEN['height_refs'],
-        'smoke_perf': smoke_perf, 'ref_perf_median': {
-            'mean_iter_time_s': ref_time, 'max_memory_mib': ref_mem},
-        'perf_ratio_time': time_ratio, 'perf_ratio_memory': mem_ratio,
-        'S0_PERF_REVIEW': perf_review,
-        'wiring_probe': wiring,
-        'S0_1': s0_1, 'S0_2': s0_2, 'S0_3': s0_3, 'S0_4': s0_4,
-        'S0_ALL_PASS': bool(s0_1 and s0_2 and s0_3 and s0_4),
-        'frozen': FROZEN,
-    }
-    out = args.out or os.path.join(args.work_dir, 's0_verdict.json')
-    with open(out, 'w') as f:
-        json.dump(verdict, f, indent=2, sort_keys=True)
-    print(json.dumps(verdict, indent=2, sort_keys=True))
-    print('S0_ALL_PASS =', verdict['S0_ALL_PASS'])
-    return 0 if verdict['S0_ALL_PASS'] else 1
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--work-dir', required=True)
+    parser.add_argument('--baseline-dir', required=True)
+    parser.add_argument('--real-preflight', required=True)
+    parser.add_argument('--out')
+    args = parser.parse_args()
+    result = verdict(args.work_dir, args.baseline_dir, args.real_preflight)
+    write_json(args.out or str(Path(args.work_dir) / 's0_verdict.json'), result)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result['S0_ALL_PASS'] else 1
 
 
 if __name__ == '__main__':

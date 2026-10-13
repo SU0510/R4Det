@@ -1,15 +1,11 @@
 # 450-iter DDP smoke for the GP-MSF arm (real-data S0; NO val, no AP claim).
 # Pre-registration: docs/gpmsf_prereg_20261013.md §5.
 #
-# S0 gates read from the work dir log.json / iter_450.pth / gpmsf_wiring_stats:
-#   S0-1 loss finite, no NaN/OOM, reaches iter 450 and writes iter_450.pth.
-#   S0-2 single variable vs the mainline, residual projections zero-initialised,
-#        fusion_conv shape/params identical to ConcatConvFusion.
-#   S0-3 the geometry path really ran: proj_r2c / proj_i2r left zero (they only
-#        receive gradient through the native multi-scale evidence path).
-#   S0-4 capacity frozen: new params 177,726 / shared fusion_conv 1,475,072.
-# Memory and step time are reported against the existing baseline-front-end
-# smokes; they flag a review, they are not an automatic stop (see prereg §5).
+# Required S0: fresh successful exit, all logs/checkpoint finite, real-batch
+# train/eval initial equivalence and two-step gradients, complete rank-zero
+# diagnostics and 3-rank parameter sync, frozen single-variable recipe/capacity.
+# Matched B0 resource smoke is gpmsf_baseline_smoke_450iter.py. Time AND memory
+# must be <=1.20x; missing evidence or over-budget means no automatic 24e run.
 _base_ = [
     '../configs/'
     'TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py'
@@ -45,6 +41,6 @@ custom_hooks = [
     dict(type='GPMSFWiringStatsHook', interval=50),
 ]
 
-# collect_stats costs a few python-scalar syncs per forward; it is only on for
-# the smoke (real-data wiring evidence) and off in the 24e arm.
+# The hook collects every 50th iteration only, with gradient checkpointing
+# still enabled. Formal 24e keeps statistics off.
 model = dict(RCFusion=dict(collect_stats=True))

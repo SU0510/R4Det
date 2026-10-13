@@ -91,7 +91,10 @@ def test_require_geo_fails_loudly_when_unwired():
     with pytest.raises(RuntimeError, match='geo=None'):
         arm(img, rad)
     arm.eval()
-    with torch.no_grad():                       # inference fallback stays legal
+    with pytest.raises(RuntimeError, match="geo=None"):
+        arm(img, rad)
+    arm.require_geo = False
+    with torch.no_grad():
         out = arm(img, rad)
     assert out.shape == (B, C_OUT, 4, 6)
 
@@ -188,3 +191,50 @@ def test_frozen_config_is_step0_identical_to_baseline():
         got = arm(img, rad, geo=geo)
     assert torch.equal(ref, got), 'step-0 output is not bitwise the baseline'
     assert got.shape == (B, C_OUT, H_BEV, W_BEV)
+
+
+def test_stats_do_not_disable_training_checkpoint(monkeypatch):
+    from me_rssm.sanity import gpmsf_cpu_checks as toy
+    import mmdet3d.models.fusion_layers.geometry_multiscale_fusion as module
+    calls = []
+    original = module.checkpoint
+
+    def observed(*args, **kwargs):
+        calls.append(kwargs.get('use_reentrant'))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, 'checkpoint', observed)
+    fusion = toy.build(grad_checkpoint=True, collect_stats=True, query_chunk=5)
+    fusion.train()
+    img, radar = toy.bev_inputs()
+    fusion(img, radar, geo=toy.make_geo()).square().mean().backward()
+    assert calls and all(value is False for value in calls)
+    assert fusion.last_stats is not None
+
+
+def test_trained_projection_bias_cannot_break_missing_evidence_fallback():
+    from me_rssm.sanity import gpmsf_cpu_checks as toy
+    fusion = toy.build(nonzero_out=True)
+    fusion.eval()
+    with torch.no_grad():
+        fusion.proj_r2c.bias.fill_(2.)
+        fusion.proj_i2r.bias.fill_(3.)
+    img, radar = toy.bev_inputs()
+    observed = []
+    hook = fusion.fusion_conv.register_forward_pre_hook(
+        lambda module, args: observed.append(args[0].detach()))
+    try:
+        with torch.no_grad():
+            fusion(img, radar, geo=toy.make_geo(points=False))
+            assert torch.equal(observed[-1][:, :img.shape[1]], img)
+            fusion(img, radar, geo=toy.make_geo(invert_depth=True))
+            assert torch.equal(observed[-1][:, img.shape[1]:], radar)
+    finally:
+        hook.remove()
+
+
+def test_new_parameter_initialization_does_not_reseed_cuda(monkeypatch):
+    def forbidden(_seed):
+        raise AssertionError('torch.manual_seed would also reseed CUDA')
+    monkeypatch.setattr(torch, 'manual_seed', forbidden)
+    GeometryPairedMultiScaleFusion(img_channels=16, rad_channels=24, out_channels=16)

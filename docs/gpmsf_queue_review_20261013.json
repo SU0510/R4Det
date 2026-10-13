@@ -1,0 +1,103 @@
+{
+  "all_epoch_peak": {
+    "epoch": null,
+    "value": null
+  },
+  "best_saved": null,
+  "common_initial_state_sha": "a3d7fb5e75874f7b00c066aa5e6fee5a4ccdd529036710bcdc30f3156c49c675",
+  "cpu_geometry_checks": {
+    "passed": 10,
+    "total": 10
+  },
+  "cpu_rng_sha": "f4f52925e3d141bca12335335f85acfbdb0acbcdaedf59df31e73bf166105c41",
+  "date": "2026-10-13",
+  "ddp_smokes": "NOT_RUN",
+  "final_pytest": {
+    "hydra_plugin_disabled": true,
+    "passed": 37,
+    "queue_and_artifacts": 27,
+    "wiring": 10
+  },
+  "fixed_window_mean": {
+    "n": 0,
+    "value": null,
+    "window": "ep12-16"
+  },
+  "formal_training": "NOT_RUN",
+  "full_cpu_models": "formal TJ4D project names; build/init_weights/load_from; common maps both normalized to dict; residual projections still zero",
+  "gpu_preflight": "NOT_RUN; serial after A2-R",
+  "installed_mmcv_checkpoint_contract": {
+    "filename": "iter_450.pth",
+    "logged_completed_iters": 450,
+    "meta_iter": 449,
+    "proof": "actual CPU IterBasedRunner.save_checkpoint unit test"
+  },
+  "matched_resource_budget": {
+    "enforcement": "hard stop for missing/over-budget evidence; not AP rejection",
+    "measurements": null,
+    "memory_cap": 1.2,
+    "time_cap": 1.2
+  },
+  "queue_replacement": {
+    "new_pgid": 3066450,
+    "new_pid": 3066450,
+    "old_pid": 2894048,
+    "protected_a2r_queue_pid": 1354393,
+    "protected_a2r_trainer_pgid": 2081375,
+    "replaced_at_utc": "2026-10-13 12:00:26"
+  },
+  "raw_log_sha": {
+    "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/review_20261013/gpmsf_review_batch.log": "61f51b78b999605d27f5bc016f696ee2a3363c7f9b1313ef4506bc0e64d26bd4",
+    "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/review_20261013/gpmsf_review_config.log": "4e2c0fa7ec12bfafdfeef3580a2fd1a0fe971499dcceda193d19b64a24b6510c",
+    "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/review_20261013/gpmsf_review_cpu.log": "3629f82aaccd269efcb39c9bcccdab2cf28eae1b3ee034246002fde29634c296",
+    "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/review_20261013/gpmsf_review_geometry.log": "cdb60c3eab7ef13aaffa816653bc5b30ceeb204a7c79775a250d63a428818442",
+    "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/review_20261013/gpmsf_review_initialization.log": "88b51350c8f2d34814db93aa0823d4b29314c31a43df60152e3c58c520111387",
+    "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/review_20261013/gpmsf_review_regression_before.log": "41f9f28da2ac728e07c3dda5cae0962de5d36e1d274eece5614c55c9426be95c",
+    "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/review_20261013/gpmsf_review_tests.log": "4f5adc35b21d046423a9d5accd4dc9f81976f395c49400f483c6b655ddb5a32a"
+  },
+  "real_cpu_batches": {
+    "train": {
+      "repeat_length": 11412,
+      "samples": 2,
+      "seq_len": 4,
+      "value_sha": "2c38a810654bf0e25c836d6b5b5bfb9877e538a888c5801e6c29cdf1c94607a1"
+    },
+    "val": {
+      "samples": 1,
+      "total_frames": 2040,
+      "value_sha": "4c47f049e8c6029e5d523357bfbfa73b79a6e86caabc4ac0370420f98ca928c3"
+    }
+  },
+  "real_cpu_projection_max_error_px": {
+    "train": [
+      0.0001220703125,
+      0.00018310546875
+    ],
+    "val": [
+      0.0
+    ]
+  },
+  "red_regressions": {
+    "failed": 2,
+    "names": [
+      "test_stats_do_not_disable_training_checkpoint",
+      "test_trained_projection_bias_cannot_break_missing_evidence_fallback"
+    ]
+  },
+  "repo_head_before_fix": "f042c69d0577f73e28969929ee03a09cb94fb51e",
+  "source_sha": {
+    "me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py": "b6c7ee5cc54c544b878a104ba4404c2b4852dd348622803cfe2e823ca8fd2bc9",
+    "me_rssm/gpmsf_stats_hook.py": "7e3d1969cc7e21de98a7e7cac7a6a0a7556419c7230a66d86c6ddb55f98606eb",
+    "me_rssm/sanity/gpmsf_baseline_smoke_450iter.py": "36dda90bb6339f15d14376b16c92e013d94c7ff3e32d6babf9710f41c870ba13",
+    "me_rssm/sanity/gpmsf_cpu_checks.py": "ded1da93b18ae05aee2e236ffc22d9c48cc2acd029027c51fe0cba8fdbeebeaa",
+    "me_rssm/sanity/gpmsf_real_preflight.py": "dbb74102a67f0f6afa6b9dfebb4f8767418bb312c42bdaf234fbabdcf0ff1607",
+    "me_rssm/sanity/gpmsf_run_checks.py": "f87db2e4a23afce6a8cee6488ddd64f9880d7ecd1bf2d091f97a86b3da9f7b10",
+    "me_rssm/sanity/gpmsf_s0_verdict.py": "02f942291d96cb34d00357c37af5cc33bbd3115f3c34c502436c9c9fba15435b",
+    "me_rssm/sanity/gpmsf_smoke_450iter.py": "90e29e6658f6d1df0fdaa56e284fb8a9df5a73adfe7d8bbc62747d85e00354a8",
+    "me_rssm/sanity/queue_gpmsf.sh": "132fb4bc3f08881db08b2dc85766d597fa2952f30271df92eeac084b486a390a",
+    "me_rssm/sanity/test_gpmsf_queue_checks.py": "53694a75a187bc9f2435f891c96ff6bf8a44462a7898a88c72d81a0d8af7a5c1",
+    "me_rssm/sanity/test_gpmsf_wiring.py": "4ed409900a52cafe8f472678e7c7f2e6b64cc557bc7af46dda3f27e5112f863b",
+    "mmdet3d/models/fusion_layers/geometry_multiscale_fusion.py": "84ff9fc67180ff37cb1f5c04767f427ef14ad8559f55a6a9162eb1022ccb9c06"
+  },
+  "task": "review/fix pending GP-MSF queue and configs"
+}

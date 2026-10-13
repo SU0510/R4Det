@@ -1,49 +1,65 @@
-"""Train-time wiring probe for the GP-MSF arm (prereg §5, real-data S0).
-
-Dumps the fusion's ``last_stats`` (radar-support rate, null weights, per-level
-weights) to ``gpmsf_wiring_stats.json`` in the work dir every ``interval``
-iterations, so the S0 verdict can show that the geometry path really ran with
-plausible source usage instead of silently degenerating into concat.
-
-The probe never raises: a broken diagnostic must not kill a training run.  The
-*hard* S0 evidence that the new path executed is the checkpoint (the residual
-projections must have left their zero initialisation).
-"""
+"""Required S0 diagnostics: rank-zero atomic writes, rank-wide sync proof."""
 import json
 import os
 
-from mmcv.runner import HOOKS, Hook
+import torch.distributed as dist
+from mmcv.runner import HOOKS, Hook, get_dist_info
+
+
+def atomic_json(path, payload):
+    temporary = path + '.tmp'
+    with open(temporary, 'w') as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
+    os.replace(temporary, path)
 
 
 @HOOKS.register_module()
 class GPMSFWiringStatsHook(Hook):
-    """Write ``cross_attention.last_stats`` to JSON every ``interval`` iters."""
-
     def __init__(self, interval=50, out='gpmsf_wiring_stats.json'):
-        self.interval = int(interval)
-        self.out = out
+        if int(interval) <= 0:
+            raise ValueError('S0 stats interval must be positive')
+        self.interval, self.out = int(interval), out
         self.records = []
 
     @staticmethod
     def _fusion(runner):
         model = getattr(runner.model, 'module', runner.model)
-        return getattr(model, 'cross_attention', None)
+        return model.cross_attention
+
+    def before_train_iter(self, runner):
+        # Sample current-frame stats; do not disable checkpointing. Avoid scalar
+        # GPU synchronisations on unsampled steps in the throughput comparison.
+        self._fusion(runner).collect_stats = (runner.iter + 1) % self.interval == 0
+
+    def _write(self, runner, **extra):
+        if get_dist_info()[0] != 0:
+            return
+        fusion = self._fusion(runner)
+        payload = dict(collect_stats=True, require_geo=fusion.require_geo,
+                       new_param_seed=fusion.new_param_seed,
+                       records=self.records, **extra)
+        atomic_json(os.path.join(runner.work_dir, self.out), payload)
 
     def after_train_iter(self, runner):
-        try:
-            if self.interval <= 0 or (runner.iter + 1) % self.interval:
-                return
-            fusion = self._fusion(runner)
-            last = getattr(fusion, 'last_stats', None)
-            self.records.append({'iter': int(runner.iter) + 1, 'stats': last})
-            payload = {
-                'collect_stats': bool(getattr(fusion, 'collect_stats', False)),
-                'require_geo': bool(getattr(fusion, 'require_geo', False)),
-                'new_param_seed': int(getattr(fusion, 'new_param_seed', -1)),
-                'records': self.records,
-            }
-            path = os.path.join(runner.work_dir, self.out)
-            with open(path, 'w') as f:
-                json.dump(payload, f, indent=2, sort_keys=True)
-        except Exception:  # noqa: BLE001 - diagnostics must never break training
+        if (runner.iter + 1) % self.interval:
             return
+        fusion = self._fusion(runner)
+        if fusion.last_stats is None:
+            raise RuntimeError('GP-MSF S0 geometry stats missing')
+        self.records.append(dict(iter=int(runner.iter) + 1, stats=fusion.last_stats))
+        self._write(runner)
+
+    def after_run(self, runner):
+        from me_rssm.sanity.paired_z_prediction import fingerprint
+        fusion = self._fusion(runner)
+        digest = fingerprint(dict(fusion.named_parameters()))
+        world = get_dist_info()[1]
+        digests = [None] * world
+        if dist.is_initialized():
+            dist.all_gather_object(digests, digest)
+        else:
+            digests[0] = digest
+        if len(set(digests)) != 1:
+            raise RuntimeError('GP-MSF parameters differ across DDP ranks')
+        self._write(runner, ddp_world_size=world, ddp_parameter_sha=digests,
+                    completed_iters=int(runner.iter))

@@ -226,7 +226,7 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
         self.grad_checkpoint = bool(grad_checkpoint)
         self.collect_stats = bool(collect_stats)
         self.new_param_seed = int(new_param_seed)
-        # Training-only hard guard against a silently unwired arm (the detector
+        # Train/eval hard guard against a silently unwired arm (the detector
         # must pass `geo`; otherwise this module would be the plain baseline).
         self.require_geo = bool(require_geo)
         self.last_stats = None
@@ -243,7 +243,7 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
         # proposal layers) must see the same RNG stream as the baseline arm.
         rng_state = torch.random.get_rng_state()
         try:
-            torch.manual_seed(self.new_param_seed)
+            torch.random.default_generator.manual_seed(self.new_param_seed)
             self._build_new_params(gamma_init=float(gamma_init),
                                    null_score_init=float(null_score_init))
         finally:
@@ -619,6 +619,7 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
         gamma = F.softplus(self.gamma_raw)
         m_r = []
         m_i = []
+        valid_r, valid_i = [], []
         stats = {'sup': 0.0, 'n_rad': 0, 'n_img': 0, 'null_rad': 0.0, 'null_img': 0.0,
                  'lv_rad': [0.0] * self.num_rad_levels,
                  'lv_img': [0.0] * self.image_num_levels}
@@ -660,7 +661,10 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
             keyed_r = self.key_rad[head](r_h)
             s_rad = (keyed_r * q_cam_h[:, head].unsqueeze(2)).sum(-1) / math.sqrt(dk)
             s_rad = s_rad + gamma * c_mean + b_geo[:, head]
-            sup = m_hk.to(dtype)
+            radar_valid = m_hk & rad_mask.any(dim=-1)
+            sup = radar_valid.to(dtype)
+            valid_r.append(radar_valid.any(dim=-1))
+            valid_i.append(ok_h.flatten(2).any(dim=-1))
             s_rad = torch.cat([s_rad, self.null_rad[head].expand(b, qc, 1)], dim=-1)
             mask_rad = torch.cat([sup, torch.ones((b, qc, 1), device=sup.device, dtype=torch.bool)], dim=-1)
             w_rad = _masked_softmax(s_rad, mask_rad, dim=-1)
@@ -679,19 +683,24 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
             m_i.append((w_img[..., :k * n_h].view(b, qc, k, n_h, 1) * i_h).sum(dim=(2, 3)))
 
             if self.collect_stats:
-                stats['sup'] += float(sup.mean())
-                stats['n_rad'] += 1
-                stats['n_img'] += 1
-                stats['null_rad'] += float(w_rad[..., -1].mean())
-                stats['null_img'] += float(w_img[..., -1].mean())
+                count = b * qc  # weight the smaller final query chunk correctly
+                stats['sup'] += float(sup.mean()) * count
+                stats['n_rad'] += count
+                stats['n_img'] += count
+                stats['null_rad'] += float(w_rad[..., -1].mean()) * count
+                stats['null_img'] += float(w_img[..., -1].mean()) * count
                 for lev in range(self.num_rad_levels):
-                    stats['lv_rad'][lev] += float(beta_rad[..., lev].mean())
+                    stats['lv_rad'][lev] += float(beta_rad[..., lev].mean()) * count
                 for s in range(self.image_num_levels):
-                    stats['lv_img'][s] += float(beta_img[..., s].mean())
+                    stats['lv_img'][s] += float(beta_img[..., s].mean()) * count
 
         m_r = torch.stack(m_r, dim=1).reshape(b, self.embed_dim, qc)
         m_i = torch.stack(m_i, dim=1).reshape(b, self.embed_dim, qc)
-        return m_r, m_i, (stats if self.collect_stats else None)
+        # Gate the complete projection, including learned bias.
+        # Empty evidence stays an exact identity after training too.
+        return (m_r, m_i, (stats if self.collect_stats else None),
+                torch.stack(valid_r).any(dim=0).unsqueeze(1),
+                torch.stack(valid_i).any(dim=0).unsqueeze(1))
 
     # ------------------------------------------------------------------
     # forward
@@ -703,7 +712,8 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
             img_bev (Tensor): camera LSS BEV ``(B, 256, 248, 216)`` (y, x).
             radar_bev (Tensor): radar SECONDFPN BEV ``(B, 384, 248, 216)``.
             geo (dict, optional): current-frame geometry sources.  ``None``
-                reproduces the plain ConcatConv path exactly.  Keys:
+                reproduces the plain ConcatConv path exactly only when
+                ``require_geo=False`` (in train and eval). Keys:
                 ``img_feats`` (>=3 native image levels, batch B*N),
                 ``num_views``, ``radar_levels`` (3 native SECOND levels),
                 ``depth`` (predicted depth distribution, B*N x D x h x w or
@@ -719,9 +729,9 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
         # forward's statistics -- the geo=None fallback included
         self.last_stats = None
         if geo is None:
-            if self.require_geo and self.training:
+            if self.require_geo:
                 raise RuntimeError(
-                    'GeometryPairedMultiScaleFusion got geo=None while training: the '
+                    'GeometryPairedMultiScaleFusion got geo=None: the '
                     'detector wiring did not deliver the geometry sources, so this arm '
                     'would silently degenerate into ConcatConvFusion. Pass `geo` or set '
                     'require_geo=False when the plain fallback is intended.')
@@ -749,10 +759,11 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
 
         chunk = self.query_chunk if self.query_chunk > 0 else q
         m_r_parts, m_i_parts = [], []
+        valid_r_parts, valid_i_parts = [], []
         agg = {'sup': 0.0, 'n_rad': 0, 'n_img': 0, 'null_rad': 0.0, 'null_img': 0.0,
                'lv_rad': [0.0] * self.num_rad_levels,
                'lv_img': [0.0] * self.image_num_levels}
-        use_ckpt = self.grad_checkpoint and self.training and not self.collect_stats
+        use_ckpt = self.grad_checkpoint and self.training and torch.is_grad_enabled()
         for start in range(0, q, chunk):
             end = min(start + chunk, q)
             args = (q_cam_f[..., start:end], q_rad_f[..., start:end], f_cat_f[..., start:end])
@@ -762,6 +773,8 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
                 out = self._chunk(*args, ctx, start)
             m_r_parts.append(out[0])
             m_i_parts.append(out[1])
+            valid_r_parts.append(out[3])
+            valid_i_parts.append(out[4])
             if self.collect_stats:
                 for key in ('sup', 'null_rad', 'null_img'):
                     agg[key] += out[2][key]
@@ -774,14 +787,21 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
 
         m_r = torch.cat(m_r_parts, dim=-1).view(b, self.embed_dim, h, w)
         m_i = torch.cat(m_i_parts, dim=-1).view(b, self.embed_dim, h, w)
-        c_new = img_bev + self.proj_r2c(m_r)
-        r_new = radar_bev + self.proj_i2r(m_i)
+        valid_r = torch.cat(valid_r_parts, dim=-1).view(b, 1, h, w)
+        valid_i = torch.cat(valid_i_parts, dim=-1).view(b, 1, h, w)
+        c_new = img_bev + self.proj_r2c(m_r) * valid_r.to(dtype)
+        r_new = radar_bev + self.proj_i2r(m_i) * valid_i.to(dtype)
 
         if self.collect_stats:
             nr = max(agg['n_rad'], 1)
             ni = max(agg['n_img'], 1)
             self.last_stats = {
                 'radar_support_rate': agg['sup'] / nr,
+                'native_radar_requires_grad': [x.requires_grad for x in geo['radar_levels']],
+                'native_image_requires_grad': [x.requires_grad for x in geo['img_feats'][:3]],
+                'native_radar_has_grad_fn': [x.grad_fn is not None for x in geo['radar_levels']],
+                'native_image_has_grad_fn': [x.grad_fn is not None for x in geo['img_feats'][:3]],
+                'checkpoint_active': bool(use_ckpt),
                 'null_rad_weight': agg['null_rad'] / nr,
                 'null_img_weight': agg['null_img'] / ni,
                 'level_rad_weight': [v / nr for v in agg['lv_rad']],

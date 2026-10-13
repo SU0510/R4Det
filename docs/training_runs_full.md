@@ -18342,3 +18342,105 @@ TODO 的工具项标完成，预测级归因与 z 修复总项保留未完成。
 **代价与边界**：该文件从未入库，git 无法恢复其内容；权威数据仍由已入库的完整 audit 提供，
 如需该早期推导可用同一规则重跑。**本次只做文件清理，未改任何代码、config、arm、队列或训练状态；
 A2-R 续训与 GP-MSF 队列不受影响。** 相关历史表述（设计文档 §12、本节 §91）已就地追加状态注记，不改写原文。
+
+
+## 98. GP-MSF 排队脚本/config 审查与 fail-closed 修复（2026-10-13）
+
+### 98.1 任务、统一口径与边界
+
+用户要求 review 正在排队的新 fusion 训练脚本与配置，不符合直接修改。
+**本节是代码/CPU/真实数据加载审查，不是训练结果**；GP-MSF 尚无 GPU forward、DDP smoke、正式 val。
+
+| 口径 | 本任务结果 |
+| --- | --- |
+| 区间均值 | **N/A**：GP-MSF ep12–16 尚无 val，实际 n=0；不能把 CPU 探针当 AP |
+| 全轮峰值（指标值+epoch） | **N/A（无任何 GP-MSF val epoch）** |
+| best saved（checkpoint 可用性） | **N/A（没有 GP-MSF 训练 checkpoint）** |
+| 完整逐 epoch / 逐类 / 窗口逐项 / 动力学 | **尚无训练曲线，不存在可填数值**；已给正式流程完整输出入口，后续不得用本节审查摘要替代训练记录 |
+
+A2-R 原有训练不是本任务的新 GP-MSF AP；没有抢 GPU 5/6/7，也未终止/重启现役 A2-R。
+
+### 98.2 配方与唯一变量核验
+
+- 正式 config：`me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py`；
+  对 B0 `configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr.py`，model 差异严格只有 **RCFusion**。
+- 非 model 配方全相同；仅 `_cfg_dir` / `custom_imports` 是 bootstrap 元数据差异，不是数据/solver 改动。
+- 原配方：**bs2/rank、3 rank、N4、梯度累积2、24e、AdamW lr=0.00015、betas=(.95,.99)、wd=.01、grad clip35**；
+  cosine24e、val每轮、checkpoint每2轮、seed0/deterministic、KL ep0–10 线性0→1、预训练 `checkpoints/pretrained_tj4d.pth`、不 resume。
+  RSSM/head/FG/损失/augmentation/图像分辨率均未改；不降 batch 或分辨率换取跑通。
+- GP-MSF 几何、三个 train-only height references、64d/4 heads/4 offsets、query_chunk4096、容量保持冻结：
+  新增 **177,726**，共享 fusion_conv **1,475,072**。本轮只补实现正确性与实验控制，未叠新学习模块。
+- 科学 hypothesis/消融仍沿预登记：新增同地址原生多尺度取证是否提高观测质量；
+  B0/同容量 residual conv/固定几何采样/完整 GP-MSF 对照仍待执行，不凭代码或通路有梯度宣称 AP/新颖性成立。
+
+### 98.3 发现的问题与修复
+
+| 缺陷（修复前） | 责任层与修复 |
+| --- | --- |
+| `collect_stats=True` 把 checkpoint 关闭；冒烟与正式训练执行图、显存不一致 | fusion 改为 training且grad enabled时 checkpoint，统计不禁用；每第50iter收集，按 query 数加权各 chunk（避免尾块占比虚高） |
+| M=0 但训练后 projection bias≠0，缺雷达仍改相机/全无效图像仍改雷达 | `_chunk` 返回实际支持/可见性 mask，对**完整投影（包括 bias）**逐 query gate；不删除 bias，不改冻结容量 |
+| `require_geo=True` 只保护 train，eval 未接线偷偷回退 baseline | train/eval 都严格报错；只有显式 require_geo=False 可做 concat 调试 |
+| 新模块只保存/恢复 CPU RNG，但 `torch.manual_seed` 还会重设 CUDA seed | 仅 seed CPU default generator，再恢复 CPU state；真实 GPU preflight 必查全 RNG，共用初值 CPU 实测一致 |
+| 多 rank 写同一个 stats JSON，异常被吞、缺文件仍 S0 PASS | rank0 原子 replace；必需诊断缺失报错；after_run 三 rank 对全部 fusion 参数 SHA 一致才完成；原生源 requires_grad 与 grad_fn 均需成立 |
+| GPU drain 超时/查询失败仍启动，450权重写出就继续、不等退出、旧文件复用 | query/超时 fail-closed；新 attempt 目录；自有 setsid 会话、wait exit=0、无遗留 ranks、phase/hash/新鲜度证明，不复用旧 checkpoint |
+| 只测 NaN/最后一行字段；Inf/早期消失字段/少一条projectionweight可 PASS | 全日志递归 numeric finite、checkpoint全部state finite，两条 weight及bias均必须存在且有限、两条weight都离零；实际checkpoint config/seed/ranks/配方校验 |
+| 用 C1/DC 不同RSSM资源中位数，超预算只告警 | 新增**同配方 B0 450iter**；两臂串行同 GPU5/6/7/bs/N4/累积/solver；排除前50iter，步时与峰值内存各≤1.20×，缺数据/超限均不放行24e |
+| 未做设计要求的真实 train/eval step0、augmentation、两步梯度就开训 | 新增可运行 `gpmsf_real_preflight.py`：同加载初值/RNG、真 train loss/head / val预测/head、真实meta独立投影、已非零bias下缺测/部分batch/无图像回退、两步梯度；先GPU5串行执行，不报AP |
+| ep6失败只flag；C1专用绝对阈值被套用；ep16后无条件DONE但24e仍跑 | GP-MSF专用完整窗口报告；ep1–6相对B0低超过2点操作性停并复查，不等同形态否定；ep16只报告，真正exit0+ep24权重+完整ep1–24后DONE |
+| 正式峰值/完整曲线可能依赖最新log或saved epoch | 合并所有run log中的val，保存全部epoch/指标、完整窗口逐项mean、所有val峰值“value+epoch”、独立best_saved；不套C1≥40门 |
+
+补充本机运行时事实：MMCV `IterBasedRunner.save_checkpoint` 在 post-step 自增前保存，因此 **iter_450.pth 的 meta.iter=449**，
+日志/after_run完成计数是450。已用本机 runner 的实际 CPU 保存调用验证，不误要求meta.iter=450。
+另外 runner.meta.config 在 cfg.seed赋值前取快照，seed须读checkpoint.meta.seed；实际配方比较先对两侧 compat_cfg 规范化。
+
+### 98.4 证据（红测试、绿测试、真实 CPU 数据）
+
+- 修复前两条回归均 **FAIL**：`test_stats_do_not_disable_training_checkpoint`（calls=[]）；
+  `test_trained_projection_bias_cannot_break_missing_evidence_fallback`（零雷达时 concat 前 camera 被 bias 改写）。
+- 修复后：`test_gpmsf_wiring.py` + `test_gpmsf_queue_checks.py` **37 passed**（10接线+27队列/证据回归）。
+  覆盖 NaN/±Inf/消失字段、完整窗口、所有日志并集、unsaved峰值、phase成功/旧产物/源漂移、
+  缺projectionweight/缺资源/缺探针、原始标定含第4列+BDA affine、真实BitmapMasks输入hash、
+  ep6 −2边界、1.20×时间/内存边界、本机MMCV零基checkpoint、rank0原子写与实际owned launcher退出/超时清理。
+  其中合成artifact测试只验证判定逻辑，**不是实际三rank训练证据**。
+- `gpmsf_cpu_checks.py` **10/10 PASS**：step0、RNG、六源索引/投影、两类缺测、两步梯度、chunk等价、有界、checkpoint反向。
+  Toy offsets 第一步grad=0，第二步grad≈3.39；keys≈0.872，level weights≈0.471；不外推真实任务效应。
+- 实际整模型 **CPU build/init_weights/load_checkpoint**：标准 B0 与 GP-MSF 的全部共用state SHA、CPU RNG SHA相同，projection仍零。
+  原生全配置 freeze_images/depths/radars 均False；训练KL scheduler保持0→1，真实preflight额外显式应用epoch0 hook。
+- 真实 CPU train loader（RepeatDataset共11412条，底层5706帧）：bs2/N4；batch SHA
+  `2c38a810654bf0e25c836d6b5b5bfb9877e538a888c5801e6c29cdf1c94607a1`。
+  真 val loader2040帧、bs1：batch SHA `4c47f049e8c6029e5d523357bfbfa73b79a6e86caabc4ac0370420f98ca928c3`。
+  训练标注 BitmapMasks 必须按 masks/height/width 实值 hash；未知对象不降成地址/pickle hash。
+- 实际 CPU train augmentation/meta对输入点独立重投影：两样本max error **0.000122/0.000183 px**；
+  val样本 **0.0 px**。本批次cam2img第4列为0，另有非零第4列/stereo单测；**未据此修改原BEV augmentation**。
+  实测当前TJ4D eval.py/kitti_dataset.py内容与train_vod将copy的两个TJ4D模板一致，未改现役源码。
+- `bash -n`、`py_compile`、新增/重写入口 `flake8 --select F,E9`、`git diff --check` 均通过。
+- 留存：`docs/gpmsf_queue_review_20261013.json`；完整本轮诊断日志复制至GP-MSF work-dir的 `review_20261013/`，不混入正式曲线。
+
+可复跑核心门（使用r4det环境，Hydra插件须禁用）：
+
+```bash
+rtk proxy env CUDA_VISIBLE_DEVICES=5 PYTHONWARNINGS=ignore /home/lurui/envs/miniforge3/envs/r4det/bin/python -m pytest -q -p no:hydra_pytest me_rssm/sanity/test_gpmsf_wiring.py me_rssm/sanity/test_gpmsf_queue_checks.py
+rtk proxy env CUDA_VISIBLE_DEVICES=5 PYTHONWARNINGS=ignore /home/lurui/envs/miniforge3/envs/r4det/bin/python me_rssm/sanity/gpmsf_cpu_checks.py
+rtk proxy bash -n me_rssm/sanity/queue_gpmsf.sh
+```
+
+### 98.5 运行事实与预登记勘误
+
+- 审查期间只暂停等待中的旧GP-MSF queue parent **2894048**（PGID同值）；必须终止此旧等待会话并重新armed，
+  **不能只SIGCONT旧bash**：已运行的bash不会自动换成修改后的执行逻辑。
+- A2-R queue **1354393**、trainer group **2081375** 始终保留；只CPU验证，不抢5/6/7训练槽位。
+- 新 queue、替换时间、共用CPU初值SHA与存档日志索引见本节审计JSON与下方收尾事实。
+- 预登记 `docs/gpmsf_prereg_20261013.md` **v1.1 首次GPU前勘误**：纠正资源软门/缺证据放行/epoch索引等控制缺陷，
+  AP −2止损和≥+2三seed候选目标不变；配置容量与科学假设不变，不看结果调阈值。
+
+收尾核验：**2026-10-13 12:00:26 UTC**，旧等待会话2894048已终止；新 queue **PID/PGID 3066450/3066450**，PPID=1，日志已写“armed (reviewed gates); waiting for A2-R”。
+A2-R 1354393/2081375仍运行；没有启动GP-MSF GPU任务。不是恢复旧bash，确实重新加载新版脚本。
+共用CPU初值SHA `a3d7fb5e75874f7b00c066aa5e6fee5a4ccdd529036710bcdc30f3156c49c675`；CPU RNG SHA `f4f52925e3d141bca12335335f85acfbdb0acbcdaedf59df31e73bf166105c41`。
+
+### 98.6 结论与下一步
+
+**原排队版不符合设计/记录要求；已修到可执行、可否证、失败不放行。CPU验收通过，不等于S0全通过。**
+
+接下来保持获批排序：A2-R完整收尾 → 真实GPU preflight → B0/GP-MSF两次450iter DDP → S0所有硬门 → 24e。
+任何数值/接线/缺测/同步/资源失败都先停并归因，不偷降batch、不调阈值、不用不同RSSM冒烟替代。
+成熟窗口只能先给单seed方向证据；逐类/coverage/FP-FN/借点率、控制臂、多seed及RSSM h/z排他仍待补，不能靠attention图或梯度证明AP改善。
