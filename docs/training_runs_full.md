@@ -18674,3 +18674,89 @@ GP-MSF phase `finished_at` 为 **2026-10-13 15:01:01 UTC**、exit_code=0；
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | GP-MSF | 400 | 10.38816 | 0.07264 | 17881 | 3.50074 | 16.60701 | 1.01770 | 0.98968 |
 | GP-MSF | 450 | 10.44194 | 0.06885 | 17881 | 3.51225 | 15.97781 | 1.01509 | 0.99097 |
+
+
+---
+
+## 100. GP-MSF 消息空间轴 P0 修复与漏检单测补齐（2026-10-13，纯 CPU，无新训练）
+
+### 100.1 范围、统一口径与运行事实
+
+- 本轮只改研究代码与 CPU 门禁三处，**未启动 GPU、未动队列、未改 config、未产生任何训练产物**：
+  `mmdet3d/models/fusion_layers/geometry_multiscale_fusion.py`（2 行修复）、
+  `me_rssm/sanity/gpmsf_cpu_checks.py`（新增 T11/T12/T13 及两个探针辅助函数）、
+  `me_rssm/sanity/test_gpmsf_wiring.py`（新增 1 项 P0 回归，队列 cheap gate 内）。
+- **主指标区间均值：N/A（ep12–16 未形成，val n=0）；全轮峰值：N/A（无 val，epoch=N/A）；
+  best saved val：N/A。** 本轮不是正式训练，也不是 S0 复跑，任何 AP/资源结论都不在此节。
+- 唯一研究变量（相对 §99 所记录的现役模块）：**消息合并的轴顺序**。容量（embed_dim64/4 heads/4 offsets/
+  3 image+3 radar levels/3 heights）、地址上界、null/fallback、RSSM/head、数据与损失全部不变。
+- 上游诊断与 CPU 反例来源：§99.3（`b1fe04d`）；本节只记录**写回源码**与**让门禁能测到它**。
+
+### 100.2 修复内容与影响面
+
+- `_chunk` 末尾，每个 head 的候选聚合结果是 `(B,qc,dk)`，`torch.stack(dim=1)` 后为 `(B,heads,qc,dk)`。
+  原实现直接 `reshape(b, embed_dim, qc)` 会把 **query 轴与 head 内 channel 轴按行主序交错**，
+  每条消息落到错误的 BEV cell，且错排模式**随 query_chunk 大小改变**。修复为先 `permute(0,1,3,2)`
+  合并 `(heads, dk)` 再 reshape，`M_R` 与 `M_I` 两处同时修：
+
+```python
+# 修复后（两方向）
+m_r = torch.stack(m_r, dim=1).permute(0, 1, 3, 2).reshape(b, self.embed_dim, qc)
+m_i = torch.stack(m_i, dim=1).permute(0, 1, 3, 2).reshape(b, self.embed_dim, qc)
+```
+
+- 影响面：仅该模块内部的消息布局。`valid_r/valid_i` 门控（整投影含 bias）、`fusion_conv`、
+  step-0 零初始化契约、`_build_context`/`_image_terms`/`require_geo` 均未改动；
+  模块对外 shape/接口不变，因此 config 与 DDP 侧无需改动。
+- 计算量不变：该修复只是轴置换，**不改变算子数量与内存量级**；§99 的 6.7145×/1.0544× 读数
+  仍属错排旧实现，成本拆分（用户执行顺序第 2 步）尚未开始。
+
+### 100.3 补齐的漏检单测（三项 toy 检查 + 一项队列门禁回归）
+
+原 `t8_chunking` 失效的根因写在了新检查的 docstring 里，防止再次退化：
+它用 `build(query_chunk=...)` 而**没有** `nonzero_out=True`，两条 output projection 仍是全零，
+于是断言实际只比较了共享 `ConcatConv` 通路 —— 错误消息被零残差完全遮住。
+
+| 新增检查 | 断言内容 | 修复前 | 修复后 |
+| --- | --- | --- | --- |
+| `t11_chunking_nonzero_residual` | 非零残差下 chunk0 vs chunk5 输出逐位相同；且先证明残差确实改变输出（>1e-3），否则检查为空转 | **FAIL** max&#124;Δ&#124;=0.5046627521514893 | PASS max&#124;Δ&#124;=0.0 |
+| `t12_direct_message_and_grad_chunking` | 用 hook 读**直接消息** M_R/M_I（零初始化遮罩下唯一可见处）＋全输出＋60 个参数梯度，chunk0 vs chunk7（24=3×7+3，含残尾块） | **FAIL** M_R max&#124;Δ&#124;=0.7068458795547485 | PASS 消息/输出逐位相同，梯度 max&#124;Δ&#124;=1.71e-07 ≤1e-6 |
+| `t13_message_spatial_impulse` | 雷达 level0 注入单点 impulse（地址塌到 cell 中心、null 推远），消息质量必须只亮**对应 2×2 query 块**，块外**恰好 0**，且 col2→col3 平移 +1 | **FAIL** 亮集覆盖整幅 6×4 画布 | PASS (2,2)→{(1,1),(1,2),(2,1),(2,2)}；col3→{(1,2),(1,3),(2,2),(2,3)}；块外 0.0 |
+| `test_chunked_residual_messages_are_not_scrambled`（pytest，队列 cheap gate） | 非零残差下 M_R/M_I/输出 chunk0 vs chunk5 必须 `torch.equal`，并显式断言消息非零、残差确实移动输出（反空转） | **FAIL** `M_R depends on the chunk size` | PASS |
+
+- 几何自检：BEV cell i 与 radar level-0 索引 i 同为 0.32 m 步长、共享 `radar_origin`，
+  故 bilinear 采样把一个 impulse（列/行 c）摊到 BEV 列/行 c−1 与 c —— T13 断言的 2×2 与 +1 平移
+  正是这条几何的可直接证伪形式，不是经验阈值。
+- 反空转设计：T11/T12/T13 与 pytest 回归都先验「消息非零 / 残差确实改变输出」，
+  避免再次出现「门禁恒真」的静默失效。
+
+### 100.4 红/绿证据与门禁运行事实
+
+- **有齿证明（红）**：临时把两行改回旧写法后重跑，`t11/t12/t13` **全部 FAIL**，而 **`t8` 仍 PASS** ——
+  这正是原漏检的机制性解释，不是巧合。pytest 回归同法复现红。
+- **绿灯（当前源码）**：
+  - `python me_rssm/sanity/gpmsf_cpu_checks.py` → **13/13 PASS**（原 10/10）。
+  - `python -m pytest -q -p no:hydra_pytest me_rssm/sanity/test_gpmsf_wiring.py` → **11 passed**（原 10）。
+  - `python -m pytest -q -p no:hydra_pytest me_rssm/sanity/test_gpmsf_queue_checks.py` → **27 passed**。
+    两者合跑 **38 passed**。
+- `flake8` 三个改动文件：除仓库既有的 `E501` 长行（无 `setup.cfg`/`.flake8`，全仓库普遍存在）外，
+  **无 F/E1/E2/E3/E7/E9 发现**。
+- 说明：`me_rssm/sanity/` **整目录** pytest 不可用（部分 `test_` 前缀脚本在 collection 期执行 argparse 并
+  触发 `SystemExit`），属仓库既有状况；本轮按单文件运行，未改动这些脚本。
+- T13 与 T12 的数值均在 CPU、`torch.cuda.is_initialized() == False` 下取得；本轮没有接触 GPU 5/6/7。
+
+### 100.5 归因、边界与下一步
+
+- **归因**：这是**接线缺陷**，不是机制、容量或超参问题。梯度可达、step-0 逐位等价、
+  `valid` 门控正确都**不能**证明空间对应正确 —— 原门禁把「零初始化输出投影」当成了安全网，
+  实际它只是把错误消息乘了 0。
+- 三条边界（必须随结论一起引用）：
+  1. 修复后的模块**尚未**在真实管线重跑 preflight/S0；本节**不能**当作资源门、机制或 AP 结论。
+  2. §99 的 6.7145× 时间与 1.0544× 内存来自**错排旧实现**；修复不改计算量，
+     但耗时归因（`train_vod.py:12` 全局 anomaly detection、小算子调度、采样反向、checkpoint 重算、同步）
+     必须在**新 attempt** 上重新拆分，不能沿用旧读数当正确实现的下界。
+  3. 错排期间产出的 `s0_20261013T132727Z_3066450`（含 `iter_450.pth`）**不得**用于任何正式训练或继续训练，
+     也不得与新 attempt 的读数合并统计。
+- **下一步（按用户既定顺序）**：② 同 batch/初值做成本拆分与机制保持提速（head 向量化、复用计算、受控 chunk 扫描，
+  不删 camera-only fallback、不用 GT 路由）；③ 补条件证据分层（有效 query / GT 目标与背景 / 类别-range 覆盖率、
+  条件 null、消息范数、借点率）；④ 新 attempt 重跑真实 GPU S0，仍守 **≤1.20×**，全门通过才考虑 24e。

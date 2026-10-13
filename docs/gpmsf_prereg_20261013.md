@@ -6,7 +6,7 @@
 - 冒烟配置：`me_rssm/sanity/gpmsf_smoke_450iter.py`
 - 运行目录（待建）：`/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0`
 - 设计（权威）：`docs/geometry_multiscale_fusion_design_20261013.md`
-- CPU 证据：`docs/geometry_multiscale_fusion_audit_20261013.json`；接线单测：`me_rssm/sanity/test_gpmsf_wiring.py`（原7项；§98 增至10项，连队列回归共37项 PASS）
+- CPU 证据：`docs/geometry_multiscale_fusion_audit_20261013.json`；接线单测：`me_rssm/sanity/test_gpmsf_wiring.py`（原7项；§98 增至10项，连队列回归共37项 PASS；**§100 增至11项，连队列回归共38项 PASS**）
 
 ## 首次 GPU 前勘误：v1.1（2026-10-13，训练记录 §98）
 
@@ -109,8 +109,8 @@ O_t   = fusion_conv(cat([C_new, R_new], dim=1))   # 与基线同一 conv、同�
 
 ## 5. S0 接线门（先冒烟，后判定）
 
-先跑便宜门：`test_gpmsf_wiring.py` + `test_gpmsf_queue_checks.py`（共37项，接线/配置/step-0/排队证据）与 `gpmsf_cpu_checks.py`（10 项，含
-分块等价、双向梯度、零雷达/无图像退化、边界）；任一失败 ⇒ 不启动冒烟。
+先跑便宜门：`test_gpmsf_wiring.py` + `test_gpmsf_queue_checks.py`（**共38项**，接线/配置/step-0/排队证据）与 `gpmsf_cpu_checks.py`（**13 项**，含
+非零残差分块等价、直接消息/梯度不变性、空间 impulse、双向梯度、零雷达/无图像退化、边界）；任一失败 ⇒ 不启动冒烟。
 
 | 判据 | 内容 | 判定器 |
 | --- | --- | --- |

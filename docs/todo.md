@@ -56,11 +56,14 @@
   - **完整方案状态：设计论证（§91）、CPU 数学/训练集几何核验（§91）、首版实现 + CPU 接线门禁 10/10（§95）、
     真实管线接线 + 排队审查/硬门修复 + CPU 回归（2026-10-13，§97/§98）均已完成；两臂450iter已完成，GPU S0资源硬门FAIL（6.7145×），正式训练与 AP 仍待完成。**
     **2026-10-13 首次冒烟诊断（§99）：确诊 query/channel 轴混排；原 chunk 等价测试被零残差遮蔽。此前 CPU PASS 不代表完整空间接线正确。**
+    **2026-10-13 修复（§100）：两方向消息合并已按 `permute(0,1,3,2)` 写回源码；新增 T11 非零残差 chunk 等价、T12 直接消息+梯度、
+    T13 空间 impulse 与 1 项 pytest 回归，均通过「先红后绿」有齿证明。CPU 门禁 **13/13**、wiring **11**/queue **27**（合跑 38 passed）。
+    修复未上 GPU：§99 的 6.7145×/1.0544× 属错排旧实现，须在新 attempt 重拆成本并重跑 S0；错排 `iter_450.pth` 禁用。**
     详见 `docs/geometry_multiscale_fusion_design_20261013.md`（GP-MSF：共享米制地址、原生 image/radar 多尺度配对取证、null+camera fallback、基线保持残差）；首轮保留现有 RSSM/head。
-    实现 `mmdet3d/models/fusion_layers/geometry_multiscale_fusion.py`（新增 0.1777 M 参数，step-0 与基线逐位一致），门禁 `me_rssm/sanity/gpmsf_cpu_checks.py`（10/10）；
+    实现 `mmdet3d/models/fusion_layers/geometry_multiscale_fusion.py`（新增 0.1777 M 参数，step-0 与基线逐位一致），门禁 `me_rssm/sanity/gpmsf_cpu_checks.py`（10/10；§100 修复后 **13/13**）；
     arm config `me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py`（差异键恰为 `['RCFusion']`），
     `R4Det.py` 已在融合调用点按 `accepts_geometry_sources` 传 `geo`（原生雷达三层在 SECONDFPN 前缓存），
-    单测 `me_rssm/sanity/test_gpmsf_wiring.py` 7/7；预登记 `docs/gpmsf_prereg_20261013.md` 已冻结。
+    单测 `me_rssm/sanity/test_gpmsf_wiring.py` 7/7（§98 增至 10，§100 增至 **11 passed**；连 queue 27 项合跑 **38 passed**）；预登记 `docs/gpmsf_prereg_20261013.md` 已冻结。
   - **已尝试且失败的相关项**：恢复预训练 `Cross_Modal_Fusion`（§40，至 ep16，成熟门 FAIL，Car/Ped 回退）。
     源码 `mmdet3d/models/necks/BEVCross_modal_attention.py:13–50` 实际是两路 avg/max 空间掩码互乘后 concat+conv，
     **不是**几何约束、多尺度可变形跨模态采样；不能只恢复它再称新方案，也不能据此否定完整候选。
@@ -70,7 +73,11 @@
     F1 仍是 ConcatConv+雷达可靠性门，实现与预登记保留、可随时重排。
   - [x] **首次 GPU 冒烟只读诊断与 CPU 反例取证（2026-10-13，§99）**：确认资源超限、复现消息轴混排；
     独立进程仅补转置后非零残差的 chunk 等价恢复。当前仓库研究代码未修、未停队列、未启动额外 GPU 任务。
-  - **下一步**：①保留当前冒烟证据，禁止直接开 24e；修 query/channel 轴及非零残差/梯度/空间 impulse 回归，不能先盲调 chunk；
+  - [x] **消息空间轴修复与漏检单测补齐（2026-10-13，§100，纯 CPU）**：写回两方向 `permute(0,1,3,2)`；
+    新增 T11/T12/T13（非零残差 chunk 等价、hook 读直接消息+60 参数梯度、雷达 impulse 只亮对应 2×2 且 +1 平移）
+    与 pytest 回归 `test_chunked_residual_messages_are_not_scrambled`；临时回退旧写法时四项**全部 FAIL**、`t8` 仍 PASS
+    （漏检机制解释），恢复后全绿。未启动 GPU；错排 checkpoint 已标记禁用。
+  - **下一步**：~~①修 query/channel 轴及非零残差/梯度/空间 impulse 回归~~（**已完成，§100**）；保留当前冒烟证据，禁止直接开 24e，不能先盲调 chunk；
     ②同 batch/初值拆解 anomaly、checkpoint、采样与同步开销，补有效 query/GT 区域条件 null、覆盖率和消息范数；
     ③仅做机制保持提速并重跑真实 GPU S0（GPU 5/6/7，同 batch/N4，显存与步时仍须 ≤1.2×），全门通过再跑 24e、ep6/ep12-16 判定；
     ④补 B0/同容量 conv/固定采样对照，正结果后再补原 BEV-only、单尺度、独立地址、null/fallback 消融。

@@ -12,7 +12,11 @@ time on the 450-iter smoke:
   * ``R4Det._gpmsf_geometry`` produces exactly the tensor contract the module
     asserts, and rejects inconsistent shapes;
   * the arm config *as frozen* builds and is bitwise identical to the same-state
-    ConcatConvFusion at step 0 on real-shaped tensors.
+    ConcatConvFusion at step 0 on real-shaped tensors;
+  * the chunked forward merges heads *without* interleaving the query and
+    channel axes: with the residual projections switched on, both direct
+    messages and the full output must be identical for one chunk and for a
+    ragged 5-cell chunk (P0 regression, see training_runs_full.md §100).
 """
 import os
 import sys
@@ -191,6 +195,41 @@ def test_frozen_config_is_step0_identical_to_baseline():
         got = arm(img, rad, geo=geo)
     assert torch.equal(ref, got), 'step-0 output is not bitwise the baseline'
     assert got.shape == (B, C_OUT, H_BEV, W_BEV)
+
+
+# ---------------------------------------------- message-axis regression (P0)
+def test_chunked_residual_messages_are_not_scrambled():
+    """P0: the head merge must not interleave the query and channel axes.
+
+    The original chunk check ran with both residual projections still at zero,
+    so it compared the shared concat path only and stayed green while
+    ``reshape`` (without swapping query/channel back) sent every message to the
+    wrong BEV cell, chunk-size dependent.  Here the projections are switched on
+    and the *direct* messages are read through a hook, because the zero-init
+    residual hides them in the output.
+    """
+    from me_rssm.sanity import gpmsf_cpu_checks as toy
+    img, radar = toy.bev_inputs()
+    geo = toy.make_geo()
+    full = toy.build(nonzero_out=True, query_chunk=0).eval()
+    chunked = toy.build(nonzero_out=True, query_chunk=5).eval()
+    chunked.load_state_dict(full.state_dict())
+    base = toy.build(query_chunk=0).eval()               # same weights, no residual
+    base.load_state_dict(full.state_dict())
+    with torch.no_grad():
+        for layer in (base.proj_r2c, base.proj_i2r):
+            layer.weight.zero_()
+            layer.bias.zero_()
+        m_full = toy._capture_messages(full, img, radar, geo)
+        m_chunk = toy._capture_messages(chunked, img, radar, geo)
+        out_base = base(img, radar, geo=geo)
+    assert float(m_full[0].abs().max()) > 1e-3, 'vacuous: M_R is identically zero'
+    assert float(m_full[1].abs().max()) > 1e-3, 'vacuous: M_I is identically zero'
+    assert float((m_full[2] - out_base).abs().max()) > 1e-3, \
+        'vacuous: the residual projections do not move the output'
+    assert torch.equal(m_full[0], m_chunk[0]), 'M_R depends on the chunk size'
+    assert torch.equal(m_full[1], m_chunk[1]), 'M_I depends on the chunk size'
+    assert torch.equal(m_full[2], m_chunk[2]), 'the output depends on the chunk size'
 
 
 def test_stats_do_not_disable_training_checkpoint(monkeypatch):

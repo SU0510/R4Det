@@ -694,8 +694,13 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
                 for s in range(self.image_num_levels):
                     stats['lv_img'][s] += float(beta_img[..., s].mean()) * count
 
-        m_r = torch.stack(m_r, dim=1).reshape(b, self.embed_dim, qc)
-        m_i = torch.stack(m_i, dim=1).reshape(b, self.embed_dim, qc)
+        # each list entry is (B, qc, dk): swap back to (B, dk, qc) *before*
+        # merging heads, otherwise the query and channel axes are interleaved
+        # by the reshape and every message lands at the wrong BEV cell
+        # (chunk-size dependent; proven by the chunked-vs-single-chunk
+        # counterexample in gpmsf_cpu_checks t11/t12).
+        m_r = torch.stack(m_r, dim=1).permute(0, 1, 3, 2).reshape(b, self.embed_dim, qc)
+        m_i = torch.stack(m_i, dim=1).permute(0, 1, 3, 2).reshape(b, self.embed_dim, qc)
         # Gate the complete projection, including learned bias.
         # Empty evidence stays an exact identity after training too.
         return (m_r, m_i, (stats if self.collect_stats else None),

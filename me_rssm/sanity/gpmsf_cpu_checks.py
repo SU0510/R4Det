@@ -13,9 +13,16 @@ same per-candidate softmax structure) on CPU.  Checks, in order:
   T5  zero radar support   -> M_R == 0 exactly, camera message still non-zero
   T6  all image projections invalid -> M_I == 0 exactly, radar message survives
   T7  two-step backward: output W first, then offsets/keys/level weights
-  T8  chunking equivalence
+  T8  chunking equivalence (zero-residual: proves the *shared* concat path is
+      chunk-safe; on its own it can hide a wrong message layout)
   T9  bounded address radius
   T10 forward/backward smoke, finite outputs, unchanged output shape
+  T11 chunk equivalence with the residual projections NON-zero (the
+      counterexample that catches an interleaved query/channel merge)
+  T12 direct M_R/M_I, full output and all parameter gradients invariant to the
+      chunk size (non-dividing chunks included)
+  T13 spatial impulse: a native radar impulse lights a local query block and
+      that block shifts by exactly the injected cell displacement
 
 Exit code 0 only if every check passes.  This is a CPU wiring gate, not a
 substitute for the real-data GPU S0 (design 10.3 item 7).
@@ -395,10 +402,178 @@ def t10_smoke():
     return f'checkpointed forward/backward finite; {len(list(fz.parameters()))} tensors, all with grad'
 
 
+def _capture_messages(fz, img, rad, geo, grad=False):
+    """Read the direct M_R / M_I, i.e. the inputs of the residual projections.
+
+    A forward hook is the only way to see them while ``proj_r2c`` / ``proj_i2r``
+    are still zero-initialised -- and it reads exactly the tensor the module
+    then reshapes to BEV, so a wrong query/channel merge shows up here first.
+    """
+    seen = {}
+
+    def _hook(tag):
+        def _fn(module, inputs, output):
+            seen[tag] = inputs[0].detach().clone()
+        return _fn
+
+    handles = [fz.proj_r2c.register_forward_hook(_hook('m_r')),
+               fz.proj_i2r.register_forward_hook(_hook('m_i'))]
+    try:
+        if grad:
+            out = fz(img, rad, geo=geo)
+        else:
+            with torch.no_grad():
+                out = fz(img, rad, geo=geo)
+    finally:
+        for handle in handles:
+            handle.remove()
+    return seen['m_r'], seen['m_i'], out
+
+
+def _dense_support_geo(geo):
+    """Point cloud with one echo per 0.16 m base cell (input-only probe).
+
+    Same augmented frame as the real points; it only opens the radar-valid
+    gate everywhere so an injected impulse cannot be masked by missing support.
+    """
+    hb, wb = TOY['radar_base_shape']
+    cell = TOY['radar_base_cell']
+    ox, oy = TOY['radar_origin']
+    xs = ox + (torch.arange(wb, dtype=torch.float32) + 0.5) * cell
+    ys = oy + (torch.arange(hb, dtype=torch.float32) + 0.5) * cell
+    gy, gx = torch.meshgrid(ys, xs)
+    n = hb * wb
+    pts = torch.stack([gx.reshape(-1), gy.reshape(-1), torch.zeros(n),
+                       torch.zeros(n), torch.ones(n)], dim=-1)
+    geo = dict(geo)
+    geo['points'] = [pts.clone() for _ in range(B)]
+    return geo
+
+
+def t11_chunking_nonzero_residual():
+    """Chunk equivalence with the residual projections actually switched on.
+
+    T8 cannot see a wrong message layout: with both projections at zero the
+    output is the shared concat path whatever the messages contain.
+    """
+    img, rad = bev_inputs()
+    geo = make_geo()
+    a = build(nonzero_out=True, query_chunk=0)
+    b = build(nonzero_out=True, query_chunk=5)
+    b.load_state_dict(a.state_dict())
+    a.eval()
+    b.eval()
+    with torch.no_grad():
+        out_a, out_b = a(img, rad, geo=geo), b(img, rad, geo=geo)
+        z = build(query_chunk=0)                     # same weights, zero residual
+        z.load_state_dict(a.state_dict())
+        for layer in (z.proj_r2c, z.proj_i2r):
+            layer.weight.zero_()
+            layer.bias.zero_()
+        out_z = z(img, rad, geo=geo)
+    resid = float((out_a - out_z).abs().max())
+    assert resid > 1e-3, f'residual projections are vacuous (max move {resid:.3e})'
+    delta = float((out_a - out_b).abs().max())
+    assert delta == 0.0, f'chunk-5 != chunk-0 with NON-zero residual: max|d|={delta}'
+    return (f'non-zero residual moves the output by {resid:.4f}; '
+            f'chunk-5 == chunk-0 exactly')
+
+
+def t12_direct_message_and_grad_chunking():
+    """M_R/M_I, the full output and every gradient must ignore the chunk size."""
+    img, rad = bev_inputs()
+    geo = make_geo()
+    a = build(nonzero_out=True, query_chunk=0)
+    b = build(nonzero_out=True, query_chunk=7)       # 24 = 3*7 + 3: ragged tail
+    b.load_state_dict(a.state_dict())
+    torch.manual_seed(11)
+    w = torch.randn(B, TOY['out_channels'], *TOY['bev_shape'])
+    msgs, outs, grads = {}, {}, {}
+    for tag, fz in (('full', a), ('chunk7', b)):
+        fz.train()
+        fz.zero_grad(set_to_none=True)
+        m_r, m_i, out = _capture_messages(fz, img, rad, geo, grad=True)
+        ((out * w).sum()).backward()
+        msgs[tag] = (m_r, m_i)
+        outs[tag] = out.detach().clone()
+        grads[tag] = {n: p.grad.detach().clone()
+                      for n, p in fz.named_parameters() if p.grad is not None}
+    peak_msg = max(float(msgs['full'][0].abs().max()),
+                   float(msgs['full'][1].abs().max()))
+    assert peak_msg > 1e-3, 'direct messages are identically zero (blind check)'
+    for name, idx in (('M_R', 0), ('M_I', 1)):
+        d = float((msgs['full'][idx] - msgs['chunk7'][idx]).abs().max())
+        assert d == 0.0, f'{name} depends on the chunk size: max|d|={d}'
+    d_out = float((outs['full'] - outs['chunk7']).abs().max())
+    assert d_out == 0.0, f'output depends on the chunk size: max|d|={d_out}'
+    assert set(grads['full']) == set(grads['chunk7']), 'gradient key sets differ'
+    assert len(grads['full']) > 50, f'only {len(grads["full"])} tensors got a gradient'
+    worst = max(float((grads['full'][n] - grads['chunk7'][n]).abs().max())
+                for n in grads['full'])
+    assert worst <= 1e-6, f'gradients depend on the chunk size: max|d|={worst}'
+    return (f'messages peak {peak_msg:.3f}, M_R/M_I+output identical, '
+            f'{len(grads["full"])} grads within {worst:.2e}')
+
+
+def t13_message_spatial_impulse():
+    """A radar impulse must light the matching BEV cells, not a scramble.
+
+    BEV cell i and radar level-0 index i sit at the same metric coordinate
+    (both stride 0.32 m), so bilinear sampling spreads one impulse in radar
+    column/row c onto BEV column/row c-1 and c.  Addresses are collapsed onto
+    the cell centre and the null candidate is pushed away, so the lit set must
+    be exactly that 2x2 block and must translate by +1 with the impulse.
+    """
+    fz = build(nonzero_out=True, query_chunk=0)
+    fz.eval()
+    img, rad = bev_inputs()
+    h, w = TOY['bev_shape']
+    geo = _dense_support_geo(make_geo())
+    with torch.no_grad():
+        for lv in geo['radar_levels']:
+            lv.zero_()
+        for layer in (fz.offset_conv[0], fz.offset_conv[2]):
+            layer.weight.zero_()
+            layer.bias.zero_()
+        # the level projections carry a constant bias, i.e. a spatially flat
+        # pseudo-echo; drop it so the lit set is attributable to the impulse
+        # (in the real arm it is the support gate that zeroes no-echo cells)
+        for layer in fz.proj_rad_levels:
+            layer.bias.zero_()
+        fz.null_rad.fill_(-50.0)
+    row, lit = 2, {}
+    for kx in (2, 3):
+        with torch.no_grad():
+            for lv in geo['radar_levels']:
+                lv.zero_()
+            geo['radar_levels'][0][:, :, row, kx] = 1.0
+            m_r, _, _ = _capture_messages(fz, img, rad, geo)
+        mass = m_r[0].abs().sum(dim=0)                            # (h, w)
+        assert float(mass.max()) > 1e-3, f'impulse in column {kx} produced no message'
+        expect = {(row - 1, kx - 1), (row - 1, kx), (row, kx - 1), (row, kx)}
+        got = {(i, j) for i in range(h) for j in range(w)
+               if float(mass[i, j]) > 1e-6}
+        assert got == expect, (f'impulse ({row},{kx}) lit {sorted(got)}, '
+                               f'expected {sorted(expect)}')
+        outside = mass.clone()
+        for i, j in expect:
+            outside[i, j] = 0.0
+        leak = float(outside.max())
+        assert leak == 0.0, f'mass leaked outside the 2x2 block: {leak:.3e}'
+        lit[kx] = got
+    shifted = {(i, j + 1) for i, j in lit[2]}
+    assert shifted == lit[3], (f'lit block did not translate by +1: '
+                               f'{sorted(shifted)} vs {sorted(lit[3])}')
+    return (f'impulse (row {row}, col 2) -> {sorted(lit[2])}; col 3 -> '
+            f'{sorted(lit[3])}; exact +1 shift, zero outside')
+
+
 def main():
     torch.manual_seed(0)
     tests = [t1_step0_identity, t2_rng_isolation, t3_index_bookkeeping, t4_image_path,
-             t5_zero_radar, t6_no_image, t7_two_step_grad, t8_chunking, t9_bounds, t10_smoke]
+             t5_zero_radar, t6_no_image, t7_two_step_grad, t8_chunking, t9_bounds, t10_smoke,
+             t11_chunking_nonzero_residual, t12_direct_message_and_grad_chunking,
+             t13_message_spatial_impulse]
     ok = 0
     for fn in tests:
         try:
