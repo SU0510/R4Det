@@ -173,6 +173,7 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
                  gamma_init=1.0,
                  null_score_init=0.0,
                  new_param_seed=20261013,
+                 require_geo=False,
                  collect_stats=False):
         super(GeometryPairedMultiScaleFusion, self).__init__(
             img_channels=img_channels,
@@ -225,6 +226,9 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
         self.grad_checkpoint = bool(grad_checkpoint)
         self.collect_stats = bool(collect_stats)
         self.new_param_seed = int(new_param_seed)
+        # Training-only hard guard against a silently unwired arm (the detector
+        # must pass `geo`; otherwise this module would be the plain baseline).
+        self.require_geo = bool(require_geo)
         self.last_stats = None
 
         self.register_buffer('offset_bounds',
@@ -711,7 +715,16 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
         Returns:
             Tensor: fused BEV ``(B, out_channels, 248, 216)``.
         """
+        # reset *before* any early return, so a probe can never read the previous
+        # forward's statistics -- the geo=None fallback included
+        self.last_stats = None
         if geo is None:
+            if self.require_geo and self.training:
+                raise RuntimeError(
+                    'GeometryPairedMultiScaleFusion got geo=None while training: the '
+                    'detector wiring did not deliver the geometry sources, so this arm '
+                    'would silently degenerate into ConcatConvFusion. Pass `geo` or set '
+                    'require_geo=False when the plain fallback is intended.')
             return self.fusion_conv(torch.cat([img_bev, radar_bev], dim=1))
 
         b, _, h, w = img_bev.shape
@@ -739,7 +752,6 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
         agg = {'sup': 0.0, 'n_rad': 0, 'n_img': 0, 'null_rad': 0.0, 'null_img': 0.0,
                'lv_rad': [0.0] * self.num_rad_levels,
                'lv_img': [0.0] * self.image_num_levels}
-        self.last_stats = None
         use_ckpt = self.grad_checkpoint and self.training and not self.collect_stats
         for start in range(0, q, chunk):
             end = min(start + chunk, q)

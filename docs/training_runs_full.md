@@ -18237,3 +18237,82 @@ anchor 增量，新增路径只改 cls。下一步必须直接评价实际候选
 执行入口、冻结判定与命令见契约 §6。建议 A2-R 正常结束后先留诊断窗口，F1 后置；
 **这只是建议，本轮未撤掉、延后或另建自动队列**。当前原 F1 队列仍可能自动启动，改排程须显式批准。
 TODO 的工具项标完成，预测级归因与 z 修复总项保留未完成。其他线程 GP-MSF 的未提交改动未编辑、未纳入本任务提交。
+
+## 97. GP-MSF 真实管线接线、接线单测与训练队列替换（2026-10-13，无新训练）
+
+### 97.1 范围、必填性能摘要与唯一变量
+
+本节承接 §95（GP-MSF 首版实现 + CPU 门禁），记录 2026-10-13 的三件事：
+**①`R4Det.py` 真实管线接线**、**②接线单测与判据脚本**、**③训练队列替换（F1 → GP-MSF）**。
+
+- **区间均值 N/A（本次无新增 val；默认 ep12–16 无新样本，n=0）**；**全轮峰值 N/A（本次无新增 val 指标/epoch）**；best saved N/A。
+- 本节所有数字都是 CPU 接线/环境核验值，不能当 AP 或成熟窗口；正式训练后必须按顶部统一口径补记。
+- **唯一变量（相对 `..._no2d_igdr` 主线）**：融合层类型，即 `RCFusion.type` 由 `ConcatConvFusion`
+  改为 `GeometryPairedMultiScaleFusion`；RSSM/head/anchor 头/优化器/数据/日程/batch/N4 全部不变，
+  差异键机械核验为 `['RCFusion']`（单测 + S0-2 双重断言）。
+- **本次仍未跑 GPU S0、未开训、无 AP**；GPU 5/6/7 自 2026-10-13 03:14 UTC 起由 A2-R 续训占用，未被打断。
+
+### 97.2 本次产物与运行事实
+
+| 项 | 内容 |
+|---|---|
+| 接线 | `mmdet3d/models/detectors/R4Det.py`：`extract_pts_feat` 在 **SECONDFPN 之前**缓存原生三层（`self._native_pts_levels`，`extract_feat` 入口复位、非 dict 分支清空）；融合调用点新增 `accepts_geometry_sources` 分支，仅该分支传 `geo=self._gpmsf_geometry(...)`，旧 `accepts_obs_valid`（F1）与两参数分支顺序不变 |
+| 几何打包 | `R4Det._gpmsf_geometry`：单 view/多 view 形状归一化 + 硬断言，返回 `img_feats(P2/P3/P4)`、`num_views`、`radar_levels`（原生 SECOND 三层）、`depth`、`lidar2img`、`post_rots(2×2)`、`post_trans(2)`、`ori_shape`、`bda`、`points`；每帧按调用传参，不共享全局总线 |
+| 模块加固 | `geometry_multiscale_fusion.py`：新增 `require_geo`（训练期未接线直接 RuntimeError，eval 保留 concat 回退）与 `last_stats` 每次 forward 复位（防探针读到上一帧陈旧统计） |
+| arm config | `me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py`（冻结几何拷贝自 resolved 主线配置） |
+| 冒烟配置 | `me_rssm/sanity/gpmsf_smoke_450iter.py`（450 iter、KL 日程保留、`collect_stats=True`、`GPMSFWiringStatsHook`） |
+| 探针 | `me_rssm/gpmsf_stats_hook.py`（每 50 iter 落 `gpmsf_wiring_stats.json`，异常不抛出） |
+| S0 判定器 | `me_rssm/sanity/gpmsf_s0_verdict.py`（S0-1…S0-4 + `S0_PERF_REVIEW`，仅读产物） |
+| 接线单测 | `me_rssm/sanity/test_gpmsf_wiring.py`（7 项） |
+| 预登记 | `docs/gpmsf_prereg_20261013.md`（冻结：公式、几何、S0 门、ep6/ep12-16 判据、四臂控制、止损） |
+| 队列 | `me_rssm/sanity/queue_gpmsf.sh`（替换 `queue_relfus.sh`，串在 A2-R 之后） |
+
+运行事实（2026-10-13，CPU）：
+
+- 接线单测 **7/7 PASS**（约 11 s）：仅 GP-MSF 声明 `accepts_geometry_sources`（基线/F1/C1 保持两参数调用）；
+  `require_geo` 未接线训练期报错、eval 回退可用；臂配置单变量 + 冻结几何；冒烟配置门禁；
+  `_gpmsf_geometry` 契约（含多 view 与形状拒绝）；**真实几何形状下 step-0 与同状态 `ConcatConvFusion` 逐位相同**。
+- CPU 门禁 `gpmsf_cpu_checks.py` 复跑仍 **10/10**（含 t4 图像回读 6.0e-08 / 三高度 2.4e-07、t8 分块等价、t10 全部 60 张量有梯度）。
+- 静态检查：`py_compile` 全部通过；按 `E1xx/E2xx/E3xx/E7xx/E9xx/F`（排除本仓库通行的 79 列 E501）对新文件 `flake8` 为空。
+
+### 97.3 接线阶段发现并修复的真实缺陷（机制归因）
+
+1. **pytest 在收集阶段整体失败（环境级，非测试逻辑）**：`hydra-core 1.4.0.dev6` 以 egg 安装并注册
+   pytest11 插件，其 import 链要求 `omegaconf.vendor.antlr4`，而当前安装的 omegaconf 已不再附带
+   `vendor` ⇒ 任何 `pytest` 调用都在收集前 `ModuleNotFoundError`，**7 项单测一项都跑不到**。
+   处理：统一以 `python -m pytest -q -p no:hydra_pytest ...` 调用并写入队列脚本（附原因注释）。
+   **若不定位这一层，会误判为「测试失败=实现失败」，实际是测试根本没执行。**
+2. **`_gpmsf_geometry` 对 `post_trans` 末维校验缺失**：`(B,N)` 前缀断言无法区分
+   `(B,1,3)`（合法单 view）与 `(B,1,5)`（错接线），错接线会静默通过并取前两维。
+   已补 `post_rots` 末两维 ∈ {(2,2),(3,3)}、`post_trans` 末维 ∈ {2,3} 的显式断言，由单测覆盖。
+
+（§95 已记录的 5 个模块实现缺陷——图像 v 方向按宽归一化、跨 view 计数聚合、offset 通道排布、
+浮点 mask、3-D 张量进 Conv2d——本轮未复发。）
+
+### 97.4 训练队列替换（用户 2026-10-13 指令：替换当前训练队列的 F1）
+
+- 指令：**替换当前训练队列的 F1，在当前训练结束后直接接上**。据此把等待中的 F1 队列
+  （`queue_relfus`，pid 1477871，自 2026-10-12 15:13 UTC 起 only armed、未产生任何训练产物）
+  连同其自有会话组一起终止（≈2026-10-13 10:12 UTC），原 F1 工作目录仅剩 `queue_relfus.log`（80 B）
+  与空的 `smoke_450iter/` ⇒ **没有丢失任何 val/权重/产物**；F1 实现与预登记全部保留，可随时重新排队。
+- 新队列 `queue_gpmsf.sh` 于 **2026-10-13 10:12:25 UTC armed**（pid 2894048，PPID=1、独立会话，已脱离父进程）。
+  串联逻辑：等待 A2-R 队列日志出现 `DONE` **且**进程表无 `semA2R_24e` → 接线单测 → 等 GPU 5-7 释放
+  → 450-iter 冒烟 → S0 判定（FAIL 则不启动 24e）→ 24e 训练 → ep6 任务损害检查 → ep12-16 成熟窗口报告。
+  运行目录 `/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0`，日志 `/tmp/gpmsf_24e.log`、
+  `/tmp/gpmsf_smoke.log`、`queue_gpmsf.log`。
+- 未触碰：A2-R 队列（pid 1354393）与 A2-R 续训（pid 2081375）。
+- A2-R 续训当前状态（截至本次核验，2026-10-13 ≈10:1x UTC，运行 6.9 h）：已出 **val ep12**，
+  还剩 ep13-16 四轮；续训段逐轮 vs B0：ep7 **+0.2855**、ep8 **−3.0564**、ep9 **−5.4383**、
+  ep10 **−1.0955**、ep11 **+0.4887**、ep12 **−0.9527**（完整口径与结论见 §88，本节不重复判定）。
+  ⇒ GP-MSF 预计在 A2-R 出 ep16 并写完报告后自动进入接线单测与冒烟。
+
+### 97.5 未完成与下一步
+
+**本轮完成的是「可运行 + 可判定 + 已排队」，不是机制成功**。未完成：
+
+1. 真实数据 GPU S0（同 batch/N4）：step-0 等价性、显存与步时 ≤1.2×（超出记 `S0_PERF_REVIEW` 人工复核）、
+   零雷达/全无效回退、地址有界、两步梯度、`proj_r2c/proj_i2r` 离零（S0-3）。
+2. S0 通过后的 24e 正式训练与 ep6/ep12-16 判定；四臂控制（B0 / 同容量 residual conv / 固定几何采样 / 完整 GP-MSF）尚未实现后三者。
+3. 高度 references 只有覆盖先验性；坡道、高 Truck、遮挡、以及「框内零雷达点 ≠ 周边无邻车回波」造成的
+   错误借点率，必须用离线诊断给出，不能靠 AP 反推。
+4. RSSM 主线关系仍需单独证明（2×2：`ConcatConv × GP-MSF` 对 `RSSM × 原 GRU`，比较 `(B−A)−(D−C)`）。

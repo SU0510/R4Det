@@ -56,17 +56,22 @@
 > **七项均未因本次文档更新获准实现/开训或新增排程**；A2-R 续训、F1 排队保留原审批。
 
 - [ ] **方向 1：几何约束、多尺度 deformable cross-modal fusion（优先）**
-  - **完整方案状态：设计论证（§91）、CPU 数学/训练集几何核验（§91）与首版实现 + CPU 接线门禁 10/10（2026-10-13，§95）均已完成；真实管线接线 / GPU S0 / 冻结预登记 / 训练仍待完成。**
+  - **完整方案状态：设计论证（§91）、CPU 数学/训练集几何核验（§91）、首版实现 + CPU 接线门禁 10/10（§95）、
+    真实管线接线 + 接线单测 7/7 + 冻结预登记（2026-10-13，§97）均已完成；GPU S0、正式训练与 AP 仍待完成。**
     详见 `docs/geometry_multiscale_fusion_design_20261013.md`（GP-MSF：共享米制地址、原生 image/radar 多尺度配对取证、null+camera fallback、基线保持残差）；首轮保留现有 RSSM/head。
-    实现 `mmdet3d/models/fusion_layers/geometry_multiscale_fusion.py`（新增 0.1777 M 参数，step-0 与基线逐位一致），门禁 `me_rssm/sanity/gpmsf_cpu_checks.py`；**尚无 config 引用、R4Det.py 未传 `geo`，模块当前不可达**。
+    实现 `mmdet3d/models/fusion_layers/geometry_multiscale_fusion.py`（新增 0.1777 M 参数，step-0 与基线逐位一致），门禁 `me_rssm/sanity/gpmsf_cpu_checks.py`（10/10）；
+    arm config `me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py`（差异键恰为 `['RCFusion']`），
+    `R4Det.py` 已在融合调用点按 `accepts_geometry_sources` 传 `geo`（原生雷达三层在 SECONDFPN 前缓存），
+    单测 `me_rssm/sanity/test_gpmsf_wiring.py` 7/7；预登记 `docs/gpmsf_prereg_20261013.md` 已冻结。
   - **已尝试且失败的相关项**：恢复预训练 `Cross_Modal_Fusion`（§40，至 ep16，成熟门 FAIL，Car/Ped 回退）。
     源码 `mmdet3d/models/necks/BEVCross_modal_attention.py:13–50` 实际是两路 avg/max 空间掩码互乘后 concat+conv，
     **不是**几何约束、多尺度可变形跨模态采样；不能只恢复它再称新方案，也不能据此否定完整候选。
   - **已有基础/正在排队的相关项**：同文件有 `Virtual_pts_BEV_Warp`、`RadarBEVFusionWithDCN`；
-    DCN+SE 堆叠不等同完整方案。F1 已实现并排队（§83/§85），仍是 ConcatConv+雷达可靠性门，**不计作方向 1 已开训**。
-  - **下一步**：①在 `R4Det.py` 融合调用点接入 `geo` 并加只切换 `RCFusion.type` 的 arm config；②真实数据 GPU S0（仅 GPU 5/6/7，同 batch/N4：step-0 等价、显存与步时 ≤1.2×、零雷达回退、地址有界、两步梯度）；
-    ③S0 通过后再冻结预登记，跑 B0/同容量 conv/固定采样/完整块，正结果后补原 BEV-only、单尺度、独立地址、null/fallback 消融。
-    实现完成不等于已开训；不改 A2-R/F1 排程。
+    DCN+SE 堆叠不等同完整方案。F1 已实现但**已让位**：2026-10-13 用户指令「替换当前训练队列的 F1，在当前训练结束后直接接上」，
+    GP-MSF 队列 `me_rssm/sanity/queue_gpmsf.sh` 已 armed（§97），F1 仍是 ConcatConv+雷达可靠性门，实现与预登记保留、可随时重排。
+  - **下一步**：①真实数据 GPU S0（仅 GPU 5/6/7，同 batch/N4：step-0 等价、显存与步时 ≤1.2×、零雷达回退、地址有界、两步梯度、投影离零）；
+    ②S0 通过后跑 24e 并做 ep6/ep12-16 判定；③补 B0/同容量 conv/固定采样对照，正结果后再补原 BEV-only、单尺度、独立地址、null/fallback 消融。
+    实现完成不等于已开训；A2-R 续训未受影响。
 
 - [ ] **方向 2：对象 query 驱动的多模态检测器（与方向 4 二选一）**
   - **状态：已有相关 detector/采样代码；当前 RSSM 主线尚未接入，未发现对应训练归档。**
@@ -136,7 +141,10 @@
 - [ ] **早停检验（可选，§81.5）**：若要检验早停本身，需另立训练时长验证臂；未立项。
 - [ ] **z/AP 预测级归因待补（§94/§96，GPU 执行未排程）**：四臂 runner 已完成（reference / identity / residual_off / 当前帧 prior_only），11 条 CPU 单测、真实 val batch/ep6 checkpoint/head 预检通过；`me_rssm/sanity/paired_z_prediction.py` 保存真实 AP、部署 top-k 候选与隔离指纹，执行与判定契约见 `docs/rssm_z_evidence_contract_20261013.md`。
   - 未完成：真实管线 GPU 冒烟、ep6/预登记 ep16 full-val、TP/FP/IoU/PR 分解、同容量确定性配对训练。工具就绪不等于归因完成；direct residual off 不等于移除 z 全路径，prior_only 也不等于无当前观测；随机必要性仍需匹配训练。
-  - 排程建议：A2-R 正常完成后先诊断、F1 后置；本轮未调整原 F1 队列，未自动启动诊断。
+  - 排程建议（§96 当时）：A2-R 正常完成后先诊断、F1 后置；当时未调整原 F1 队列，未自动启动诊断。
+    **后续状态（2026-10-13 10:12 UTC，§97）**：按用户指令已把等待中的 F1 队列替换为 GP-MSF
+    （`me_rssm/sanity/queue_gpmsf.sh` armed），A2-R 结束后自动启动的是 GP-MSF 单测/冒烟/训练，**不再会启动 F1**；
+    本 z 工具链仍未被自动排程。
 - [ ] **z_t 失效总目标未解决**：冻结诊断（§49）已完成；18e 对照、低维瓶颈、路线 A/B/C、MAI、MCI、DC 系列
   均已归档（见文末「一、历史实验归档」）。**2026-10-13 状态复核（§93）：A2-R ep6 机制门未全过；ep11 iter350 的 KL 元素 clamped 99.54%，只代表局部元素梯度，多 seed/成熟 z 因果与 KL 改造仍未闭环。**尚存三条后置设计项（原文保留）：
   - ④ KL 口径改动**仍后置**：待结构有效性过 ep6 门控后再做 stop-gradient 拆分（`L_dyn=KL(sg(q)||p)`、`L_rep=KL(q||sg(p))`，建议 `beta_dyn=1.0`、`beta_rep=0.1`）与按 cell 聚合的 free-bits（沿 channel 求和后 ~1.0 nat/cell，先固定不退火）。**不要在缺重建项时单独调 free-bits。**
@@ -176,6 +184,22 @@
 - 状态边界：**无 config 引用、`R4Det.py` 未传 `geo`（模块当前不可达）、无 GPU S0/预登记/训练、无 AP**；A2-R 续训与 F1 排队未动。
 - 记录：`docs/training_runs_full.md` §95。
 
+### 方向 1：GP-MSF 真实管线接线、单测与训练队列替换（2026-10-13，§97）
+
+- [x] `R4Det.py` 真实接线：`extract_pts_feat` 在 SECONDFPN 前缓存原生雷达三层；融合调用点新增
+  `accepts_geometry_sources` 分支传 `geo=self._gpmsf_geometry(...)`，旧 `accepts_obs_valid`（F1）与两参数分支不变；
+  `require_geo` 训练期未接线直接报错，eval 保留 concat 回退；`last_stats` 每次 forward 复位。
+- [x] arm config `TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py`（差异键恰为 `['RCFusion']`）、
+  冒烟 `gpmsf_smoke_450iter.py`、探针 `gpmsf_stats_hook.py`、S0 判定器 `gpmsf_s0_verdict.py`。
+- [x] 接线单测 `me_rssm/sanity/test_gpmsf_wiring.py` **7/7 PASS**（opt-in 声明、`require_geo`、单变量配置、冒烟门禁、
+  `geo` 契约含多 view 与形状拒绝、真实形状下 step-0 逐位等价）；CPU 门禁复跑 **10/10**。
+- [x] 定位并绕过环境级 pytest 故障：`hydra-core` egg 的 pytest11 插件要求已不存在的 `omegaconf.vendor`，
+  必须用 `-p no:hydra_pytest`（否则单测根本没执行）；并补上 `_gpmsf_geometry` 的 `post_rots`/`post_trans` 末维断言。
+- [x] 冻结预登记 `docs/gpmsf_prereg_20261013.md`（公式/几何/S0 门/ep6 与 ep12-16 判据/四臂控制/止损）。
+- [x] **队列替换（用户指令）**：终止等待中的 F1 队列（pid 1477871，仅有 armed 日志、无任何训练产物），
+  GP-MSF 队列 `me_rssm/sanity/queue_gpmsf.sh` 于 2026-10-13 10:12:25 UTC armed（pid 2894048，独立会话），
+  串在 A2-R 续训之后；A2-R 队列与训练未被触碰。F1 实现/预登记保留，可随时重排。
+- 状态边界：**无 GPU S0、无训练、无 AP**；GPU 5/6/7 仍由 A2-R 占用。记录：`docs/training_runs_full.md` §97。
 > 归档区（2026-10-13 整理）：原正文中的已完成 / 已收尾条目按主题移入此处，保留移入时的原文与出处；
 > 每条后的「后续」行为 2026-10-13 整理时补注的状态收敛说明，不改变历史判定。
 

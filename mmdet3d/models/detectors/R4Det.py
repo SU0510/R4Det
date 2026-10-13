@@ -264,6 +264,9 @@ class R4Det(MVXFasterRCNN):
         self.ped_stage2_delta = ped_stage2_delta
         self.ped_highres_stage = ped_highres_stage
         self._highres_radar_scatter = None
+        # native SECOND levels of the *current* frame, cached for an opt-in
+        # fusion that advertises ``accepts_geometry_sources`` (GP-MSF)
+        self._native_pts_levels = None
 
         # other papa for convenience
         self.xbound = self.grid_config['xbound']
@@ -718,6 +721,59 @@ class R4Det(MVXFasterRCNN):
 
         return ref_points, voxel_coords
 
+    def _gpmsf_geometry(self, img_feats, depth, lidar2img, post_rots, post_trans,
+                        bda, img_metas, points):
+        """Per-call geometry sources for a fusion advertising GP-MSF support.
+
+        Pre-registration: ``docs/gpmsf_prereg_20261013.md`` §2.  Every tensor
+        belongs to the *current* frame (no GT, no cached other-frame buffer).
+        Shapes are asserted here so a mis-wiring fails loudly on the first
+        iteration instead of quietly degenerating into the concat baseline.
+        """
+        levels = self._native_pts_levels
+        if levels is None:
+            raise RuntimeError(
+                '_gpmsf_geometry called without cached native radar levels; '
+                'extract_pts_feat must run before the fusion in the same step')
+        if lidar2img.dim() == 3:                     # (B,4,4) single-view data
+            lidar2img = lidar2img.unsqueeze(1)
+        b, n = int(lidar2img.shape[0]), int(lidar2img.shape[1])
+        if post_rots.dim() == 3:                     # (B,3,3) single-view data
+            post_rots = post_rots.unsqueeze(1)
+        if post_trans.dim() == 2:                    # (B,3) single-view data
+            post_trans = post_trans.unsqueeze(1)
+        assert tuple(post_rots.shape[:2]) == (b, n), (
+            f'post_rots {tuple(post_rots.shape[:2])} != (B,N) {(b, n)}')
+        assert tuple(post_trans.shape[:2]) == (b, n), (
+            f'post_trans {tuple(post_trans.shape[:2])} != (B,N) {(b, n)}')
+        # the (B,N) prefix is ambiguous on its own: a (B,1,5) tensor also
+        # matches it while carrying the wrong per-view layout, so pin the
+        # 2x2/3x3 (post_rots) and 2/3 (post_trans) trailing dims explicitly.
+        assert tuple(post_rots.shape[-2:]) in ((2, 2), (3, 3)), (
+            f'post_rots {tuple(post_rots.shape)} is not (...,2,2)/(...,3,3)')
+        assert post_trans.shape[-1] in (2, 3), (
+            f'post_trans {tuple(post_trans.shape)} is not (...,2)/(...,3)')
+        assert bda.dim() == 3 and bda.shape[0] == b, (
+            f'bda {tuple(bda.shape)} is not (B,4,4) for B={b}')
+        assert len(img_feats) >= 3, f'need >=3 image levels, got {len(img_feats)}'
+        assert img_feats[0].shape[0] == b * n, (
+            f'image level batch {img_feats[0].shape[0]} != B*N {b * n}')
+        assert len(levels) == 3, f'need 3 native radar levels, got {len(levels)}'
+        assert depth is None or depth.shape[0] == b * n, (
+            'predicted depth batch does not match B*N')
+        return dict(
+            img_feats=list(img_feats[:3]),           # P2/P3/P4 (stride 4/8/16)
+            num_views=n,
+            radar_levels=list(levels),               # native SECOND levels
+            depth=depth,                             # predicted depth distribution
+            lidar2img=lidar2img,                     # (B,N,4,4) augmented->img
+            post_rots=post_rots[..., :2, :2].contiguous(),
+            post_trans=post_trans[..., :2].contiguous(),
+            ori_shape=[tuple(meta['ori_shape']) for meta in img_metas],
+            bda=bda,                                 # (B,4,4) BEV augmentation
+            points=points,                           # input radar xyz (aug frame)
+        )
+
     def extract_pts_feat(self, pts, img_metas):
         """Extract features of raw points."""
         if not self.with_pts_backbone: return None
@@ -729,6 +785,9 @@ class R4Det(MVXFasterRCNN):
         #batch_size = coors[-1, 0].item() + 1
         x = self._highres_radar_scatter
         x = self.pts_backbone(x)
+        # keep the native multi-level radar features (0.32/0.64/1.28 m) before
+        # SECONDFPN fuses and upsamples them; GP-MSF reads these directly
+        self._native_pts_levels = list(x) if isinstance(x, (list, tuple)) else [x]
         if self.with_pts_neck:
             x = self.pts_neck(x)
         return x
@@ -792,6 +851,7 @@ class R4Det(MVXFasterRCNN):
         current-frame losses, so history frames skip it.
         """
         self._highres_radar_scatter = None
+        self._native_pts_levels = None
         # preparation of camera-geo-aware input
         if img.dim() == 3 and img.size(0) == 3: img = img.unsqueeze(0)
         B, C, H, W = img.shape
@@ -889,7 +949,25 @@ class R4Det(MVXFasterRCNN):
         step4_time = end_time - start_time
 
         start_time = time.time()
-        if getattr(self.cross_attention, 'accepts_obs_valid', False):
+        if getattr(self.cross_attention, 'accepts_geometry_sources', False):
+            # Geometry-paired multi-scale fusion (GP-MSF, prereg
+            # docs/gpmsf_prereg_20261013.md): opt-in only, so every other arm
+            # keeps the exact old two-argument signature and behaviour.  The
+            # fusion gets this frame's native image/radar levels, predicted
+            # depth and calibration through `geo` -- never GT, never another
+            # frame's tensors.
+            bev_feats = self.cross_attention(
+                img_bev_feats, pts_bev_feats,
+                geo=self._gpmsf_geometry(
+                    img_feats=img_feats,
+                    depth=depth if self.lift_method == 'LSS' else None,
+                    lidar2img=final_lidar2img,
+                    post_rots=post_rots,
+                    post_trans=post_trans,
+                    bda=bda,
+                    img_metas=img_metas,
+                    points=points))
+        elif getattr(self.cross_attention, 'accepts_obs_valid', False):
             # Reliability-gated front-end fusion (prereg
             # docs/rssm_reliability_fusion_prereg_20261012.md): opt-in only, so
             # every other arm keeps the exact old two-argument signature and
@@ -1031,6 +1109,7 @@ class R4Det(MVXFasterRCNN):
                 rssm_cls_logit_residual = prepare(is_valid_mask)
         if feat_or_dict != 1:
             self._highres_radar_scatter = None
+            self._native_pts_levels = None
         step_all_time = step1_time + step2_time + step3_time + step4_time + step5_time + step6_time
         self.recording_fps(step_all_time)
 
