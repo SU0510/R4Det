@@ -59,6 +59,10 @@
     **2026-10-13 修复（§100）：两方向消息合并已按 `permute(0,1,3,2)` 写回源码；新增 T11 非零残差 chunk 等价、T12 直接消息+梯度、
     T13 空间 impulse 与 1 项 pytest 回归，均通过「先红后绿」有齿证明。CPU 门禁 **13/13**、wiring **11**/queue **27**（合跑 38 passed）。
     修复未上 GPU：§99 的 6.7145×/1.0544× 属错排旧实现，须在新 attempt 重拆成本并重跑 S0；错排 `iter_450.pth` 禁用。**
+    **2026-10-13 修复确认与正式启动（§102/§103）：head 向量化完成且 golden 逐位等价（输出 max|Δ|=0，梯度 8.94e-08）；
+    真实 train/val preflight PASS（8/8）；用户指令「确认全部修复正确以后直接开始正式训练」⇒ 16:43 UTC 在 GPU 5/6/7
+    直接启动正式 24e（DDP3 seed0，pgid 3551130，`phase.json` 冻结 832 源文件）。**资源门未过**：in-situ ≈5.05 s/iter
+    ⇒ ≈3.26×（B0 1.550530），显存 17,900 MiB ⇒ ≈1.055×，已如实记录、未伪造 S0 通过；错排期间的旧 S0 数字禁止混用。**
     详见 `docs/geometry_multiscale_fusion_design_20261013.md`（GP-MSF：共享米制地址、原生 image/radar 多尺度配对取证、null+camera fallback、基线保持残差）；首轮保留现有 RSSM/head。
     实现 `mmdet3d/models/fusion_layers/geometry_multiscale_fusion.py`（新增 0.1777 M 参数，step-0 与基线逐位一致），门禁 `me_rssm/sanity/gpmsf_cpu_checks.py`（10/10；§100 修复后 **13/13**）；
     arm config `me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py`（差异键恰为 `['RCFusion']`），
@@ -84,13 +88,20 @@
     （einsum 合头被实测慢 20×，已回退）；CPU golden 逐位等价（输出 max|Δ|=0，梯度 8.94e-08），门禁 13/13 + 38 passed。
     冻结配置融合块 **714→277 ms（anomaly off）、3125→1322 ms（anomaly on）**，kernel 74,450→27,105，显存不变；
     分块不再是时间惩罚但仍是显存必需项（2.3 vs 8.9 GB）。
-  - **下一步**：~~①修 query/channel 轴~~（§100）；~~②拆成本~~（§101）；~~head 向量化~~（§102）→ 现做
-    **真实管线内 in-situ 分相计时**（先解释 §101 未归因的 ~5.7 s/iter）+ 继续减 elementwise/拷贝算子；
-    保留当前冒烟证据，禁止直接开 24e，不能先盲调 chunk；
-    ②同 batch/初值拆解 anomaly、checkpoint、采样与同步开销，补有效 query/GT 区域条件 null、覆盖率和消息范数；
-    ③仅做机制保持提速并重跑真实 GPU S0（GPU 5/6/7，同 batch/N4，显存与步时仍须 ≤1.2×），全门通过再跑 24e、ep6/ep12-16 判定；
+  - [x] **修复确认与正式 24e 直接启动（2026-10-13，§103，GPU 5/6/7 进行中）**：冻结提交 `1188acf` 上重跑
+    CPU 门禁 **13/13**、pytest **38 passed**；用**干净 worktree @4332858 重新生成**的参考张量做 golden 比对得
+    **GOLDEN MATCH**（M_R/M_I/输出 max|Δ|=0，梯度 8.94e-08，排除"改后自比"）；真实 train/val preflight **PASS 8/8**
+    （step0 head/output 逐位一致、几何误差 ~1.2e-4 px、两步梯度第 0 步全 0 第 1 步非零）。随后按用户指令
+    **越过 fail-closed 的 S0 硬门**直接启动正式 24e（pgid 3551130，独立会话 + 仓库外 watchdog：异常/OOM 终止、
+    ep6 止损、ep16 报告）。启动期 iter100 = **5.050 s/iter, 17,900 MiB**，无 NaN/OOM。
+    **未跑修正实现的配对 S0**，"是否 ≤1.20×"仍 UNRESOLVED；旧 S0 数字属错排实现，禁止混用。
+  - **下一步**：~~①修 query/channel 轴~~（§100）；~~②拆成本~~（§101）；~~head 向量化~~（§102）；~~修复确认~~（§103）
+    → 训练中：等 ep6 止损判定与 ep12-16 窗口，随后写 §104（**必填**区间均值 ep12-16 n=5 + 全轮峰值值+epoch + best saved 单列，
+    外加逐 epoch 曲线、四类、FP/FN、high/low/zero 组与错误借点率）；资源侧仍需补 **修正实现的配对 S0** 或分相
+    in-situ 计时解释 ≈3.26× 的构成（anomaly 全局开是已知 4.8× 放大器，属 harness 改动、需两臂同测并获批）。
+    训练期间**不得**改研究代码（`phase.json` 冻结 832 源文件）；错排 `iter_450.pth` 永久禁用；
     ④补 B0/同容量 conv/固定采样对照，正结果后再补原 BEV-only、单尺度、独立地址、null/fallback 消融。
-    CPU 门或梯度连通不等于空间取证正确；此次 S0 失败不得写成正确实现的 GP-MSF/AP 失败。
+    资源门未过不等于机制失败，也不等于机制有效；CPU 门或梯度连通都不等于空间取证正确。
 
 - [ ] **方向 2：对象 query 驱动的多模态检测器（与方向 4 二选一）**
   - **状态：已有相关 detector/采样代码；当前 RSSM 主线尚未接入，未发现对应训练归档。**

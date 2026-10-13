@@ -18895,3 +18895,81 @@ kernel 数确实从 74,450 降到 21,029，但 **GEMM 时间反而爆炸**（A/B
   ② 继续在 (chunk×head) 之外的 elementwise/拷贝上减算子（不删 fallback、不用 GT 路由）；
   ③ 之后才做条件证据分层（用户顺序 ③）与新 attempt S0（④），仍守 ≤1.20×。
 - 修复与提速都**未上 GPU 训练**；错排期间的旧 checkpoint 仍禁用。
+
+---
+
+## 103. GP-MSF 修复确认与正式 24e 启动（2026-10-13，GPU 5/6/7，DDP3 seed0，进行中）
+
+### 103.1 范围、统一口径与唯一变量
+
+- 用户指令："确认全部修复正确以后直接开始正式训练" ⇒ 本节先给出**冻结代码上的正确性复核**，
+  再记录**正式 24e 的启动**。这不是结果节：ep12-16 窗口尚未形成。
+- **唯一变量（对 B0 主线 `fgfull_N4_no2d_igdr_2x4_24e_seed0` 而言）**：前端 fusion 由
+  `ConcatConv(camera,radar)` 换成 GP-MSF 残差取证块；backbone、head、`temporal_fusion` RSSM、
+  KL 调度、数据、优化器、batch/N4、epoch 数、seed、`--deterministic`、DDP3 **全部不变**。
+  config：`me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py`。
+- **主指标区间均值：N/A（ep12–16 未到，val n=0，跨度/样本数不存在）；全轮峰值：N/A（无 val，epoch=N/A）；
+  best saved val：N/A。** 本节所有数字均为启动期事实，**不得**被读成 AP 或资源门结论。
+- 冻结实现：`1188acf`（含 `f505d4e` 轴合并修复 + `4332858` 成本拆分 + `1188acf` head 向量化）。
+
+### 103.2 正确性复核（冻结提交 `1188acf`，工作区 clean）
+
+| 门禁 | 结果 | 说明 |
+| --- | --- | --- |
+| `gpmsf_cpu_checks.py` | **13/13 PASS** | 含 t11 非零残差分块等价、t12 直接消息+60 参数梯度分块（ragged chunk7）、t13 空间 impulse |
+| `test_gpmsf_wiring.py` + `test_gpmsf_queue_checks.py` | **38 passed** | 队列门禁回归（含 `test_chunked_residual_messages_are_not_scrambled`） |
+| `gpmsf_golden_compare.py`（对**干净 worktree @4332858** 的保存参考） | **GOLDEN MATCH** | M_R/M_I/输出 **max\|Δ\|=0.0**（full 与 chunk5+ckpt 两臂）；60 参数梯度 max\|Δ\|=**8.94e-08**；参数名/顺序与 `last_stats` 一致 |
+| `gpmsf_real_preflight.py`（真实 train/val 管线，GPU 5） | **status=PASS** | 8/8 check 为 True：`common_initial_state`、`initial_rng`、`eval_step0_head`、`eval_step0_outputs`、`eval_input_unchanged`、`invalid_image_identity`、`mixed_batch_identity`、`native_source_gradients`；几何重投影误差 ~1.2e-4 px；两步梯度**第 0 步全 0、第 1 步非零** |
+
+- 本次等价性复核**不是复述旧结论**：参考张量在预向量化提交 `4332858` 的独立 worktree 内**重新生成**
+  （`/tmp/ref_prevec_4332858.pt`），再在当前工作区 `compare`，因此排除"用改后代码自比"的循环论证。
+- 证据：`/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/s0_fixed_20261013T164148Z_3549897/preflight/real_preflight.json`。
+
+### 103.3 启动事实与资源状态（诚实口径）
+
+- 启动命令（与队列一致的口径）：
+  ```
+  CUDA_VISIBLE_DEVICES=5,6,7 bash tools/dist_train.sh <gpmsf cfg> 3 \
+      --seed 0 --deterministic --work-dir /data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0
+  ```
+  进程组 pgid **3551130**（setsid 独立会话），日志 `train_gpmsf.log`，`max: 24 epochs`，1902 iter/epoch。
+- 启动期守卫：`gpmsf_run_checks.py start` 已写入 `phase.json`（**832 个研究源文件 sha256 冻结**、
+  `gpus=[5,6,7]`、`world_size=3`、`seed=0`）；训练期间改研究代码会使 `finish` 失败。
+- 独立 watchdog（`watchdog_gpmsf.sh`，仓库外）复刻队列 `run_owned` 语义：异常/OOM ⇒ 终止并为人工复核留证；
+  ep6 触发 `curve --early-stop` 止损；ep16 写 `gpmsf_ep16_report.json` 后继续训到 ep24。
+
+**in-situ 资源（同配方、同 3×4090D DDP、整步口径）**
+
+| 项 | B0（24e 主线实测） | GP-MSF（本节） | 比值 |
+| --- | ---: | ---: | ---: |
+| s/iter | 1.529–1.604（ep24 iter200–350）；§99 450-iter 冒烟 1.550530 | **5.050**（iter100；iter50 含预热 5.496） | **≈3.26×**（对 1.550530） |
+| 显存 (MiB) | 16,968（§99 冒烟 16,959） | **17,900** | **≈1.055×** |
+| GPU 利用率 | — | 37–40% | — |
+
+- **资源门结论：≤1.20× 时间门未过（≈3.26×），本节如实记录。** 本次 24e **不是**在资源门通过后启动，
+  而是按用户明确指令"确认修复正确后直接开始正式训练"启动；预登记里的 fail-closed 顺序（新 attempt S0 → 硬门 → 24e）
+  **被显式越过，未伪造 S0 通过**。
+- §99 的 6.71×、10.411050 s/iter、17,881 MiB 属于**错排实现**，**不得**与本表混用；修正实现的配对 S0 冒烟**未跑**，
+  因此"修正实现是否 ≤1.20×"仍是 **UNRESOLVED**。已知放大器：`tools/train_vod.py:12` 全局 anomaly 使融合块 ×4.8（§102），
+  且 §101/§102 记录的未归因差额依旧要求**分相 in-situ 计时**；两者都属 harness/实现，不是机制本身的下界。
+- 训练期不改 `train_vod.py` 的 anomaly 开关：那会同时破坏 `phase.json` 源冻结与"对 B0 单变量"契约（B0 亦为 anomaly 开）。
+
+### 103.4 启动期日志（将被 §104 的完整曲线取代）
+
+| epoch | iter | time (s/iter) | memory (MiB) | loss | grad_norm | 备注 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | 50 | 5.496 | 17,891 | 5.1913 | 14.6092 | 含数据预热（data_time 0.472） |
+| 1 | 100 | 5.050 | 17,900 | 3.6924 | 13.7802 | ETA 2 d 18:42 |
+
+- 启动期无 NaN/Inf、无 OOM、无 traceback；三个 rank 均正常占用 GPU 5/6/7。
+- **结论（启动期）：修复后的 GP-MSF 已在真实管线、真实坐标、真实 batch 上稳定前向/反向。**
+  机制有效性（AP）与资源门**都还未被回答**。
+
+### 103.5 下一步
+
+1. 训练继续到 ep6：watchdog 自动跑 `curve --window 1-6 --early-stop`，若相对 B0 出现 >2 AP 任务损害则止损并留证。
+2. ep12-16 窗口形成后自动写 `gpmsf_ep16_report.json`（区间均值口径），继续训到 ep24。
+3. 训练结束后写 **§104**：**必填**区间均值（ep12-16，n=5）+ **全轮峰值（值+epoch）** + best saved（单列）；
+   逐 epoch 完整曲线、四类构成项、BEV、FP/FN、high/low/zero 组与错误借点率等机制诊断。
+   对照：B0 seed0（§?? 39.2809）、三 seed 基线（40.4400 ± 1.3475）、A2-R（38.3778，−0.903）。
+4. 资源侧仍需补：修正实现的**配对 S0**（新 attempt）或训练后按 §102 优先级做分相 in-situ 计时，解释 ≈3.26× 的构成。
