@@ -18061,3 +18061,72 @@ TODO 标记“设计论证已完成”并归档该子任务；完整方向 1 的
 
 产物：`me_rssm/sanity/audit_z_ap_gap.py`（纯标准库只读审计）、`test_audit_z_ap_gap.py`、上述诊断文档与 JSON。聚焦单测 **7 passed**；窗口/峰值/截断、坏记录/partial-tail、数学反例/高斯/共享偏移恒等式均覆盖。
 本次完成 CPU 归因审计；**z_t 失效修复总目标仍未完成**，预测级归因列为待办，无新排程。
+
+
+## 95. GP-MSF 首版实现与 CPU 接线门禁（2026-10-13，无新训练）
+
+### 95.1 范围、必填性能摘要与唯一变量
+
+本节记录**方向 1（几何多尺度 fusion，GP-MSF）首版代码实现**与 CPU 接线门禁结果，承接 §91（设计）与 §92（优先级）。
+本次**无 GPU 前向、无 val、无 AP、无权重、未接入任何 config 或训练脚本**；A2-R 续训与 F1 等待队列均未改动。
+
+- **区间均值 N/A（本次无新增 val；默认 ep12–16 无新样本，n=0）**；**全轮峰值 N/A（本次无新增 val 指标/epoch）**；best saved N/A。
+- 本节任何数字都是 CPU 接线门禁值，不能当 AP 或成熟窗口；正式训练后必须按顶部统一口径补记。
+- **唯一变量（相对 `ConcatConvFusion`）**：融合层类型本身；RSSM、head、anchor 头、优化器、数据、日程、batch/N4 全部不变。
+- 参数量实测（CPU 构造，`img_channels=256, rad_channels=384, out_channels=256`）：基线 `ConcatConvFusion` **1,475,072**；GP-MSF 总计 **1,652,798**，其中共享 `fusion_conv` **1,475,072**（与基线逐元素一致），**新增 177,726（0.1777 M）**，低于设计 0.5 M 预算。
+- 新增参数构成（主要项）：`proj_img_levels` 49,344、`proj_rad_levels` 28,864、`proj_i2r` 24,960、`proj_rad` 24,640、`proj_r2c` 16,640、`proj_cam` 16,448、`offset_conv` 13,912、`key_rad`/`key_img` 各 1,088、`geom_score` 356、`depth_score` 97、其余 bias/标量 63。
+
+### 95.2 产物与运行事实
+
+| 项 | 内容 |
+|---|---|
+| 模块 | `mmdet3d/models/fusion_layers/geometry_multiscale_fusion.py`（`GeometryPairedMultiScaleFusion`，注册进 `FUSION_LAYERS`） |
+| 导出 | `mmdet3d/models/fusion_layers/__init__.py` 增加 import 与 `__all__` |
+| 门禁脚本 | `me_rssm/sanity/gpmsf_cpu_checks.py`（10 项 CPU 接线检查，toy 形状但契约等同真实管线） |
+| 运行方式 | `source .envrc && python me_rssm/sanity/gpmsf_cpu_checks.py`；退出码 0 = 全部通过 |
+| 结果 | **10/10 passed**，CPU 约 12 s；`flake8 --max-line-length=110` 对两个新文件 rc=0 |
+| 已核验几何契约 | radar 原生三级 0.32/0.64/1.28 m（0.16 m 底图，pixel-0 **中心**原点 0.08/−39.60）；image P2/P3/P4 stride 4/8/16；BEV 布局 (y=248, x=216)；高度先验 `[-1.1230436265, -0.3003779650, 0.6601446867]` 仅作覆盖先验 |
+
+10 项门禁逐项结果：
+
+1. **t1 step-0 identity**：真实几何输入下（含 `lidar2img`/`bda`/points/depth）输出与同 state 的 `ConcatConvFusion` **逐位相同**；`geo=None` 路径同样逐位相同。
+2. **t2 RNG 隔离**：新参数在独立 seed 下构造，`fusion_conv` 之后的下游（RSSM/head 等）RNG 流与基线一致；新参数可复现。同 seed 只保证共享模块初始化相同——这正是设计 6.5 要求核验的点。
+3. **t3 米制→索引簿记**：3 个 radar 原生级 + 3 个 image 级在各自 cell/pixel 中心处**精确取回自身**（无半像素偏移）。
+4. **t4 图像取证链路**：把 delta 放在 P3 某一像素，独立用 4×4 矩阵解出的 BEV 地址读回误差 **6.0e-08**（= 该级权重 × conv(delta)）；再把 P3 换成行斜坡，三个高度参考各自读到**自己投影行**的值（最大误差 2.4e-07，读数 0.259/0.194/0.117）。
+5. **t5 无雷达支持**：`M_R` 恰为 0（相机 BEV 逐位不变），`M_I` 仍非零——无回波不禁用视觉取证。
+6. **t6 图像全无效**：所有投影不可用时 `M_I` 恰为 0（radar BEV 逐位不变），`M_R` 仍非零。
+7. **t7 两步梯度**：step 0 输出投影之外的地址/键/级权重梯度为 0（`offset_conv` 梯度 0），第一次更新后变为非零（offsets 6.62、keys 1.81、level weights 0.594），证明两跳传递成立且 step 0 不破坏基线。
+8. **t8 分块等价**：`query_chunk=5` 与单块输出一致（≤1e-5）。
+9. **t9 地址有界**：每 head 地址半径上限实测 1.0051 m ≤ 配置上限 1.3194 m（`tanh` 有界）。
+10. **t10 冒烟**：`grad_checkpoint=True` + 分块前反向有限，60 个参数张量全部拿到梯度。
+
+### 95.3 门禁发现并修复的真实缺陷（机制归因）
+
+CPU 门禁不是形式化签字：它抓到 5 个会导致真实数据上**静默错误**的实现缺陷，全部已修并复跑通过。
+
+1. **图像 v 方向按宽度归一化（最严重）**：原实现用 `stride * feat.shape[-1]`（宽）同时归一化 u 与 v，只在正方形特征上成立；真实 P2/P3/P4 是 120×160 / 60×80 / 30×40，**每一级图像读都会在行方向整体错位**。t4 用独立投影数学比对后定位，已改为 u 用宽、v 用高。
+2. **跨 view 计数/分母聚合错误**：相机候选的 `count/denom/ok` 按 `(B*N, M)` 直接 reshape 成 `(B,N,M,...)`，会把 view 维错当候选维；在 N>1 时有效性与归一化都会错。已改为先在 view 维求和。
+3. **有界地址生成器通道排布错位**：offset 输出 `view(...).permute(...)` 少对一维，导致 24 通道被当 2 通道广播（t1/t5–t8/t10 全挂）。已按 `(B,Hd,K-1,2,Q)` 排布对齐。
+4. **masked softmax 收到浮点 mask**：radar 支持掩码经 `.to(dtype)` 后传入，`~mask` 对浮点报错。已统一在 softmax 内转 bool（语义不变）。
+5. **3-D 张量送进 Conv2d/LayerNorm**：offset 头需要在最后一维补 1，channel-LayerNorm 需要转成 channels-last。均已修正。
+
+另有 2 处属**测试自身**的口径错误（已按设计文档修正，不是模块缺陷）：radar 原点约定为 pixel-0 **中心**（0.08/−39.60），t3 最初按边界约定写值；t4 最初选的 P3 像素在 toy 相机里只能由相机后方点投出（depth=−3.75），换成行号 > 主点行后有效。
+
+> 结论边界：以上只证明**接线正确、step-0 保基线、缺测回退与两步梯度成立**。它不构成任何 AP 预期，也不能替代真实数据上的 S0；`proj_*` 投影层仍带随机 bias，真实收益/损害需要训练后才能判断。
+
+### 95.4 尚未验证与风险（必须随报告一起读）
+
+- **模块当前不可达**：没有任何 config 使用该类型，`R4Det.py` 的融合调用点也还没传 `geo`（`img_feats`/`radar_levels`/`depth`/`lidar2img`/`post_rots`/`post_trans`/`ori_shape`/`bda`/`points`）。因此本节的 10/10 只覆盖 CPU 契约，不覆盖真实数据接线。
+- **无 GPU S0**：真实 batch/N4 下的 step-0 等价、显存/吞吐上限、真实零雷达回退、错误借点率均未测；**不得为放下面偷偷降 batch**。
+- **高度先验风险**：三个 train-only 高度只是覆盖先验，坡道、高 Truck、遮挡仍是明确风险。
+- **缺测≠周边无回波**：框内零雷达点不等于邻车无回波，zero 组 AP 可能仍下降，必须用离线诊断（错误借点率、四类、high/low/zero、FP/FN、径向/切向中心误差）验证。
+
+### 95.5 结论与下一步
+
+**结论：GP-MSF 首版实现完成并通过 CPU 接线门禁（10/10），唯一变量是融合层本身，step-0 与基线逐位一致，缺测回退与两步梯度均成立；但尚未接入真实管线、未做 GPU S0、无任何 AP 结论。**
+
+下一步（按序，不改 A2-R/F1 排程）：
+
+1. 在 `R4Det.py` 融合调用点接入 `geo`（原生 image 三级、radar 原生三级、预测 depth、标定/augmentation/ori_shape/bda/points），并加一个只切换 `RCFusion.type` 的 arm config。
+2. 真实数据 GPU S0（仅用 GPU 5/6/7）：同 batch/N4 下 step-0 逐位等价、显存/步时 ≤1.2×、零雷达回退、地址有界、两步梯度；任何一项不过就停下改实现，不进训练。
+3. S0 通过后才做冻结预登记与四臂（B0 / 同容量普通 residual conv / 同 source 固定几何采样 / 完整 GP-MSF），并按统一口径记录区间均值与全轮峰值。

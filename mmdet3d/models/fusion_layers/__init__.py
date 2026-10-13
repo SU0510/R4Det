@@ -16,6 +16,7 @@ from .rssm_fusion import (
     LowDimFutureConsistentLatentFusion,
 )
 from .concat_conv_fusion import ConcatConvFusion
+from .geometry_multiscale_fusion import GeometryPairedMultiScaleFusion
 from .ped_highres_branch import PedHighresBranch
 __all__ = [
     'PointFusion', 'VoteFusion', 'apply_3d_transformation',
@@ -25,5 +26,5 @@ __all__ = [
     'DeterministicMotionAlignedLatentFusion', 'FixedNoisePosteriorLatentFusion',
     'PosteriorOnlyLearnableStdLatentFusion',
     'LowDimFutureConsistentLatentFusion',
-    'ConcatConvFusion', 'PedHighresBranch'
+    'ConcatConvFusion', 'GeometryPairedMultiScaleFusion', 'PedHighresBranch'
 ]
