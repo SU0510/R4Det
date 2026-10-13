@@ -1479,6 +1479,42 @@ ep16）全部在位。`/data` 可用空间 36 GB -> 132 GB（已用 94% -> 77%�
 `diag_dumps/`、`figures_path/` 仍待后续单独确认；`mci_smoke_450iter` 为进行中的
 MCI 冒烟 run，未纳入。
 
+#### 17.5.4 冒烟 / 诊断目录清理（2026-10-13，44 个权重文件 + `diag_dumps/`，约 14.3 GB）
+
+触发原因：`/data` 已用 89%。本轮清理**不涉及任何正式 run 的 `epoch_<N>.pth`**，
+范围仅为 450/100-iter 冒烟与诊断中间产物；`iter_*.pth` 按 17.5 排除项（"不在
+`epoch_<N>.pth` 清理范围内"）处理，且 §68.8j 的七消融机制数值、各 S0/wiring 判定、
+§79 屏蔽对照产物均已记录。
+
+**处理方式（与"整目录删除"的一处偏离，说明理由）**：只删每个冒烟目录里的权重
+（`iter_450.pth` / `iter_2.pth` / `iter_100.pth` + `latest.pth` 链接），保留
+`*.log` / `*.log.json` / 探针日志 / `figures_path/` 等 KB 级证据文件。原因：
+`mci_smoke_450iter/` 存有 §67/68 机制探针的原始 `probe_w*.log`（8 份），
+`c1valid_smoke_450iter/` 存有 §79 明确列为产物的 `20261012_084202.log[.json]`；
+整目录删除会销毁这两条证据链的原始文件，而它们合计不足 10 MB。
+
+| 目录组 | 删除 | 保留 |
+|---|---|---|
+| `mci_abl_*_smoke` ×7 | `iter_450.pth` + 链接（14 文件） | 日志、`figures_path/` |
+| `dcrssm{1,2}_smoke_450iter`、`dcrssm2_smoke_450iter_v2` | 同左（6 文件） | 日志、`canvases.pt`、ego 诊断 JSON |
+| `semA_smoke450_seed0`、`semA2S/semA2R_smoke450_seed0`、`c1valid_smoke_450iter` | 同上（含 `iter_2.pth`；10 文件） | 日志（含 §79 产物） |
+| `mci_smoke_450iter` | `iter_450.pth` + 链接 | 8 份 `probe_*.log` |
+| `lowdim_z_smoke_100iter{,_latent_lossfix,_stable_kl}`、`fgfull_smoke_100iter{,_patched}`、`ped_highres_*_smoke` ×2、`ped_highres_geometry_probe_smoke{,2,3,4}` | 同左（14 文件） | 日志 |
+| `diag_dumps/` | 整目录（545 MB，per-sample pkl） | — |
+
+- 合计删除 44 个权重文件 13.76 GB + `diag_dumps/` 0.545 GB ≈ **14.3 GB**；
+  `/data` 可用 64 GB -> 78 GB（已用 89% -> 86%），`work_dirs` 116 GB -> 102 GB。
+- 依赖保护核查：本轮目录均不在 17.5 依赖表内；`overnight_after_seed2.sh`、
+  `c1valid_s0_verdict.py`、`probe_z_utilization_gated.py` 对 `iter_450.pth` 的引用
+  属历史一次性队列/示例用法，若重跑会重新生成冒烟权重。
+- 复验：全仓库 `latest.pth` 悬挂 0 个；冒烟目录下 `.pth` 残留 0 个；5 个依赖权重
+  （semA2R ep6、B0 ep14、dcrssm2 ep4、run10 seed_1 ep14、stage1 seed0 ep7）与
+  进行中的 `c1valid_seed0` 8 个 epoch 全部在位。
+- 遗留项（未动）：`lowdim_z_future_consistent_..._INVALID_loss_wiring_bug`（552 MB，
+  作废 run）、`ped_highres_geometry_probe_crop9_3e_seed0`（210 MB，探针 dump）；正式
+  run 中间 epoch 清理（MCI/DCRSSM/semA 族，约 30 GB）与已停止分支整目录删除
+  （约 24 GB）均未执行。
+
 ---
 
 ## 18. 论文最终报告口径（定稿）
@@ -17621,3 +17657,106 @@ vs 同 seed0 基线 `fgfull_N4_no2d_igdr_2x4_24e_seed0`；判定用冻结工具
   C1 的归档判据不因尾部缺失而改变（尾部只可能提供稳定性信息）。
 - 交接：A2-R 队列在 02:58:13 检出 C1 退出、GPU 已排空，随即触发 ep14 归因 safety net
   （见 §86.4 的修复），完成后自动续训 A2-R（ep6→ep16，约 10 h），再排 F1。
+
+## 87. C1 最终归档：ep14 归因判定 + 总结（2026-10-13；A2-R 已接管 GPU）
+
+### 87.1 背景与顺序
+
+用户 2026-10-13 批准剪掉 C1 尾部（§86.5）；A2-R 队列 02:58:13 检出 C1 退出、GPU 排空，
+随即用**修复后的工具**跑 ep14 归因（dump 03:06 → 离线 AP 03:14 → 探针 03:16 → 判定 03:17），
+03:14:49 A2-R 续训启动（§88）。本节是归因+总结，判定按附录 B 只作**归因**，不参与剪枝。
+
+### 87.2 本次暴露并修复的**两处工具缺陷**（均为工具侧接线，非 C1 模型/权重问题）
+
+| # | 文件 | 症状 | 根因 | 修复 |
+| --- | --- | --- | --- | --- |
+| 1 | `tool_c_masked_inference.py` | 建模型即崩，dump 不产出（01:18 Stage B 全链失败） | 裸 `Config` 没有 `model.meta_info`，而 `R4Det.py:254` 无条件读它（train_vod.py:174 才注入） | 新增 `ensure_meta_info()`；+2 单测，18 passed |
+| 2 | `probe_c_failure_enrichment.py` | 03:0x 首跑 `TypeError: TJ4DDataset: __init__() got an unexpected keyword argument 'samples_per_gpu'` | 没有走 `compat_cfg`，`data.val.samples_per_gpu` 被原样转给数据集构造 | 与 train_vod / eval_dump_c / tool_c 一致地加 `compat_cfg` |
+
+**语义中性回归（关键）**：用修复后的探针重跑 B0 冻结输入（同一 dump/config/分组），
+与冻结产物 `c_failure_enrichment_ep14.json` 逐标量比对——**396 个标量中 395 个逐位相同**，
+唯一差异是 `contract.sha256`（探针脚本自身的哈希，因本次改动而变）。
+⇒ 修复**不改变任何数值语义**，且 C1 探针与 B0 冻结产物走的是同一条代码路径。
+
+### 87.3 ep14 归因读数（附录 B：归因，不剪枝）
+
+| 条款 | 判据 | 读数 | 判定 |
+| --- | --- | --- | --- |
+| M1 | covered 组 Δrecall ≥ 0 | B0 **51.4881** → C1 **50.4681**，Δ **−1.0200** | **FAIL** |
+| M2 | zero 组 Δrecall ≥ −0.5 | B0 **16.7045** → C1 **14.6023**，Δ **−2.1023** | **FAIL** |
+| M3 | 逐类 3D AP ≥ B0 − 0.5（离线 harness 同口径配对） | Car 48.7109→49.8727（**+1.1618**）✓；Truck 28.0448→25.7701（−2.2747）✗；Ped 34.2463→**28.7579**（−5.4884）✗；Cyc 50.5391→**39.5657**（−10.9734）✗ | **FAIL** |
+
+`ALL_PASS = false`（三项全 FAIL）。产物：`<C1_WD>/c1valid_ep14_{dump.pkl,probe.json,offline_ap.json,mechanism_verdict.json}`。
+
+**覆盖度分层 recall（同一 harness）**：
+
+| 分层 | B0 | C1 | Δ |
+| --- | --- | --- | --- |
+| high（有回波、密集） | 55.1713 | **59.5850** | **+4.4137** |
+| mid | 59.5894 | 56.6721 | −2.9173 |
+| low | 39.9559 | 33.2159 | **−6.7401** |
+| zero（自然缺测） | 16.7045 | 14.6023 | **−2.1023** |
+
+**自然缺测富集（描述量，非判据）**：`delta_points` B0 34.7835 → C1 35.8658（+1.0823），
+两者 `enriched=true`；C1 多一个合格 range bin（le50/50to70/gt70 vs le50/50to70）。
+
+### 87.4 归因解读（严格标注证据边界）
+
+1. **「重分配而非整体增强」获得三重印证**：成熟窗口（Car/Truck +6.32/+6.72 vs Ped/Cyc −4.89/−5.95）、
+   ep14 分层 recall（high +4.41 vs low −6.74 / zero −2.10）、ep14 AP（Car +1.16 vs Ped −5.49 / Cyc −10.97）
+   三个独立口径指向同一方向。C1 **不是无效接线**——它确实改变了结果，只是方向与立项假设相反。
+2. **与门控方向的对应是“一致的解释”，不是已证因果**：训练日志显示门学到「valid 收缩、invalid 放大」；
+   ep14 结果与「在无回波处注入未校准的 prior-posterior 修正」一致。要证因果需 z 排他/干预实验（**未做**）。
+3. **对「缺测富集」的正确读法**：C1 并没有改善缺测对象——gap 略增是因为 zero 组掉得更多
+   （−2.10 vs covered −1.02）。用 gap 变大叫「更好地利用了缺测」是**错误**读法（§76 同款陷阱）。
+4. **边界**：ep14 单 checkpoint、单 seed；harness 数值（Car 48.71 等）与训练内 EvalHook 不同口径，
+   只能与同 harness 的 B0 配对比较，禁止跨口径加减（§51.5）。
+
+### 87.5 C1 最终归档口径（三口径 + 三阶段门）
+
+- 区间均值（fixed window **ep12-16，n=5**）：**39.8303**；全轮峰值 **40.6389 @ ep16**；
+  best saved **40.6389 @ ep16**（saved = 2,4,6,8,10,12,14,16）。
+- 门：ep6 早期检查 **PASS**（+4.7657）；ep12-16 任务门 **FAIL**；ep14 归因 **NOT ALL PASS**。
+- **结论**：C1 不构成 AP 成功——主指标未过 40.00、Ped/Cyc 越过 −2.0 止损线、
+  Overall +0.5494 低于「大幅」阈值 +2.0、也低于三 seed 基线均值 40.4400。
+- **负结果的贡献**：给出「有效性条件化更新」在 radar-camera 时序检测上的清晰失败模式
+  （强化 dense-radar 类、牺牲 sparse/missing 类），附三层一致证据与可比 harness。
+- **未做/不可声称**：多 seed 稳定性、z 排他因果、C1-D 同容量确定性对照（未跑）。
+
+### 87.6 队列交接
+
+- **A2-R 续训 03:14:49 启动**（resume `epoch_6.pth`，seed0，`--deterministic`，3-rank DDP，GPU 5/6/7），
+  配置 `me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_semA2R_24e.py`，
+  停在 ep16，产物走 `merge_val_curves.py`（三口径 + 同窗 B0 delta）。运行事实见 §88。
+- **F1 队列**继续等 A2-R 结束：冒烟 → `relfus_s0_verdict.py` → 24e → ep6 损害检查 → ep12-16 窗口。
+
+
+## 88. A2-R 续训（ep6→ep16）：运行事实与滚动曲线（2026-10-13 起）
+
+**目的**：A/A2 两臂在 ep6 机制门归档为 NOT ALL PASS（§74），从未取得成熟窗口读数。
+用户 2026-10-12 批准（§82.3）只补 **A2-R**（M3 15/20 最接近门槛、读出侧假设最直接）：
+从既有 `epoch_6.pth` 续训到 **ep16** 即停（省 8 h），用同一 EvalHook 口径做成熟对照，
+不续 A/A2-S（其补训仍在待办，未排程）。
+
+- **唯一变量**：A2-R 读出侧改动（z-only 语义监督 + 零初始化分类 residual 映射到 anchor 分类通道）；
+  续训不引入任何新变量、不改 KL/日程/数据。
+- **接线等价性已核**：`obs_points` 仅对声明 `accepts_obs_valid` 的 fusion 传递，A2-R 不在其列（§82.3）。
+- **运行事实**：2026-10-13 **03:14:49 UTC** 启动（launcher pid 2081375 / 进程组 2081407），
+  GPU 5/6/7，3-rank DDP，`--seed 0 --deterministic`，
+  `--resume-from <WD>/epoch_6.pth`（optimizer 状态随 resume 恢复），
+  config `me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_semA2R_24e.py`，
+  WD `/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_semA2R_seed0`；
+  QLOG `<WD>/queue_semA2R_resume.log`，训练日志 `/tmp/semA2R_resume_16e.log`。
+  启动前置条件：C1 已剪枝、GPU 排空、C1 ep14 归因产物已落盘（§87.2 的修复必须先于本次启动，
+  否则 safety net 会重放同一 bug）。
+- **停点**：ep16（`--max_epochs 16` 等价配置；到点由队列检查 ep16 val/权重/完整窗口后收尾）。
+- **已存在曲线（A 父臂 ep1-6，沿用）**：28.0647 / 30.8271 / 37.8929 / 32.0730 / 38.4943 / 36.3491；
+  区间均值（ep1-6，n=6）**33.9502**、全轮峰值 **38.4943 @ ep5**、best saved **36.3491 @ ep6**
+  （§todo 已记录，此处只作起点；**不能**与 C1 的三口径混写）。
+- **滚动回填**：ep7 起的新 val 逐 epoch 追加到本小节；报出时必须写清「A 父臂 ep1-6 + 续训段」
+  的拼接关系，窗口均值只有在 ep12-16 五轮齐全后才算三口径之一。
+
+| 阶段 | ep1-6（A 父臂） | ep7 | ep8 | ep9 | ep10 | ep11 | ep12 | ep13 | ep14 | ep15 | ep16 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Overall | 见上 | 待补 | 待补 | 待补 | 待补 | 待补 | 待补 | 待补 | 待补 | 待补 | 待补 |
+

@@ -68,6 +68,11 @@ from mmdet3d.core.evaluation.kitti_utils.eval import (  # noqa: E402
 from mmcv import Config  # noqa: E402
 from mmdet3d.datasets import build_dataset  # noqa: E402
 
+try:  # mmdet3d's compat layer, identical to tools/train_vod.py and eval_dump_c
+    from mmdet3d.utils import compat_cfg  # noqa: E402
+except ImportError:  # pragma: no cover
+    from mmdet.utils import compat_cfg  # noqa: E402
+
 # kitti_eval's internal class order (clean_data's CLASS_NAMES). The dataset's
 # CLASSES order is different on purpose; min_overlaps is reordered to match this
 # one, so these indices are what _prepare_data expects.
@@ -492,6 +497,13 @@ def main():
     args = ap.parse_args()
 
     cfg = Config.fromfile(args.config)
+    # The run configs carry `data.val.samples_per_gpu` (the old-style dataloader
+    # key).  train_vod.py / eval_dump_c.py / tool_c_masked_inference.py all run
+    # compat_cfg first, which moves it to `data.val_dataloader`; without that
+    # step build_dataset forwards the stray key to TJ4DDataset.__init__ and dies
+    # with "unexpected keyword argument 'samples_per_gpu'" -- exactly what
+    # happened to C1's staged ep14 probe on 2026-10-13.
+    cfg = compat_cfg(cfg)
     coverage_json = json.load(open(args.coverage_groups, encoding='utf-8'))
     motion_json = json.load(open(args.motion_axis, encoding='utf-8'))
     outputs = load_pickle(args.preds)
