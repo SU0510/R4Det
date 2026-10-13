@@ -77,7 +77,12 @@
     新增 T11/T12/T13（非零残差 chunk 等价、hook 读直接消息+60 参数梯度、雷达 impulse 只亮对应 2×2 且 +1 平移）
     与 pytest 回归 `test_chunked_residual_messages_are_not_scrambled`；临时回退旧写法时四项**全部 FAIL**、`t8` 仍 PASS
     （漏检机制解释），恢复后全绿。未启动 GPU；错排 checkpoint 已标记禁用。
-  - **下一步**：~~①修 query/channel 轴及非零残差/梯度/空间 impulse 回归~~（**已完成，§100**）；保留当前冒烟证据，禁止直接开 24e，不能先盲调 chunk；
+  - [x] **成本拆分（2026-10-13，§101，单卡只读微基准）**：融合块 kernel 数 **74,450**（B0 仅 16），
+    冻结配置 714 ms（anomaly 关）/ **3125 ms**（anomaly 开，4.37×）；ckpt 1.61×换6.1 GB；分块 2.4–3.0× 且关 ckpt 时不省显存。
+    ⇒ 成本是**算子数/调度**而非 FLOPs。证据 `docs/gpmsf_cost_decomposition_20261013.json`。
+  - **下一步**：~~①修 query/channel 轴及非零残差/梯度/空间 impulse 回归~~（**已完成，§100**）；
+    ~~②拆成本~~（**已完成，§101**）→ 现做 **head 向量化 + 受控 chunk 扫描**（同一数学，逐位回归）；
+    保留当前冒烟证据，禁止直接开 24e，不能先盲调 chunk；
     ②同 batch/初值拆解 anomaly、checkpoint、采样与同步开销，补有效 query/GT 区域条件 null、覆盖率和消息范数；
     ③仅做机制保持提速并重跑真实 GPU S0（GPU 5/6/7，同 batch/N4，显存与步时仍须 ≤1.2×），全门通过再跑 24e、ep6/ep12-16 判定；
     ④补 B0/同容量 conv/固定采样对照，正结果后再补原 BEV-only、单尺度、独立地址、null/fallback 消融。

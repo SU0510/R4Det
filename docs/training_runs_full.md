@@ -18760,3 +18760,67 @@ m_i = torch.stack(m_i, dim=1).permute(0, 1, 3, 2).reshape(b, self.embed_dim, qc)
 - **下一步（按用户既定顺序）**：② 同 batch/初值做成本拆分与机制保持提速（head 向量化、复用计算、受控 chunk 扫描，
   不删 camera-only fallback、不用 GT 路由）；③ 补条件证据分层（有效 query / GT 目标与背景 / 类别-range 覆盖率、
   条件 null、消息范数、借点率）；④ 新 attempt 重跑真实 GPU S0，仍守 **≤1.20×**，全门通过才考虑 24e。
+
+---
+
+## 101. GP-MSF 成本拆分：算子数而非 FLOPs（2026-10-13，单卡只读微基准）
+
+### 101.1 范围、统一口径与运行事实
+
+- 新增只读微基准 `me_rssm/sanity/gpmsf_cost_decompose.py`（GPU5，单进程，无 DDP、无数据集、无优化器步），
+  按**冻结 arm config** 的真实形状构建 `RCFusion` 本体：B=2、BEV 248×216、P2/P3/P4 120×160/60×80/30×40、
+  radar 248×216/124×108/62×54、`_gpmsf_geometry` 真实 contract（N=1、points 20k×5，与真实管线一致）。
+  **未启动训练、未改队列、未动 config。**
+- 计时口径：前 3 次 warmup 后取 7 次 forward+backward 的墙钟均值（anomaly 行取 3 次），
+  `torch.cuda.synchronize()` 包夹；峰值取 `max_memory_allocated`。每行同设备同形状，行间可比；
+  **绝对值不外推到 S0 全步**（S0 是 DDP3+完整检测器）。
+- **主指标区间均值：N/A（ep12–16 未形成，val n=0）；全轮峰值：N/A（无 val，epoch=N/A）；
+  best saved val：N/A。** 本节是成本诊断，不是训练，任何 AP 结论都不在此。
+- 证据：`docs/gpmsf_cost_decomposition_20261013.json`（含 CUDA kernel 计数与 top-12 名称）。
+
+### 101.2 拆分结果（同一进程、同一输入、同一 seed）
+
+| 变体 | anomaly | 时间 ms | 峰值 MiB | CUDA kernel 数 |
+| --- | --- | ---: | ---: | ---: |
+| B0 ConcatConv | off | 11.30 | 1690 | 16 |
+| B0 ConcatConv | **on** | 11.84 | 1690 | — |
+| GP-MSF 冻结（ckpt + chunk4096） | off | 714.16 | 2273 | **74,450** |
+| GP-MSF 冻结 | **on** | **3125.35** | 2273 | — |
+| GP-MSF 冒烟配置（+collect_stats） | off / on | 744.00 / 3131.23 | 2273 | 76,466 |
+| GP-MSF ckpt + 单块（chunk0） | off | **236.33** | 7003 | 5,583 |
+| GP-MSF 无 ckpt + chunk4096 | off | 451.61 | 8353 | 53,292 |
+| GP-MSF 无 ckpt + chunk2048 | off | 920.46 | 8208 | — |
+| GP-MSF 无 ckpt + 单块 | off | **188.22** | 8217 | 4,067 |
+
+kernels 排行（冻结配置）：mul 6,166 / add 5,840 / fill 5,338 / mul-out 4,544 / copy 3,774 /
+DtoD memcpy 3,754 / compare 3,476 ——**全是 (B,qc,K,nH,dk) 小块 elementwise 与拷贝**，
+即 Python 侧 `chunk × head × level × candidate × height` 循环的启动开销，不是新机制的算术量。
+
+### 101.3 归因（每条都有同进程对照，不是推测）
+
+1. **anomaly detection 是本实现最大的单一乘数：714→3125 ms，4.37×**。
+   `tools/train_vod.py:12` 的 `torch.autograd.set_detect_anomaly(True)` 对**所有**运行（冒烟与 24e）都开启；
+   B0 只有 16 个 kernel，因此几乎不受影响（11.30→11.84，1.05×）。**它按算子数收费，恰好惩罚本实现**。
+2. **gradient checkpointing 1.61×**（451.61→714.16 ms），换来 8353→2273 MiB（−6.1 GB）。
+   这是"用时间换显存"，与机制无关。
+3. **分块是 2.4–3.0× 的纯开销，且在关掉 checkpoint 时几乎不省显存**：
+   chunk0 188 vs chunk4096 452（无 ckpt，峰值 8217 vs 8353 MiB）；ckpt 下 236 vs 714 ms，但峰值 7003 vs 2273 MiB。
+   ⇒ 分块只在 ckpt 打开时才是显存必需项；否则它只是把 kernel 数按块数乘上去（chunk2048 比 4096 更慢：920 ms）。
+4. **kernel 数随块数线性增长**：单块 4,067 vs chunk4096 74,450（约 18×），与 14 块的循环一致；
+   T13/T12 已证明消息布局正确，因此这是**启动/调度**成本，不是"必须多算"。
+
+### 101.4 机制保持的提速目标与边界
+
+- 目标（投影，不是实测）：S0 的 B0 是 **1.550530 s/iter**，≤1.20× 意味着新增预算 **≈0.31 s/iter**。
+  冻结配置的融合块在 anomaly 下是 3.13 s ⇒ 需要约 10× 的算子削减；
+  候选组合是 **head 向量化（÷4）× 去掉分块（÷14）**，纸面到 ~4.1k kernel ≈ 40 ms 量级，**必须实测**。
+- **不能**靠以下方式达标（且都不允许）：删 camera-only fallback、用 GT 路由、降 batch/N4 后仍称单变量、
+  关掉 checkpoint 换显存（24e 会 OOM）。
+- 仍**未归因**的 ~5.7 s/iter：S0 记录的时间差是 10.411050−1.550530≈8.86 s/iter，而本节融合块
+  （anomaly 开）只有 3.13 s。差额不在本节的可见范围内（DDP3 同步/最慢 rank、全图 anomaly 记账、
+  checkpoint 重算与真实数据管线的交互），**必须用 in-situ 分相计时补测，不能用猜测填**。
+- 由此，S0 的 ≤1.20× 门在"全局 anomaly 开 + 现实现"下**不可达**；这是**harness 与实现共同的结果**，
+  不是机制本身的成本下界。若后续关闭/限定 anomaly（对两臂同等生效的 harness 改动，需用户批准），
+  也必须两臂同时重测，不能只改一边。
+- 下一步：先做 head 向量化（同一数学、同一权重、逐位可回归），再用受控 chunk 扫描定档，
+  然后才谈条件证据（③）与新 attempt S0（④）。
