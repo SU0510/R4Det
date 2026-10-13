@@ -826,8 +826,8 @@
     Ped **−4.8880** / Cyc **−5.9530** 越过 −2.0 止损线）；ep14 归因探针因工具缺陷未产出
     （`tool_c_masked_inference.py` 未注入 `meta_info`），已修 + 18 passed，待 A2-R 队列
     safety net 在 C1 退出后自动补跑。
-  - **挂起决定（用户）**：附录 B 的剪枝权在 ep16→24——主窗口已完成且 FAIL，尾部 7 epoch
-    （~6 h）只能补稳定性；剪掉可让 A2-R 提前约 6 h 开始。未擅自停训。
+  - **已剪枝（用户 2026-10-13 批准）**：C1 停在 **ep18 iter 1050/1902**（02:57:56 UTC，
+    只 SIGTERM 本臂进程组）；权重/日志/判定 JSON 全保留；A2-R 队列 02:58:13 接管并跑 ep14 归因。
   - **未完成**：ep14 归因实跑（等 GPU）、C1-D 确定性对照（C1 结论后串行）、多 seed。
   - **本环境 pytest 需 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`**（conftest→hydra→`omegaconf.vendor`）。
 
