@@ -17802,7 +17802,7 @@ vs 同 seed0 基线 `fgfull_N4_no2d_igdr_2x4_24e_seed0`；判定用冻结工具
 
 - `TJ4D-eval.py` 及当前 `kitti_utils/eval.py` 的 `clean_data` 对难度用 `>` 忽略，
   因此 **moderate 是累计 0–70 m，而不是只 50–70 m**；距离分组标签本身不能代替 AP 协议。
-- 用户参考 47.29 的原论文 Table 1 称 test，而 Table 4 同值且 §4.3 称 validation ablation；
+- 用户参考 47.29 的原论文 Table 1 称 test，而 Table 4 同值且 §4.4 称 validation ablation；
   split/recipe 尚需核实，不把文献数值直接当严格配对或“最新 SOTA”认证。
 - 主文献：RCBEVDet/CRN/RaCFormer/PV-RCNN/StreamPETR/SlotFormer/DistillBEV，
   仅用于结构先例；未完成本项目组合的新颖性全面检索。
@@ -17812,3 +17812,7 @@ vs 同 seed0 基线 `fgfull_N4_no2d_igdr_2x4_24e_seed0`；判定用冻结工具
 文档变更检查与 `git diff --check`；无代码变更，未重跑 sanity/训练，
 旧测试数量不算本次新验证。下一步由用户选择结构方向后补实现计划/预登记；
 不追加一轮无边界诊断作为默认前置。
+
+补充原文核验：CRN 的正式标题为 “Camera Radar Net for Accurate, Robust, Efficient
+3D Perception”；R4Det 的 validation ablation 在 §4.4。另明确对象状态路线不假定 TJ4D
+有真实 ego pose：可靠变换可用时才使用，否则学习对齐。此补充仍仅修改文档。

@@ -101,7 +101,8 @@
 **替换范围**：将每个 BEV cell 的共享时序状态改为对象索引状态与实例观测。
 
 - 对象保留独立 `(h_i, z_i)`，观测来自方向 2 或方向 4 的多模态局部取证。
-- prior 根据 ego transform、对象几何/运动与历史预测当前状态；
+- prior 根据对象几何/运动与历史预测当前状态；若有可靠 ego transform 则使用，
+  否则采用学习式对齐，不假定 TJ4D 有真实 ego pose；
   posterior 由实际局部观测更新，没有测量时不把速度/位置伪造为零。
 - 检测直接读取状态生成 class/box，不仅在最终 logits 上加可忽略 residual。
 - 预测下一帧的对象几何与局部观测，取代公共背景模板式全局重建目标。
@@ -191,17 +192,17 @@ shuffle/zero z 对实际 box/CE/AP 的影响，部署均值与采样契约必须
   距离使用 evaluator 的 GT location 范数，忽略/类 IoU 等其余协议也须保持。
 - 用户提供的 63.60/31.24/62.84/31.46/47.29 出现在 R4Det 原论文
   arXiv:2603.11566v1 的 Table 1，也同值出现在 Table 4。
-  Table 1 的文字称 test，§4.3 称 ablations 使用 validation；
+  Table 1 的文字称 test，§4.4 称 ablations 使用 validation；
   仅凭表格不能断言“47.29 是与当前 val 严格可比的 SOTA”。
   需核实 split、数据处理、训练配方与评测；本次不改评测，也不把该数值换算成收益。
 - 文献只证明结构先例，不证明上述候选能提高本项目 AP；未声称完成新颖性全面检索。
 
 原始文献（标题/会议用于后续核验）：
 1. RCBEVDet: Radar-camera Fusion in Bird’s Eye View for 3D Object Detection，CVPR 2024。
-2. CRN: Camera Radar Object Detection Using Multimodal Feature Fusion，ICCV 2023。
+2. CRN: Camera Radar Net for Accurate, Robust, Efficient 3D Perception，ICCV 2023。
 3. RaCFormer: Towards High-Quality 3D Object Detection via Query-based Radar-Camera Fusion，CVPR 2025。
 4. PV-RCNN: Point-Voxel Feature Set Abstraction for 3D Object Detection，CVPR 2020。
 5. Exploring Object-Centric Temporal Modeling for Efficient Multi-View 3D Object Detection，ICCV 2023。
 6. SlotFormer: Unsupervised Visual Dynamics Simulation with Object-Centric Models，ICLR 2023。
 7. DistillBEV: Boosting Multi-Camera 3D Object Detection with Cross-Modal Knowledge Distillation，ICCV 2023。
-8. R4Det: 4D Radar and Camera Fusion for 3D Object Detection，arXiv:2603.11566v1。
+8. R4Det: 4D Radar-Camera Fusion for High-Performance 3D Object Detection，arXiv:2603.11566v1。
