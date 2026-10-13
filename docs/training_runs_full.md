@@ -18469,3 +18469,178 @@ A2-R 1354393/2081375仍运行；没有启动GP-MSF GPU任务。不是恢复旧ba
   A2-R 是 −0.90（Truck/Ped −2.9/−2.3）。⇒ 本项目两条「z 语义/状态修正」路线
   **共用同一个失败形状：跨类重分配，而非整体增强**。
 - 边界：单 seed；上述均为训练内 EvalHook 口径（与 B0 同口径可比），harness 口径数值另见 §87.3。
+
+
+## 99. GP-MSF 首次冒烟只读诊断：消息空间轴混排、资源超限与 null 分母（2026-10-13）
+
+### 99.1 范围、口径与运行事实
+
+- 本轮仅诊断、CPU 反例取证及文档归档；**未修改研究 Python/config、未停止或重排现役队列、未启动额外 GPU 任务**。
+  CPU 探针因仓库 localattention 的 import 断言而设置 `CUDA_VISIBLE_DEVICES=5`，但所有张量/运算均在 CPU，
+  **`torch.cuda.is_initialized() == False`**。转置修正只存在于独立 CPU 进程内，**不是仓库已修复**。
+- 源版本：`140a46a418cfcef71037a7187e18cfcb8ee4a9cd`；GP-MSF 现役模块/队列沿用 `0413abd`。
+  14:51:02 UTC 快照核验全部 preflight `source_sha` 仍匹配；文档不在源冻结集合中。
+- 队列 PID/PGID **3066450**；GP-MSF trainer PGID **3151027**，ranks **3151037/3151038/3151039**。
+  冒烟目录：`/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/s0_20261013T132727Z_3066450`。
+- 真实 GPU preflight 13:27:53–13:28:53 完成，16 个既定检查均为 true；配对 B0 冒烟
+  13:28:54–13:41:57 完成且有 `iter_450.pth`；GP-MSF 冒烟 13:41:58 启动，
+  **本节快照最后已记录 iter350（14:43 左右），尚无 iter450 checkpoint 或最终 S0 verdict**。
+  不将过程快照写成已完成；结束证据须另补。
+- 唯一研究变量仍为 RCFusion；bs2/rank、DDP3、N4、梯度累积2、seed0、共同 RSSM/head/数据/损失不变。
+  当前模块 embed_dim64、4 heads、4 offsets、3 image/radar levels、3 heights、query_chunk4096。
+- **主指标区间均值：N/A（默认 ep12–16 未形成，val n=0）；全轮峰值：N/A（无 val，epoch=N/A）；
+  best saved val：N/A。** 450iter 权重只证明冒烟产物存在，不用于 AP 排名。本轮不是正式 24e。
+- 原始证据与完整已记录训练标量/接线 stats：`docs/gpmsf_s0_diagnosis_20261013.json`。
+
+### 99.2 配对资源与完整已记录冒烟曲线
+
+资源沿用现役 S0 算法：丢弃 iter50 行，后续日志区间 time 等权均值；每行 time 是此前50步的日志区间均值，
+不是9个独立单步测量。B0 iter100–450，n=8；GP-MSF iter100–350，n=6，**臂尚未完成**。
+
+- B0：**1.550530 s/iter、16959 MiB**。
+- GP-MSF 快照：**10.409717 s/iter、17881 MiB**。
+- 比值：time **6.713651×**；memory **1.054366×**。
+- time/memory 硬上限仍为 **1.20×**；B0对应总步时预算 **1.860636 s/iter**。
+  不放宽门、不自动开24e。当前耗时超限成立，但不是正确实现 GP-MSF 的最终成本下界。
+
+下表是该快照全部已记录 train 区间；迭代不是 epoch，不补造 val 曲线。
+完整 loss_cls/loss_bbox/loss_dir/loss_iou/depth/mask/range/RSSM 及其 stats 均保留在上述 JSON 的
+`paired_smoke.*.all_logged_train_rows`，原 work-dir `.log.json` 不变。
+
+| arm | iter | time s | data_time s | memory MiB | loss | grad_norm | loss_rssm_kl | clamped_ratio |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| B0 | 50 | 1.57680 | 0.10482 | 16947 | 7.58060 | 10.55223 | 2.41197 | 0.86731 |
+| B0 | 100 | 1.54560 | 0.06642 | 16947 | 4.94588 | 13.92974 | 1.10635 | 0.88681 |
+| B0 | 150 | 1.51876 | 0.06022 | 16959 | 4.32818 | 20.45064 | 1.05607 | 0.97650 |
+| B0 | 200 | 1.53754 | 0.06819 | 16959 | 4.02451 | 22.49304 | 1.04498 | 0.98313 |
+| B0 | 250 | 1.58415 | 0.06394 | 16959 | 3.79865 | 19.85069 | 1.03212 | 0.98857 |
+| B0 | 300 | 1.54013 | 0.07236 | 16959 | 3.70333 | 17.12093 | 1.02553 | 0.98727 |
+| B0 | 350 | 1.52096 | 0.06354 | 16959 | 3.55117 | 16.09436 | 1.02348 | 0.98776 |
+| B0 | 400 | 1.56351 | 0.07666 | 16959 | 3.49889 | 16.56034 | 1.02362 | 0.98711 |
+| B0 | 450 | 1.59359 | 0.07230 | 16959 | 3.52183 | 16.13027 | 1.01953 | 0.98767 |
+| GP-MSF | 50 | 10.36165 | 0.09972 | 17869 | 7.59236 | 12.11069 | 2.41566 | 0.85422 |
+| GP-MSF | 100 | 10.33859 | 0.06967 | 17869 | 5.03307 | 12.39700 | 1.10566 | 0.94050 |
+| GP-MSF | 150 | 10.52174 | 0.06401 | 17881 | 4.26969 | 18.00745 | 1.04976 | 0.97322 |
+| GP-MSF | 200 | 10.33527 | 0.06344 | 17881 | 3.96108 | 21.66006 | 1.03483 | 0.98481 |
+| GP-MSF | 250 | 10.40171 | 0.06736 | 17881 | 3.75243 | 18.77791 | 1.02576 | 0.98912 |
+| GP-MSF | 300 | 10.42523 | 0.07755 | 17881 | 3.69043 | 16.68930 | 1.02078 | 0.99026 |
+| GP-MSF | 350 | 10.43576 | 0.06941 | 17881 | 3.54641 | 16.09732 | 1.01751 | 0.99050 |
+
+### 99.3 P0 确诊：消息合并把 query/channel 轴混排
+
+位置：`mmdet3d/models/fusion_layers/geometry_multiscale_fusion.py:697–698`。
+每个 head 的候选聚合结果是 `(B,qc,dk)`；stack 后为 `(B,heads,qc,dk)`。
+当前直接 reshape 成 `(B,embed_dim,qc)`，**把 query 位置与 head 内 channel 混在一起**。
+正确语义须先置换为 `(B,heads,dk,qc)`，再合并 heads 与 dk。
+
+```python
+# 当前：错误；两方向都存在
+m_r = torch.stack(m_r, dim=1).reshape(b, self.embed_dim, qc)
+m_i = torch.stack(m_i, dim=1).reshape(b, self.embed_dim, qc)
+# CPU 独立进程中验证的修正；尚未写回现役源码
+m_r = torch.stack(m_r, dim=1).permute(0, 1, 3, 2).reshape(b, self.embed_dim, qc)
+m_i = torch.stack(m_i, dim=1).permute(0, 1, 3, 2).reshape(b, self.embed_dim, qc)
+```
+
+- 按当前 qc4096/dk16，输出单 head 的 channel `j`、query `p` 对应旧消息的
+  `query=floor((j*4096+p)/16)`、`channel=(j*4096+p)%16`，一般**不是 query=p/channel=j**。
+  query0 的64维向量也不再是同一个米制地址的64维证据。
+- valid mask 本身按正确 query 顺序构造；投影前消息已经错排，因而
+  「整投影按 valid gate」仍不能把错误内容恢复到正确位置。梯度可达也不证明空间对应正确。
+- **因此 query_chunk 在当前实现中会改变消息的空间重排，而不只是资源开销**；
+  未修前直接4096改整块，不能视为机制等价提速。
+- CPU 反例（seed712、B2、embed_dim64/heads4/dk16、24 queries，source为原有 TOY contract）：
+  同权重、同输入，**输出投影显式非零**，chunk24 对 chunk5：
+  - 原输出 max|Δ| **0.3601186872**，allclose **False**；
+  - 原直接消息 M_R max|Δ| **0.6087927818**，M_I max|Δ| **0.6811844707**；
+  - 只在独立进程修上述两处转置后，输出 max|Δ| **0.0**，allclose **True**；
+  - 原整块输出与修正整块输出 max|Δ| **0.3975334167**。
+  不是随机输入差异，也不是 offset/level/capacity 的结构修改。
+- 漏检原因：`me_rssm/sanity/gpmsf_cpu_checks.py:356–365` 的 T8
+  用 `build(query_chunk=...)`，未开 `nonzero_out=True`；两方向 output projection 均为0。
+  该断言只比较共同 ConcatConv 输出，错误消息被零残差遮住。
+  step0等价门仍有价值，但不能代替投影离零后的空间接线门。
+
+最小 CPU 复跑（环境依赖同既有 CPU 检查；仅 import 需要看到GPU，不调用 CUDA）：
+
+```bash
+rtk proxy env CUDA_VISIBLE_DEVICES=5 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONWARNINGS=ignore /home/lurui/envs/miniforge3/envs/r4det/bin/python - <<'PY'
+import inspect, runpy, textwrap, types
+import torch
+from mmdet3d.models.fusion_layers import geometry_multiscale_fusion as module
+checks = types.SimpleNamespace(**runpy.run_path('me_rssm/sanity/gpmsf_cpu_checks.py'))
+torch.set_num_threads(1)
+torch.manual_seed(712)
+img, rad = checks.bev_inputs()
+geo = checks.make_geo()
+a = checks.build(nonzero_out=True, query_chunk=0).eval()
+b = checks.build(nonzero_out=True, query_chunk=5).eval()
+b.load_state_dict(a.state_dict())
+with torch.no_grad():
+    original_a, original_b = a(img, rad, geo), b(img, rad, geo)
+print('original max delta', float((original_a-original_b).abs().max()))
+source = textwrap.dedent(inspect.getsource(module.GeometryPairedMultiScaleFusion._chunk))
+for name in ('m_r', 'm_i'):
+    old = f'torch.stack({name}, dim=1).reshape(b, self.embed_dim, qc)'
+    new = f'torch.stack({name}, dim=1).permute(0, 1, 3, 2).reshape(b, self.embed_dim, qc)'
+    assert source.count(old) == 1
+    source = source.replace(old, new)
+namespace = dict(vars(module))
+exec(compile(source, '<in_memory_layout_repair>', 'exec'), namespace)
+for fusion in (a, b):
+    fusion._chunk = types.MethodType(namespace['_chunk'], fusion)
+with torch.no_grad():
+    repaired_a, repaired_b = a(img, rad, geo), b(img, rad, geo)
+print('repaired max delta', float((repaired_a-repaired_b).abs().max()))
+assert not torch.cuda.is_initialized()
+PY
+```
+
+### 99.4 null 高的事实与不能越界的解释
+
+当前 `radar_support_rate` 是4候选的平均有效率；`null_rad_weight` 是 head/query 的平均 null 权重。
+`level_rad_weight` 包含无回波但仍在 native map 内的候选；不是 GT 或 supported-query 条件层选择。
+`level_img_weight` 跨level求和则等于有效图像 candidate-height 比例，因为level掩码相同，失效时softmax全0。
+
+设支持候选率为 s、有至少一个可用雷达候选的 head/query 率为 v、全画布非null权重为 a。
+K=4，故 **s≤v≤min(4s,1)**，另有 **a≤v**；无可用候选的 query null=1，
+可用 query 上的平均 null 是 **1−a/v**，不是全画布 null。
+
+| iter | supported candidate % | global null_R % | valid query upper % | conditional null_R upper % | image candidate-height valid % |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 50 | 2.2543 | 97.5330 | 9.0173 | 72.6410 | 14.5169 |
+| 100 | 3.3183 | 96.2569 | 13.2731 | 71.7991 | 10.4020 |
+| 150 | 2.1752 | 97.5703 | 8.7009 | 72.0748 | 18.7883 |
+| 200 | 1.2899 | 98.4439 | 5.1598 | 69.8414 | 6.5318 |
+| 250 | 2.8952 | 96.6490 | 11.5806 | 71.0638 | 15.3188 |
+| 300 | 1.9703 | 97.5562 | 7.8813 | 68.9923 | 1.5786 |
+| 350 | 2.2026 | 97.3795 | 8.8105 | 70.2566 | 9.5224 |
+
+**允许结论**：全画布很多 query 没有新增雷达候选；仍在为大量失效位置计算取证，值得优化。
+**不允许结论**：「有证据的目标也97%拒绝雷达」「只2–3%目标可获益」「层均匀证明机制无效」。
+这些需要 available-query/GT footprint或中心邻域的条件统计，当前 stats 无此分母。
+上述bounds同样**不证明机制有益**；空间混排使得实际注入证据另有缺陷。
+
+### 99.5 成本归因边界与执行顺序
+
+1. **先修正确性，再测效率**：修转置；把非零残差、直接 M_R/M_I、完整输出、非整除chunk、
+   spatial impulse 与输入/参数梯度一致性加入回归。保留step0等价与缺测严格identity。
+   错排450iter checkpoint不得冒充正确实现的正式起点；正确实现须新attempt。
+2. **资源超限已实测，纯compute归因未实测**：`tools/train_vod.py:12` 全局开启
+   `torch.autograd.set_detect_anomaly(True)`；B0/臂均开启，但臂新增大量autograd节点，
+   需要同输入/初值的paired replay拆解其成本，不能因两臂开关相同就排除差异开销。
+   同样须拆 kernel launch/host dispatch、grid_sample backward、memory traffic、checkpoint重算、stats同步。
+   按源代码，有depth时单次fusion前向14 chunks×4 heads×9次grid_sample=504调用；
+   这只是调用数，不是耗时证据；N4/反向总量不得据此直接外推。672次标量同步/forward不是已实测数。
+3. **保持机制优化优先**：head向量化、共享可复用计算；4096/8192/16384受控测输出/梯度/峰值显存。
+   精确失效mask可用于跳过相应计算；不能只算有雷达query而删camera-only fallback，
+   不能把GT「近目标」用作forward routing。减少offset/level属于新方法变量/消融，不包装成等价提速。
+4. **补真正机制证据**：available-query条件null；GT目标/背景、zero/low/high radar、类别/range分层；
+   support coverage、同对象/邻对象借点、残差/原feature范数、offset饱和、条件尺度选择。
+   GT仅用于离线诊断，不进入模块输入。
+5. 上述完成后重跑同协议S0；time/memory ≤1.20×门不变，失败停在人工复核，不直接上24e。
+   通过后才按正式24e完整逐epoch/逐类、ep12–16区间均值与全轮峰值评估AP。
+
+**结论**：首次实现存在已复现的空间接线缺陷，资源也超预算；当前只能判
+「这一版不具备正式开训资格」。不能判正确实现的GP-MSF方法/AP失败，也不能据全局null宣判目标缺证据。
+本轮记录的是诊断完成，**不是修复、GPU S0或方向1完成**。

@@ -54,7 +54,8 @@
 
 - [ ] **方向 1：几何约束、多尺度 deformable cross-modal fusion（优先）**
   - **完整方案状态：设计论证（§91）、CPU 数学/训练集几何核验（§91）、首版实现 + CPU 接线门禁 10/10（§95）、
-    真实管线接线 + 排队审查/硬门修复 + CPU 回归（2026-10-13，§97/§98）均已完成；GPU S0、正式训练与 AP 仍待完成。**
+    真实管线接线 + 排队审查/硬门修复 + CPU 回归（2026-10-13，§97/§98）均已完成；GPU S0 已启动但未通过，正式训练与 AP 仍待完成。**
+    **2026-10-13 首次冒烟诊断（§99）：确诊 query/channel 轴混排；原 chunk 等价测试被零残差遮蔽。此前 CPU PASS 不代表完整空间接线正确。**
     详见 `docs/geometry_multiscale_fusion_design_20261013.md`（GP-MSF：共享米制地址、原生 image/radar 多尺度配对取证、null+camera fallback、基线保持残差）；首轮保留现有 RSSM/head。
     实现 `mmdet3d/models/fusion_layers/geometry_multiscale_fusion.py`（新增 0.1777 M 参数，step-0 与基线逐位一致），门禁 `me_rssm/sanity/gpmsf_cpu_checks.py`（10/10）；
     arm config `me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py`（差异键恰为 `['RCFusion']`），
@@ -66,9 +67,13 @@
   - **已有基础/正在排队的相关项**：同文件有 `Virtual_pts_BEV_Warp`、`RadarBEVFusionWithDCN`；
     DCN+SE 堆叠不等同完整方案。F1 已实现但**已让位**：2026-10-13 用户指令「替换当前训练队列的 F1，在当前训练结束后直接接上」，
     GP-MSF 队列 `me_rssm/sanity/queue_gpmsf.sh` 已 armed（§97），F1 仍是 ConcatConv+雷达可靠性门，实现与预登记保留、可随时重排。
-  - **下一步**：①真实数据 GPU S0（仅 GPU 5/6/7，同 batch/N4：step-0 等价、显存与步时 ≤1.2×、零雷达回退、地址有界、两步梯度、投影离零）；
-    ②S0 通过后跑 24e 并做 ep6/ep12-16 判定；③补 B0/同容量 conv/固定采样对照，正结果后再补原 BEV-only、单尺度、独立地址、null/fallback 消融。
-    实现完成不等于已开训；A2-R 续训未受影响。
+  - [x] **首次 GPU 冒烟只读诊断与 CPU 反例取证（2026-10-13，§99）**：确认资源超限、复现消息轴混排；
+    独立进程仅补转置后非零残差的 chunk 等价恢复。当前仓库研究代码未修、未停队列、未启动额外 GPU 任务。
+  - **下一步**：①保留当前冒烟证据，禁止直接开 24e；修 query/channel 轴及非零残差/梯度/空间 impulse 回归，不能先盲调 chunk；
+    ②同 batch/初值拆解 anomaly、checkpoint、采样与同步开销，补有效 query/GT 区域条件 null、覆盖率和消息范数；
+    ③仅做机制保持提速并重跑真实 GPU S0（GPU 5/6/7，同 batch/N4，显存与步时仍须 ≤1.2×），全门通过再跑 24e、ep6/ep12-16 判定；
+    ④补 B0/同容量 conv/固定采样对照，正结果后再补原 BEV-only、单尺度、独立地址、null/fallback 消融。
+    CPU 门或梯度连通不等于空间取证正确；此次 S0 失败不得写成正确实现的 GP-MSF/AP 失败。
 
 - [ ] **方向 2：对象 query 驱动的多模态检测器（与方向 4 二选一）**
   - **状态：已有相关 detector/采样代码；当前 RSSM 主线尚未接入，未发现对应训练归档。**
