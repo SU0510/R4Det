@@ -18824,3 +18824,74 @@ DtoD memcpy 3,754 / compare 3,476 ——**全是 (B,qc,K,nH,dk) 小块 elementwi
   也必须两臂同时重测，不能只改一边。
 - 下一步：先做 head 向量化（同一数学、同一权重、逐位可回归），再用受控 chunk 扫描定档，
   然后才谈条件证据（③）与新 attempt S0（④）。
+
+---
+
+## 102. GP-MSF 机头（head）向量化：机制保持提速 2.36×（2026-10-13，CPU 等价 + 单卡微基准）
+
+### 102.1 范围、统一口径与唯一变量
+
+- 按用户执行顺序第 ② 步，在 §101 的算子数拆分之上做**机制保持**提速：
+  `mmdet3d/models/fusion_layers/geometry_multiscale_fusion.py` 内部把 `Hd` 头轴显式化，
+  几何/采样/兼容性/门控全改成一次广播；`_image_terms` 由逐头调用改为整头调用。
+- **唯一变量：实现方式**。地址生成、offset 上界、三原生 radar 层、三 image 层 + 三高度、
+  层间加权、paired compat、null 候选、valid 门控、参数集合与初始化、config、数据、RSSM/head **全部不变**。
+- **主指标区间均值：N/A（ep12–14 未形成，val n=0）；全轮峰值：N/A（无 val，epoch=N/A）；
+  best saved val：N/A。** 本轮不是训练，AP/资源门结论都不在此。
+- 证据：`docs/gpmsf_cost_decomposition_20261013.json`（§101，改前）、
+  `..._v2.json`（einsum 变体，反例）、`..._v3.json`（最终实现）；等价工具 `me_rssm/sanity/gpmsf_golden_compare.py`。
+
+### 102.2 等价性证明（先证明"没改数学"，再谈提速）
+
+改前用 `gpmsf_golden_compare.py save` 存下 CPU toy 契约的直接消息/输出/全部参数梯度/统计量，
+改后 `compare`：
+
+- **M_R、M_I、融合输出逐位相同**（max|Δ| = 0.0，chunk0 与 chunk5+checkpoint 两臂都比）；
+- 60 个参数梯度 max|Δ| = **8.94e-08**（批量 matmul 归约顺序的浮点噪声，≤1e-6 阈值）；
+- `last_stats` 全部字段一致（<1e-6）；参数名与顺序不变。
+- 常驻门禁同时全绿：`gpmsf_cpu_checks.py` **13/13**、`test_gpmsf_wiring.py` **11 passed** /
+  `test_gpmsf_queue_checks.py` **27 passed**（合跑 38）。t4 已按新签名改为整头调用，几何断言值不变。
+
+### 102.3 反例：不是所有"批量化"都更快（einsum 版本更快地变慢）
+
+第一版把逐头 `Linear` 也合成一个 `torch.einsum('bhmk,hok->bhmo')`。
+kernel 数确实从 74,450 降到 21,029，但 **GEMM 时间反而爆炸**（A/B 同进程同输入）：
+
+| 版本 | 冻结配置 时间 | sgemm 时间 | sgemm 次数 |
+| --- | ---: | ---: | ---: |
+| V1（改前） | 655.36 ms | 38.03 ms | 2,357 |
+| V2（einsum 合头） | 731.04 ms | **508.78 ms** | 673 |
+| V3（逐头 `F.linear`，最终） | **299.04 ms** | 26.49 ms | 2,017 |
+
+即"合并头"在 (M,dk)x(dk,dk) 这种小 N/K 形状上让 cuBLAS 退化 ~20×。
+最终版本只在**几何与采样**上批量化头轴，`Linear` 仍逐头调用（数学同 V1，GEMM 形状友好）。
+**结论：kernel 数减少是必要条件，不是充分条件；必须同时看器件时间。**
+
+### 102.4 最终成本（同一脚本、同一形状、同一输入）
+
+| 变体 | anomaly off | anomaly on | kernel 数（off） |
+| --- | ---: | ---: | ---: |
+| B0 ConcatConv | 11.30 ms | 11.48 ms | 16 |
+| GP-MSF 冻结（ckpt+chunk4096）改前 | 714.16 | 3125.35 | 74,450 |
+| GP-MSF 冻结 **改后** | **277.36** | **1322.07** | **27,105** |
+| GP-MSF 冒烟（+collect_stats）改后 | 294.79 | 1330.24 | 27,791 |
+| GP-MSF ckpt + 单块 改后 | 300.25 | — | 2,222 |
+| GP-MSF 无 ckpt + chunk4096 改后 | 238.00 | — | 19,965 |
+| GP-MSF 无 ckpt + 单块 改后 | 244.06 | — | 1,686 |
+
+- 冻结 = 24e 与 S0 用的配置：**anomaly off 2.58×、anomaly on 2.36× 提速**，显存不变（2279 MiB），kernel 数 −63.6%。
+- 提速后**分块不再是时间惩罚**（单块 300 vs 分块 277 ms），但单块要 8.9 GB 而分块只要 2.3 GB：
+  24e 保持 `ckpt+chunk4096`；`chunk2048` 仍更慢（328.84 ms），不存在"更小更快"。
+- 仍未变的乘数：`tools/train_vod.py:12` 的全局 anomaly **4.8×**（277 → 1322 ms）。它按算子数收费，
+  因此**必须先减算子再谈该开关**；是否限定该开关是 harness 改动，需用户批准且两臂同时重测。
+
+### 102.5 边界与下一步
+
+- 本节只测**融合块本体**（B=2、N=1、单卡 4090D、无 DDP/数据/优化器）。S0 的 ≤1.20× 判定仍在**整步**上，
+  §101 记录的 ~5.7 s/iter 未归因差额依然存在，**不得**用本节的 ms 直接推 AP 或资源门结论。
+- 由 1.550530 s/iter（B0）与 ≤1.20× 推出的新增预算仍是 ≈0.31 s/iter：融合块现为 1.322 s（anomaly 开）
+  ⇒ 仍不在门内，但已从 3.125 s 走到 1.322 s；下一步排序：
+  ① 在真实管线内做**分相 in-situ 计时**，先解释那 ~5.7 s/iter；
+  ② 继续在 (chunk×head) 之外的 elementwise/拷贝上减算子（不删 fallback、不用 GT 路由）；
+  ③ 之后才做条件证据分层（用户顺序 ③）与新 attempt S0（④），仍守 ≤1.20×。
+- 修复与提速都**未上 GPU 训练**；错排期间的旧 checkpoint 仍禁用。

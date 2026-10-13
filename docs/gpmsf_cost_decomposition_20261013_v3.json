@@ -1,0 +1,447 @@
+{
+  "arm_cfg": "me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py",
+  "batch": 2,
+  "bev_shape": [
+    248,
+    216
+  ],
+  "cuda_kernels_per_step": {
+    "B0_concat": {
+      "top": [
+        [
+          "void cudnn::ops::nchwToNhwcKernel<float, float, float, false, true, ",
+          2
+        ],
+        [
+          "void at::native::",
+          1
+        ],
+        [
+          "sm86_xmma_fprop_implicit_gemm_tf32f32_tf32f32_f32_nhwckrsc_nchw_tilesize128x128x16_stage3_warpsize2x2x1_g1_tensor16x8x8_execute_kernel_cudnn",
+          1
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctorOnSelf_add<long>, at::detail::Array<char*, 2> >",
+          1
+        ],
+        [
+          "void cudnn::bn_fw_tr_1C11_kernel_NCHW<float, float, int, 512, true, 1, true>",
+          1
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::",
+          1
+        ],
+        [
+          "Memset ",
+          1
+        ],
+        [
+          "void at::native::reduce_kernel<512, 1, at::native::ReduceOp<float, at::native::func_wrapper_t<float, at::native::sum_functor<float, float, float>::operator",
+          1
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<float>, at::detail::Array<char*, 1> >",
+          1
+        ],
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::BinaryFunctor<float, float, float, at::native::",
+          1
+        ],
+        [
+          "void cudnn::bn_bw_1C11_kernel_new<float, float, float2, 512, true, 1>",
+          1
+        ],
+        [
+          "void cudnn::winograd_nonfused::winogradWgradData4x4<float, float>",
+          1
+        ]
+      ],
+      "total": 16
+    },
+    "GPMSF_ckpt_c0": {
+      "top": [
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::direct_copy_kernel_cuda",
+          236
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, at::detail::Array<char*, 3> >",
+          152
+        ],
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > >",
+          131
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<float>, at::detail::Array<char*, 1> >",
+          127
+        ],
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::CUDAFunctor_add<float> >",
+          115
+        ],
+        [
+          "ampere_sgemm_32x128_tn",
+          110
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::BUnaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> >, at::detail::Array<char*, 2> >",
+          97
+        ],
+        [
+          "void at::native::",
+          83
+        ],
+        [
+          "Memcpy DtoD ",
+          75
+        ],
+        [
+          "void at::native::reduce_kernel<512, 1, at::native::ReduceOp<float, at::native::func_wrapper_t<float, at::native::sum_functor<float, float, float>::operator",
+          70
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::compare_scalar_kernel<float>",
+          66
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctorOnSelf_add<float>, at::detail::Array<char*, 2> >",
+          62
+        ]
+      ],
+      "total": 2222
+    },
+    "GPMSF_frozen": {
+      "top": [
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::direct_copy_kernel_cuda",
+          3230
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, at::detail::Array<char*, 3> >",
+          2620
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<float>, at::detail::Array<char*, 1> >",
+          1768
+        ],
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > >",
+          1756
+        ],
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::CUDAFunctor_add<float> >",
+          1443
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::BUnaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> >, at::detail::Array<char*, 2> >",
+          1254
+        ],
+        [
+          "void at::native::",
+          971
+        ],
+        [
+          "Memcpy DtoD ",
+          968
+        ],
+        [
+          "ampere_sgemm_32x128_tn",
+          948
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::compare_scalar_kernel<float>",
+          872
+        ],
+        [
+          "void at::native::reduce_kernel<512, 1, at::native::ReduceOp<float, at::native::func_wrapper_t<float, at::native::sum_functor<float, float, float>::operator",
+          837
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctorOnSelf_add<float>, at::detail::Array<char*, 2> >",
+          738
+        ]
+      ],
+      "total": 27105
+    },
+    "GPMSF_nockpt": {
+      "top": [
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, at::detail::Array<char*, 3> >",
+          2466
+        ],
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::direct_copy_kernel_cuda",
+          2376
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<float>, at::detail::Array<char*, 1> >",
+          1726
+        ],
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > >",
+          1252
+        ],
+        [
+          "Memcpy DtoD ",
+          772
+        ],
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::CUDAFunctor_add<float> >",
+          743
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::BUnaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> >, at::detail::Array<char*, 2> >",
+          680
+        ],
+        [
+          "void at::native::reduce_kernel<128, 4, at::native::ReduceOp<float, at::native::func_wrapper_t<float, at::native::sum_functor<float, float, float>::operator",
+          674
+        ],
+        [
+          "void at::native::reduce_kernel<512, 1, at::native::ReduceOp<float, at::native::func_wrapper_t<float, at::native::sum_functor<float, float, float>::operator",
+          599
+        ],
+        [
+          "void at::native::",
+          551
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::compare_scalar_kernel<float>",
+          550
+        ],
+        [
+          "Memset ",
+          527
+        ]
+      ],
+      "total": 19965
+    },
+    "GPMSF_nockpt_c0": {
+      "top": [
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::direct_copy_kernel_cuda",
+          175
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, at::detail::Array<char*, 3> >",
+          140
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<float>, at::detail::Array<char*, 1> >",
+          124
+        ],
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > >",
+          95
+        ],
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::CUDAFunctor_add<float> >",
+          66
+        ],
+        [
+          "Memcpy DtoD ",
+          61
+        ],
+        [
+          "ampere_sgemm_32x128_nn",
+          60
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::BUnaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> >, at::detail::Array<char*, 2> >",
+          56
+        ],
+        [
+          "ampere_sgemm_32x128_tn",
+          55
+        ],
+        [
+          "void at::native::",
+          53
+        ],
+        [
+          "void at::native::reduce_kernel<512, 1, at::native::ReduceOp<float, at::native::func_wrapper_t<float, at::native::sum_functor<float, float, float>::operator",
+          53
+        ],
+        [
+          "void at::native::reduce_kernel<128, 4, at::native::ReduceOp<float, at::native::func_wrapper_t<float, at::native::sum_functor<float, float, float>::operator",
+          50
+        ]
+      ],
+      "total": 1686
+    },
+    "GPMSF_smoke_stats1": {
+      "top": [
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::direct_copy_kernel_cuda",
+          3230
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, at::detail::Array<char*, 3> >",
+          2620
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<float>, at::detail::Array<char*, 1> >",
+          1768
+        ],
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > >",
+          1756
+        ],
+        [
+          "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl<at::native::CUDAFunctor_add<float> >",
+          1443
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::BUnaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> >, at::detail::Array<char*, 2> >",
+          1254
+        ],
+        [
+          "void at::native::",
+          971
+        ],
+        [
+          "Memcpy DtoD ",
+          968
+        ],
+        [
+          "ampere_sgemm_32x128_tn",
+          948
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::compare_scalar_kernel<float>",
+          872
+        ],
+        [
+          "void at::native::reduce_kernel<512, 1, at::native::ReduceOp<float, at::native::func_wrapper_t<float, at::native::sum_functor<float, float, float>::operator",
+          837
+        ],
+        [
+          "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctorOnSelf_add<float>, at::detail::Array<char*, 2> >",
+          738
+        ]
+      ],
+      "total": 27791
+    }
+  },
+  "device": "NVIDIA GeForce RTX 4090 D",
+  "note": "fusion block only: forward+backward of RCFusion with real shapes; no dataset/DDP/optimizer; anomaly detection mirrors tools/train_vod.py:12.",
+  "rows": [
+    {
+      "anomaly": false,
+      "n": 7,
+      "over": {},
+      "params_m": 1.475072,
+      "peak_mib": 1690.30810546875,
+      "tag": "B0_concat",
+      "time_min_ms": 11.291759088635445,
+      "time_ms": 11.300123296678066
+    },
+    {
+      "anomaly": true,
+      "n": 3,
+      "over": {},
+      "params_m": 1.475072,
+      "peak_mib": 1690.30810546875,
+      "tag": "B0_concat",
+      "time_min_ms": 11.474136263132095,
+      "time_ms": 11.48297886053721
+    },
+    {
+      "anomaly": false,
+      "n": 7,
+      "over": {},
+      "params_m": 1.652798,
+      "peak_mib": 2279.1337890625,
+      "tag": "GPMSF_frozen",
+      "time_min_ms": 276.595339179039,
+      "time_ms": 277.36268791237046
+    },
+    {
+      "anomaly": true,
+      "n": 3,
+      "over": {},
+      "params_m": 1.652798,
+      "peak_mib": 2278.5400390625,
+      "tag": "GPMSF_frozen",
+      "time_min_ms": 1246.0370790213346,
+      "time_ms": 1322.0689349497359
+    },
+    {
+      "anomaly": false,
+      "n": 7,
+      "over": {
+        "collect_stats": true
+      },
+      "params_m": 1.652798,
+      "peak_mib": 2278.5400390625,
+      "tag": "GPMSF_smoke_stats1",
+      "time_min_ms": 293.9586406573653,
+      "time_ms": 294.79062277823687
+    },
+    {
+      "anomaly": true,
+      "n": 3,
+      "over": {
+        "collect_stats": true
+      },
+      "params_m": 1.652798,
+      "peak_mib": 2278.5400390625,
+      "tag": "GPMSF_smoke_stats1",
+      "time_min_ms": 1268.5884200036526,
+      "time_ms": 1330.2368875592947
+    },
+    {
+      "anomaly": false,
+      "n": 7,
+      "over": {
+        "query_chunk": 0
+      },
+      "params_m": 1.652798,
+      "peak_mib": 8922.8984375,
+      "tag": "GPMSF_ckpt_c0",
+      "time_min_ms": 300.1800635829568,
+      "time_ms": 300.2514804580382
+    },
+    {
+      "anomaly": false,
+      "n": 7,
+      "over": {
+        "grad_checkpoint": false
+      },
+      "params_m": 1.652798,
+      "peak_mib": 9531.94775390625,
+      "tag": "GPMSF_nockpt",
+      "time_min_ms": 228.88328041881323,
+      "time_ms": 237.99793528659004
+    },
+    {
+      "anomaly": false,
+      "n": 7,
+      "over": {
+        "grad_checkpoint": false,
+        "query_chunk": 0
+      },
+      "params_m": 1.652798,
+      "peak_mib": 9455.6884765625,
+      "tag": "GPMSF_nockpt_c0",
+      "time_min_ms": 243.7165044248104,
+      "time_ms": 244.05876733362675
+    },
+    {
+      "anomaly": false,
+      "n": 7,
+      "over": {
+        "grad_checkpoint": false,
+        "query_chunk": 2048
+      },
+      "params_m": 1.652798,
+      "peak_mib": 9573.8017578125,
+      "tag": "GPMSF_nockpt_c2048",
+      "time_min_ms": 325.55121276527643,
+      "time_ms": 328.8395660264151
+    }
+  ],
+  "torch": "2.0.1+cu118"
+}

@@ -237,13 +237,16 @@ def t4_image_path():
     z0 = float(fz.z_refs[1])
     u_t, v_t = (col + 0.5) * stride, (row + 0.5) * stride
     xy = _address_for_pixel(geo['lidar2img'][0, 0], u_t, v_t, z0).float()
+    # _image_terms now takes the whole head axis; every head shares this one
+    # address, so head 0 is the same read as before (result gains a head dim)
     addr = xy.view(1, 1, 1, 2).repeat(B, 1, 1, 1)
-    q_ift = torch.zeros(B, 1, fz.head_dim)
-    i_h, ok, beta, _ = fz._image_terms(ctx, 0, addr, q_ift)
+    addr_hd = addr.unsqueeze(1).repeat(1, fz.num_heads, 1, 1, 1)
+    q_ift = torch.zeros(B, fz.num_heads, 1, fz.head_dim)
+    i_h, ok, beta, _ = fz._image_terms(ctx, addr_hd, q_ift)
     assert float(addr[0, 0, 0, 0]) > 0.0, 'test address is behind the toy camera'
-    assert bool(ok[0, 0, 0, 1]), 'the projected pixel was not marked valid'
-    vec = i_h[0, 0, 0, 1]                      # head-0 channel vector
-    w_lvl = float(beta[0, 0, 0, 1, s_idx])
+    assert bool(ok[0, 0, 0, 0, 1]), 'the projected pixel was not marked valid'
+    vec = i_h[0, 0, 0, 0, 1]                   # head-0 channel vector
+    w_lvl = float(beta[0, 0, 0, 0, 1, s_idx])
     assert w_lvl > 1e-3, 'P3 got no level weight'
     # The 1x1 projection conv maps the all-ones delta pixel to W.sum + b, so the
     # expected read is *analytic* and independent of the module's sampling code.
@@ -257,7 +260,7 @@ def t4_image_path():
                       for s in range(fz.image_num_levels) if s != s_idx]
     exp = w_lvl * unit_vec
     for s, b_s in other_bias:
-        exp = exp + float(beta[0, 0, 0, 1, s]) * b_s
+        exp = exp + float(beta[0, 0, 0, 0, 1, s]) * b_s
     err = float((vec - exp).abs().max())
     assert err < 2e-3, (
         f'P3 delta read differs from its own level weight x projected delta: {err:.5f}')
@@ -270,8 +273,9 @@ def t4_image_path():
         feats_r[s_idx][n] = ramp
     ctx_r = fz._build_context(dict(geo, img_feats=feats_r), B, DEV, torch.float32)
     x_f, y_f = 6.0, 1.2                  # in front of the toy camera
-    addr_r = torch.tensor([x_f, y_f]).float().view(1, 1, 1, 2).repeat(B, 1, 1, 1)
-    i_r, ok_r, beta_r, _ = fz._image_terms(ctx_r, 0, addr_r, q_ift)
+    addr_r = (torch.tensor([x_f, y_f]).float().view(1, 1, 1, 2)
+              .repeat(B, 1, 1, 1).unsqueeze(1).repeat(1, fz.num_heads, 1, 1, 1))
+    i_r, ok_r, beta_r, _ = fz._image_terms(ctx_r, addr_r, q_ift)
     reads, worst = [], 0.0
     for n, z_ref in enumerate(fz.z_refs.tolist()):
         p4 = torch.tensor([x_f, y_f, z_ref, 1.0], dtype=torch.float64)
@@ -279,15 +283,15 @@ def t4_image_path():
         u_n, v_n = float(proj[0] / proj[2]), float(proj[1] / proj[2])
         assert proj[2] > 0.0, f'height {n} projects behind the camera'
         assert 0.0 <= u_n <= 64.0 and 0.0 <= v_n <= 48.0, f'height {n} off image'
-        w_n = float(beta_r[0, 0, 0, n, s_idx])
+        w_n = float(beta_r[0, 0, 0, 0, n, s_idx])
         assert w_n > 1e-3, f'height {n} got no P3 level weight'
         rho = v_n / stride - 0.5                  # fractional row index read
         assert 0.0 <= rho <= h_feat - 1.0, 'ramp read falls outside the feature'
         exp_vec = w_n * (rho * w_sum + b_vec)     # conv of the ramp, then read
         for s, b_s in other_bias:                 # zero levels contribute bias only
-            exp_vec = exp_vec + float(beta_r[0, 0, 0, n, s]) * b_s
-        got_vec = i_r[0, 0, 0, n]
-        assert bool(ok_r[0, 0, 0, n]), f'height {n} marked invalid on the ramp'
+            exp_vec = exp_vec + float(beta_r[0, 0, 0, 0, n, s]) * b_s
+        got_vec = i_r[0, 0, 0, 0, n]
+        assert bool(ok_r[0, 0, 0, 0, n]), f'height {n} marked invalid on the ramp'
         worst = max(worst, float((got_vec - exp_vec).abs().max()))
         assert worst < 3e-3, (
             f'height {n} read differs from its own projected row value: {worst:.5f}')

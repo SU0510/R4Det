@@ -91,9 +91,16 @@ def _masked_softmax(scores, mask, dim):
     return weights * mask.to(weights.dtype)
 
 
-def _group(x, head, head_dim):
-    """Head slice of a (N, num_heads*head_dim, ...) tensor."""
-    return x[:, head * head_dim:(head + 1) * head_dim]
+def _head_linear(layers, x):
+    """Apply the per-head ``Linear``s in ``layers`` to ``x`` (B,Hd,...,dk).
+
+    Exactly the same parameters and the same math as a plain head loop, but
+    ``F.linear`` keeps the (M,dk)x(dk,dk) GEMM shape cuBLAS is fast at.  A
+    single ``torch.einsum('bhmk,hok->bhmo')`` over the head axis was measured
+    at ~20x the GEMM time of these calls (record section 102), so the batched
+    head axis is used for the *geometry and sampling* only.
+    """
+    return torch.stack([layers[h](x[:, h]) for h in range(len(layers))], dim=1)
 
 
 @FUSION_LAYERS.register_module()
@@ -392,6 +399,7 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
     def _build_context(self, geo, b, device, dtype):
         h, w = self.bev_shape
         num_views = int(geo['num_views'])
+        hd, dk = self.num_heads, self.head_dim
 
         iy = torch.arange(h, device=device, dtype=dtype)
         ix = torch.arange(w, device=device, dtype=dtype)
@@ -436,7 +444,12 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
             assert (feat.shape[-2] * stride, feat.shape[-1] * stride) == self.image_size, (
                 f'image level {s} has shape {tuple(feat.shape[-2:])}, inconsistent with '
                 f'stride {stride} and canvas {self.image_size}')
-            img_src.append(self.proj_img_levels[s](feat))
+            proj = self.proj_img_levels[s](feat)                # (B*N, d, h, w)
+            # head-major batch (B, Hd, N): the per-head loop is gone, so the
+            # sampling grid and the features must share one head order
+            img_src.append(proj.view(b, num_views, hd, dk, *proj.shape[-2:])
+                               .permute(0, 2, 1, 3, 4, 5)
+                               .reshape(b * hd * num_views, dk, *proj.shape[-2:]))
 
         post_rots = geo['post_rots'].to(device=device, dtype=dtype)
         post_trans = geo['post_trans'].to(device=device, dtype=dtype)
@@ -459,6 +472,9 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
             depth_stats = torch.cat([exp_depth, ent], dim=1)           # (B*N,2,hd,wd)
 
         support = self._radar_support(geo['points'], device, dtype)    # (B,1,HB,WB)
+        # one echo map per head-batch slot, built once per forward instead of
+        # once per chunk (the gate itself is still evaluated per address)
+        support_hd = support.repeat_interleave(hd, dim=0)              # (B*Hd,1,HB,WB)
         grid, inside = self._grid_from_meter(cell_xy.expand(b, -1, -1),
                                              self.radar_origin, self.radar_base_cell,
                                              self.radar_base_shape)
@@ -466,7 +482,8 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
 
         return dict(
             b=b, h=h, w=w, device=device, dtype=dtype, num_views=num_views,
-            cell_xy=cell_xy, e_r=e_r, e_t=e_t, support=support, m_parent=m_parent,
+            cell_xy=cell_xy, e_r=e_r, e_t=e_t, support=support,
+            support_hd=support_hd, m_parent=m_parent,
             rad_src=rad_src, img_src=img_src, depth_stats=depth_stats,
             lidar2img=geo['lidar2img'].to(device=device, dtype=dtype),
             inv_post_rot=torch.inverse(post_rots), post_trans=post_trans,
@@ -476,29 +493,35 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
     # ------------------------------------------------------------------
     # camera side
     # ------------------------------------------------------------------
-    def _image_terms(self, ctx, head, addr_h, q_ift_h):
-        """Camera evidence for one head / one chunk.
+    def _image_terms(self, ctx, addr, q_ift_h):
+        """Camera evidence for one chunk -- every head at once.
 
-        Returns ``i`` (B,qc,K,nH,dk), validity (B,qc,K,nH), weights
-        (B,qc,K,nH,L) and the depth descriptor score (B,qc,K,nH).
+        ``addr`` is ``(B,Hd,qc,K,2)`` (each head has its own bounded offsets)
+        and ``q_ift_h`` is ``(B,Hd,qc,dk)``.  Returns ``i`` (B,Hd,qc,K,nH,dk),
+        validity (B,Hd,qc,K,nH), level weights (B,Hd,qc,K,nH,L) and the
+        predicted-depth descriptor score (B,Hd,qc,K,nH).  The head axis is
+        explicit so the projection, the level sampling and the descriptor are
+        one broadcast op each instead of ``Hd`` Python-loop copies (training
+        record section 101); the geometry and the numbers are unchanged.
         """
         b = ctx['b']
-        qc, k = int(addr_h.shape[1]), int(addr_h.shape[2])
-        n_h, dk = self.num_heights, self.head_dim
-        n_views = ctx['num_views']
+        hd, dk = self.num_heads, self.head_dim
+        qc, k = int(addr.shape[2]), int(addr.shape[3])
+        n_h, n_views = self.num_heights, ctx['num_views']
         device, dtype = ctx['device'], ctx['dtype']
         h_img, w_img = self.image_size
         mc = qc * k * n_h
 
-        z_refs = self.z_refs.to(device=device, dtype=dtype).view(1, 1, 1, n_h)
-        z_aug = ctx['z_scale'].view(b, 1, 1, 1) * z_refs + ctx['z_shift'].view(b, 1, 1, 1)
+        z_refs = self.z_refs.to(device=device, dtype=dtype).view(1, 1, 1, 1, n_h)
+        z_aug = (ctx['z_scale'].view(b, 1, 1, 1, 1) * z_refs
+                 + ctx['z_shift'].view(b, 1, 1, 1, 1))
         pts = torch.cat([
-            addr_h.unsqueeze(3).expand(b, qc, k, n_h, 2),
-            z_aug.unsqueeze(-1).expand(b, qc, k, n_h, 1),
-        ], dim=-1).reshape(b, mc, 3)
-        pts4 = torch.cat([pts, torch.ones(b, mc, 1, device=device, dtype=dtype)], dim=-1)
+            addr.unsqueeze(4).expand(b, hd, qc, k, n_h, 2),
+            z_aug.view(b, 1, 1, 1, n_h, 1).expand(b, hd, qc, k, n_h, 1),
+        ], dim=-1).reshape(b, hd, mc, 3)
+        pts4 = torch.cat([pts, torch.ones(b, hd, mc, 1, device=device, dtype=dtype)], dim=-1)
 
-        proj = torch.einsum('bnij,bmj->bnmi', ctx['lidar2img'], pts4)   # (B,N,M,4)
+        proj = torch.einsum('bnij,bhmj->bhnmi', ctx['lidar2img'], pts4)  # (B,Hd,N,M,4)
         # KITTI-style 4x4 P: row 3 is [0,0,0,1]; the camera-frame depth is the
         # *third* homogeneous component (R4Det.py:1072 does the same).
         depth = proj[..., 2]
@@ -510,22 +533,22 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
 
         # Real (un-padded) image support: invert the pixel-space augmentation and
         # require the point to fall inside the *resized* image rectangle.
-        rel = torch.stack([u, v], dim=-1) - ctx['post_trans'].unsqueeze(2)
-        p_res = torch.einsum('bnij,bnmj->bnmi', ctx['inv_post_rot'], rel)
-        new_w = ctx['new_hw'][..., 1].unsqueeze(2)
-        new_h = ctx['new_hw'][..., 0].unsqueeze(2)
+        rel = torch.stack([u, v], dim=-1) - ctx['post_trans'].view(b, 1, n_views, 1, 2)
+        p_res = torch.einsum('bnij,bhnmj->bhnmi', ctx['inv_post_rot'], rel)
+        new_w = ctx['new_hw'][..., 1].view(b, 1, n_views, 1)
+        new_h = ctx['new_hw'][..., 0].view(b, 1, n_views, 1)
         valid = (valid & (p_res[..., 0] >= 0) & (p_res[..., 0] <= new_w - 1) &
                  (p_res[..., 1] >= 0) & (p_res[..., 1] <= new_h - 1))
 
-        cam_mask = valid.reshape(b * n_views, mc)
-        grid_uv = torch.stack([u, v], dim=-1).reshape(b * n_views, mc, 2)
-        count = cam_mask.view(b, n_views, mc).sum(dim=1).to(dtype)       # (B,M)
-        denom = count.clamp_min(1.0).unsqueeze(-1)                      # (B,M,1)
-        ok = count > 0                                                  # (B,M)
+        cam_mask = valid.reshape(b * hd * n_views, mc)
+        grid_uv = torch.stack([u, v], dim=-1).reshape(b * hd * n_views, mc, 2)
+        count = cam_mask.view(b, hd, n_views, mc).sum(dim=2).to(dtype)    # (B,Hd,M)
+        denom = count.clamp_min(1.0).unsqueeze(-1)                      # (B,Hd,M,1)
+        ok = count > 0                                                  # (B,Hd,M)
 
         lv_val, lv_score = [], []
         for s in range(self.image_num_levels):
-            feat = _group(ctx['img_src'][s], head, dk)                   # (B*N,dk,h,w)
+            feat = ctx['img_src'][s]                     # (B*Hd*N,dk,h,w)
             stride = self.image_level_strides[s]
             # u normalises by the feature width, v by the *height* (480x640
             # levels are not square, so a single divisor would skew every read)
@@ -533,20 +556,21 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
                 2.0 * grid_uv[..., 0] / float(stride * feat.shape[-1]) - 1.0,
                 2.0 * grid_uv[..., 1] / float(stride * feat.shape[-2]) - 1.0,
             ], dim=-1)
-            sampled = self._sample_map(feat, grid, cam_mask).view(b, n_views, mc, dk)
-            agg = (sampled * cam_mask.view(b, n_views, mc, 1).to(dtype)).sum(dim=1) / denom
-            keyed = self.key_img[head](agg).view(b, qc, k, n_h, dk)
-            score = (keyed * q_ift_h.unsqueeze(2).unsqueeze(3)).sum(-1) / math.sqrt(dk)
+            sampled = self._sample_map(feat, grid, cam_mask).view(b, hd, n_views, mc, dk)
+            agg = (sampled * cam_mask.view(b, hd, n_views, mc, 1).to(dtype)).sum(dim=2) / denom
+            keyed = _head_linear(self.key_img, agg).view(b, hd, qc, k, n_h, dk)
+            score = (keyed * q_ift_h.unsqueeze(3).unsqueeze(4)).sum(-1) / math.sqrt(dk)
             lv_val.append(agg)
-            lv_score.append(score.reshape(b, mc) + self.level_img_bias[head, s])
+            lv_score.append(score.reshape(b, hd, mc) +
+                            self.level_img_bias.view(1, hd, 1, -1)[..., s])
 
-        lv_score = torch.stack(lv_score, dim=-1)                         # (B,M,L)
-        lv_mask = ok.unsqueeze(-1).expand(-1, -1, self.image_num_levels)
+        lv_score = torch.stack(lv_score, dim=-1)                         # (B,Hd,M,L)
+        lv_mask = ok.unsqueeze(-1).expand(-1, -1, -1, self.image_num_levels)
         beta = _masked_softmax(lv_score, lv_mask, dim=-1)
         i_h = sum(beta[..., s:s + 1] * lv_val[s] for s in range(self.image_num_levels))
-        i_h = i_h.view(b, qc, k, n_h, dk)
-        beta = beta.view(b, qc, k, n_h, self.image_num_levels)
-        ok_h = ok.view(b, qc, k, n_h)
+        i_h = i_h.view(b, hd, qc, k, n_h, dk)
+        beta = beta.view(b, hd, qc, k, n_h, self.image_num_levels)
+        ok_h = ok.view(b, hd, qc, k, n_h)
 
         # predicted-depth descriptor: projected depth vs expected depth / entropy
         if ctx['depth_stats'] is not None:
@@ -554,31 +578,43 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
             gu = 2.0 * grid_uv[..., 0] / (stats.shape[-1] * self.depth_downsample) - 1.0
             gv = 2.0 * grid_uv[..., 1] / (stats.shape[-2] * self.depth_downsample) - 1.0
             gd = torch.stack([gu, gv], dim=-1)
-            exp_d = self._sample_map(stats[:, 0:1], gd, cam_mask).squeeze(-1)
-            ent_d = self._sample_map(stats[:, 1:2], gd, cam_mask).squeeze(-1)
+            # the same depth map serves every head: tile it into the (B,Hd,N)
+            # order of ``cam_mask``/``grid_uv`` instead of reordering the grid
+            stats_h = (stats.view(b, n_views, *stats.shape[1:])
+                            .unsqueeze(1)
+                            .expand(b, hd, n_views, *stats.shape[1:])
+                            .reshape(b * hd * n_views, *stats.shape[1:]))
+            exp_d = self._sample_map(stats_h[:, 0:1], gd, cam_mask).squeeze(-1)
+            ent_d = self._sample_map(stats_h[:, 1:2], gd, cam_mask).squeeze(-1)
             d_feat = torch.stack([
                 depth.reshape(-1, mc) / 50.0,
                 exp_d / 50.0,
                 (depth.reshape(-1, mc) - exp_d).abs() / 10.0,
                 ent_d / 5.0,
-            ], dim=-1)                                                  # (B*N,M,4)
-            d_score = self.depth_score(d_feat).squeeze(-1)              # (B*N,M)
-            d_score = d_score.view(b, n_views, mc)
-            mask_f = cam_mask.view(b, n_views, mc).to(dtype)
-            f_depth = (d_score * mask_f).sum(dim=1) / mask_f.sum(dim=1).clamp_min(1.0)
+            ], dim=-1)                                                  # (B*Hd*N,M,4)
+            d_score = self.depth_score(d_feat).squeeze(-1)              # (B*Hd*N,M)
+            d_score = d_score.view(b, hd, n_views, mc)
+            mask_f = cam_mask.view(b, hd, n_views, mc).to(dtype)
+            f_depth = (d_score * mask_f).sum(dim=2) / mask_f.sum(dim=2).clamp_min(1.0)
         else:
             # no predicted depth in this call: descriptor contributes exactly 0
             # but stays in the graph so every parameter is used under DDP
             zero = self.depth_score(torch.zeros((1, 1, 4), device=device, dtype=dtype)).sum()
-            f_depth = torch.zeros((b, mc), device=device, dtype=dtype) + 0.0 * zero
+            f_depth = torch.zeros((b, hd, mc), device=device, dtype=dtype) + 0.0 * zero
 
-        return i_h, ok_h, beta, f_depth.view(b, qc, k, n_h)
+        return i_h, ok_h, beta, f_depth.view(b, hd, qc, k, n_h)
 
     # ------------------------------------------------------------------
     # one chunk of cells
     # ------------------------------------------------------------------
     def _chunk(self, q_cam_c, q_rad_c, f_cat_c, ctx, start):
-        """Chunk of cells -> (M_R, M_I), each (B, D, qc)."""
+        """Chunk of cells -> (M_R, M_I), each (B, D, qc).
+
+        The head axis is explicit everywhere (``Hd`` sits right after the
+        batch) so a chunk costs a constant number of launches instead of
+        ``chunk * head * level`` copies of them.  Addresses, offsets, level
+        mixing, null candidates and validity gates are unchanged.
+        """
         b = q_cam_c.shape[0]
         qc = q_cam_c.shape[-1]
         hd, dk, k, n_h = self.num_heads, self.head_dim, self.num_offsets, self.num_heights
@@ -609,7 +645,7 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
         ], dim=-1)                                                      # (B,Hd,qc,K,6)
         b_geo = self.geom_score(geo_feat)                # (B,Hd,qc,K,Hd)
         # head h's own bias is the one head h's candidates use
-        b_geo = torch.stack([b_geo[..., h][:, h] for h in range(hd)], dim=1)  # (B,Hd,qc,K)
+        b_geo = torch.diagonal(b_geo, dim1=1, dim2=4).permute(0, 3, 1, 2)  # (B,Hd,qc,K)
 
         q_cam_h = q_cam_c.view(b, hd, dk, qc).permute(0, 1, 3, 2)       # (B,Hd,qc,dk)
         q_rad_h = q_rad_c.view(b, hd, dk, qc).permute(0, 1, 3, 2)
@@ -617,95 +653,93 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
         q_ift_h = q_cam_h + m_par * q_rad_h                             # (B,Hd,qc,dk)
 
         gamma = F.softplus(self.gamma_raw)
-        m_r = []
-        m_i = []
-        valid_r, valid_i = [], []
+        addr_flat = addr.reshape(b * hd, qc, k, 2)
+        m_hk = self._sample_head(ctx['support_hd'], addr_flat, self.radar_origin,
+                                 self.radar_base_cell)[0][..., 0] > 0.5
+        m_hk = m_hk.view(b, hd, qc, k)
+
+        # ---- radar: native levels ---------------------------------------
+        rad_val, rad_mask, rad_score = [], [], []
+        for lev in range(self.num_rad_levels):
+            src = ctx['rad_src'][lev]
+            feat = src.view(b * hd, dk, *src.shape[-2:])
+            val_l, inside_l = self._sample_head(feat, addr_flat, self.radar_origin,
+                                                self.radar_level_steps[lev])
+            val_l = val_l.view(b, hd, qc, k, dk)
+            keyed = _head_linear(self.key_rad, val_l)
+            sc = (keyed * q_cam_h.unsqueeze(3)).sum(-1) / math.sqrt(dk)
+            rad_val.append(val_l)
+            rad_mask.append(inside_l.view(b, hd, qc, k))
+            rad_score.append(sc + self.level_rad_bias.view(1, hd, 1, 1, -1)[..., lev])
+        rad_score = torch.stack(rad_score, dim=-1)                      # (B,Hd,qc,K,L)
+        rad_mask = torch.stack(rad_mask, dim=-1)
+        beta_rad = _masked_softmax(rad_score, rad_mask, dim=-1)
+        r_h = sum(beta_rad[..., lev:lev + 1] * rad_val[lev]
+                  for lev in range(self.num_rad_levels))
+
+        # ---- camera ------------------------------------------------------
+        i_h, ok_h, beta_img, f_depth = self._image_terms(ctx, addr, q_ift_h)
+
+        # ---- paired compatibility ----------------------------------------
+        compat = (r_h.unsqueeze(4) * i_h).sum(-1) / math.sqrt(dk)       # (B,Hd,qc,K,nH)
+        cm = compat.masked_fill(~ok_h, -1e4)
+        n_ok = ok_h.to(dtype).sum(dim=-1)                               # (B,Hd,qc,K)
+        c_mean = torch.where(
+            n_ok > 0,
+            torch.logsumexp(cm, dim=-1) - n_ok.clamp_min(1.0).log(),
+            torch.zeros_like(n_ok))
+        keyed_r = _head_linear(self.key_rad, r_h)
+        s_rad = (keyed_r * q_cam_h.unsqueeze(3)).sum(-1) / math.sqrt(dk)
+        s_rad = s_rad + gamma * c_mean + b_geo
+        radar_valid = m_hk & rad_mask.any(dim=-1)
+        sup = radar_valid.to(dtype)
+        s_rad = torch.cat([s_rad, self.null_rad.view(1, hd, 1, 1).expand(b, hd, qc, 1)],
+                          dim=-1)
+        mask_rad = torch.cat([sup, torch.ones((b, hd, qc, 1), device=sup.device,
+                                              dtype=torch.bool)], dim=-1)
+        w_rad = _masked_softmax(s_rad, mask_rad, dim=-1)
+        m_r = (w_rad[..., :k].unsqueeze(-1) * r_h).sum(dim=3)           # (B,Hd,qc,dk)
+
+        keyed_i = _head_linear(self.key_img, i_h)
+        s_img = (keyed_i * q_ift_h.unsqueeze(3).unsqueeze(4)).sum(-1) / math.sqrt(dk)
+        s_img = s_img + m_hk.unsqueeze(-1).to(dtype) * gamma * compat \
+                      + f_depth + b_geo.unsqueeze(-1)
+        s_img = s_img.reshape(b, hd, qc, k * n_h)
+        s_img = torch.cat([s_img, self.null_img.view(1, hd, 1, 1).expand(b, hd, qc, 1)],
+                          dim=-1)
+        mask_img = torch.cat([ok_h.reshape(b, hd, qc, k * n_h),
+                              torch.ones((b, hd, qc, 1), device=ok_h.device,
+                                         dtype=torch.bool)], dim=-1)
+        w_img = _masked_softmax(s_img, mask_img, dim=-1)
+        m_i = (w_img[..., :k * n_h].view(b, hd, qc, k, n_h, 1) * i_h).sum(dim=(3, 4))
+
         stats = {'sup': 0.0, 'n_rad': 0, 'n_img': 0, 'null_rad': 0.0, 'null_img': 0.0,
                  'lv_rad': [0.0] * self.num_rad_levels,
                  'lv_img': [0.0] * self.image_num_levels}
-
-        for head in range(hd):
-            a_h = addr[:, head]                                         # (B,qc,K,2)
-
-            # ---- radar: local support + native levels -------------------
-            m_hk = self._sample_head(ctx['support'], a_h, self.radar_origin,
-                                     self.radar_base_cell)[0][..., 0] > 0.5
-            rad_val, rad_mask, rad_score = [], [], []
+        if self.collect_stats:
+            count = b * qc * hd          # every head's cells are counted once
+            stats['sup'] += float(sup.mean()) * count
+            stats['n_rad'] += count
+            stats['n_img'] += count
+            stats['null_rad'] += float(w_rad[..., -1].mean()) * count
+            stats['null_img'] += float(w_img[..., -1].mean()) * count
             for lev in range(self.num_rad_levels):
-                feat = _group(ctx['rad_src'][lev], head, dk)
-                val_l, inside_l = self._sample_head(feat, a_h, self.radar_origin,
-                                                    self.radar_level_steps[lev])
-                keyed = self.key_rad[head](val_l)
-                sc = (keyed * q_cam_h[:, head].unsqueeze(2)).sum(-1) / math.sqrt(dk)
-                rad_val.append(val_l)
-                rad_mask.append(inside_l)
-                rad_score.append(sc + self.level_rad_bias[head, lev])
-            rad_score = torch.stack(rad_score, dim=-1)                  # (B,qc,K,L)
-            rad_mask = torch.stack(rad_mask, dim=-1)
-            beta_rad = _masked_softmax(rad_score, rad_mask, dim=-1)
-            r_h = sum(beta_rad[..., lev:lev + 1] * rad_val[lev]
-                      for lev in range(self.num_rad_levels))
+                stats['lv_rad'][lev] += float(beta_rad[..., lev].mean()) * count
+            for s in range(self.image_num_levels):
+                stats['lv_img'][s] += float(beta_img[..., s].mean()) * count
 
-            # ---- camera -------------------------------------------------
-            i_h, ok_h, beta_img, f_depth = self._image_terms(
-                ctx, head, a_h, q_ift_h[:, head])
-
-            # ---- paired compatibility ----------------------------------
-            compat = (r_h.unsqueeze(3) * i_h).sum(-1) / math.sqrt(dk)   # (B,qc,K,nH)
-            cm = compat.masked_fill(~ok_h, -1e4)
-            n_ok = ok_h.to(dtype).sum(dim=-1)                           # (B,qc,K)
-            c_mean = torch.where(
-                n_ok > 0,
-                torch.logsumexp(cm, dim=-1) - n_ok.clamp_min(1.0).log(),
-                torch.zeros_like(n_ok))
-            keyed_r = self.key_rad[head](r_h)
-            s_rad = (keyed_r * q_cam_h[:, head].unsqueeze(2)).sum(-1) / math.sqrt(dk)
-            s_rad = s_rad + gamma * c_mean + b_geo[:, head]
-            radar_valid = m_hk & rad_mask.any(dim=-1)
-            sup = radar_valid.to(dtype)
-            valid_r.append(radar_valid.any(dim=-1))
-            valid_i.append(ok_h.flatten(2).any(dim=-1))
-            s_rad = torch.cat([s_rad, self.null_rad[head].expand(b, qc, 1)], dim=-1)
-            mask_rad = torch.cat([sup, torch.ones((b, qc, 1), device=sup.device, dtype=torch.bool)], dim=-1)
-            w_rad = _masked_softmax(s_rad, mask_rad, dim=-1)
-            m_r.append((w_rad[..., :k].unsqueeze(-1) * r_h).sum(dim=2))
-
-            keyed_i = self.key_img[head](i_h)
-            s_img = (keyed_i * q_ift_h[:, head].unsqueeze(2).unsqueeze(3)).sum(-1) / math.sqrt(dk)
-            s_img = s_img + m_hk.unsqueeze(-1).to(dtype) * gamma * compat \
-                          + f_depth + b_geo[:, head].unsqueeze(-1)
-            s_img = s_img.reshape(b, qc, k * n_h)
-            s_img = torch.cat([s_img, self.null_img[head].expand(b, qc, 1)], dim=-1)
-            mask_img = torch.cat([ok_h.reshape(b, qc, k * n_h),
-                                  torch.ones((b, qc, 1), device=ok_h.device, dtype=torch.bool)],
-                                 dim=-1)
-            w_img = _masked_softmax(s_img, mask_img, dim=-1)
-            m_i.append((w_img[..., :k * n_h].view(b, qc, k, n_h, 1) * i_h).sum(dim=(2, 3)))
-
-            if self.collect_stats:
-                count = b * qc  # weight the smaller final query chunk correctly
-                stats['sup'] += float(sup.mean()) * count
-                stats['n_rad'] += count
-                stats['n_img'] += count
-                stats['null_rad'] += float(w_rad[..., -1].mean()) * count
-                stats['null_img'] += float(w_img[..., -1].mean()) * count
-                for lev in range(self.num_rad_levels):
-                    stats['lv_rad'][lev] += float(beta_rad[..., lev].mean()) * count
-                for s in range(self.image_num_levels):
-                    stats['lv_img'][s] += float(beta_img[..., s].mean()) * count
-
-        # each list entry is (B, qc, dk): swap back to (B, dk, qc) *before*
+        # each head's message is (B, qc, dk): swap back to (B, dk, qc) *before*
         # merging heads, otherwise the query and channel axes are interleaved
         # by the reshape and every message lands at the wrong BEV cell
         # (chunk-size dependent; proven by the chunked-vs-single-chunk
         # counterexample in gpmsf_cpu_checks t11/t12).
-        m_r = torch.stack(m_r, dim=1).permute(0, 1, 3, 2).reshape(b, self.embed_dim, qc)
-        m_i = torch.stack(m_i, dim=1).permute(0, 1, 3, 2).reshape(b, self.embed_dim, qc)
+        m_r = m_r.permute(0, 1, 3, 2).reshape(b, self.embed_dim, qc)
+        m_i = m_i.permute(0, 1, 3, 2).reshape(b, self.embed_dim, qc)
         # Gate the complete projection, including learned bias.
         # Empty evidence stays an exact identity after training too.
         return (m_r, m_i, (stats if self.collect_stats else None),
-                torch.stack(valid_r).any(dim=0).unsqueeze(1),
-                torch.stack(valid_i).any(dim=0).unsqueeze(1))
+                radar_valid.any(dim=3).any(dim=1).unsqueeze(1),
+                ok_h.flatten(3).any(dim=3).any(dim=1).unsqueeze(1))
 
     # ------------------------------------------------------------------
     # forward
