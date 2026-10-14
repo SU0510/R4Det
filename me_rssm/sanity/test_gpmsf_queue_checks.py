@@ -138,8 +138,10 @@ def test_queue_no_c1_gate_or_early_done():
     assert 'gpmsf_cpu_checks.py' in script
     assert 'gpmsf_real_preflight.py' in script
     assert 'gpmsf_baseline_smoke_450iter.py' in script
-    assert '--expected-epochs 24' in script
-    assert script.rfind("say 'DONE:") > script.rfind('epoch_24.pth')
+    assert 'tools/dist_train_runtime.sh' in script
+    assert '--detect-anomaly off' in script
+    assert 'S0 only: formal continuation requires manual review' in script
+    assert 'epoch_24.pth' not in script
     assert 'pkill' not in script
 
 

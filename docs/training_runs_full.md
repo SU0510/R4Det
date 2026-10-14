@@ -19471,3 +19471,43 @@ B0 省 **0.068 s/iter（−4.8%）**、显存 **16,959→10,035 MiB（−41%）*
   代价是丢掉 t2 历史帧的 recon/KL 梯度（机制变量，须消融）。
 - 下一步：把 `active_cells_only=True + rssm_bptt_steps=0` 落进 arm 配置，用 **anomaly off** 跑 450-iter 配对 S0（`gpmsf_smoke_450iter.py`
   与 `gpmsf_baseline_smoke_450iter.py` 两臂都继承新配置），过门后再从 `epoch_4.pth` 另开目录续训 ep5–24。
+
+### 104.11 BPTT0 版本化资源门方案（2026-10-14；代码已落地，S0 未运行）
+
+本节记录对 §104.10 探针结果的确定性决策。BPTT0 被接受为新的**共享资源比较协议**，不是 GP-MSF 的免费实现优化，也不覆盖历史 BPTT1 主线。
+
+#### 104.11.1 决策与研究边界
+
+- 保留历史 BPTT1 配置与旧实验记录，不修改旧配置、不放宽旧 `single_variable_contract()`。
+- 新增版本化 BPTT0 B0 reference：
+  `configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_bptt0.py`，仅覆盖 `model.rssm_bptt_steps=0`。
+- 新增正式 GP-MSF arm：
+  `me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf_activecells_bptt0.py`。
+  相对 BPTT0 B0 reference，只有 `RCFusion` 不同；arm 启用已经通过 S1 等价门的 `active_cells_only=True`。
+- S0 判定器改为接受显式 `--arm-config` / `--main-config`，契约仍严格要求模型顶层差异仅为 `['RCFusion']`。这把共享 temporal recipe 与结构变量分开，没有把门禁放宽为任意多变量。
+- `me_rssm/sanity/queue_gpmsf.sh` 改为 anomaly-off、BPTT0 配对 450-iter S0，并在 S0 后停止；正式 24e 不自动启动。
+
+#### 104.11.2 固定 S0 配方
+
+| 项目 | 固定值 |
+| --- | --- |
+| temporal protocol | arm/B0 都 `rssm_bptt_steps=0` |
+| fusion variable | arm `GeometryPairedMultiScaleFusion + active_cells_only=True`; B0 `ConcatConvFusion` |
+| debug | `--detect-anomaly off`，两臂相同 |
+| temporal input | N=4，4 帧前向，只有当前帧保留梯度 |
+| per-rank batch / accumulation | 2 / 2 |
+| distributed | DDP3，GPU 5/6/7 |
+| iterations | 450；同 seed=0、deterministic、同 optimizer/lr/hooks |
+| acceptance | time ratio ≤1.20 且 memory ratio ≤1.20；缺失证据、异常、非有限值均 FAIL |
+
+S0 必须同时通过真实 batch preflight、零初始化与两步梯度证据、native image/radar gradient evidence、checkpoint finite、3-rank parameter synchronization、完整 450-iter 日志与 paired resource verdict。150-iter 的 1.190× 只作选型依据，不作 S0 结论。
+
+#### 104.11.3 S0 通过后的训练边界
+
+S0 通过后，从旧段 `/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/epoch_4.pth` 另开目录，以 `tools/dist_train_runtime.sh ... --detect-anomaly off --resume-from ...` 续训到 ep24。`--resume-from` 恢复 optimizer/epoch/iter；不承诺 RNG bitwise 连续。旧 ep1–4 是 BPTT1 + anomaly-on，续训 ep5–24 是 BPTT0 + anomaly-off，必须分段记录。
+
+该续训只能作为工程上的连续训练，不得直接宣称为严格单变量 24e AP 对照。严格性能结论还需独立完成 BPTT0 B0 24e reference，再按统一口径报告：fixed window ep12–16 五轮等权区间均值、全轮峰值（指标值+epoch）、best saved、完整逐 epoch 曲线、逐类别与机制诊断。
+
+#### 104.11.4 若 S0 未通过
+
+不启动长训。优先按资源证据执行等价优化：去除 active path 的全 Q `argsort`、缓存 chunk 外几何量、合并 image depth 均值/熵采样、缩小 checkpoint 重算范围。不得以缩 N4、降低 batch、删除尺度、删除 camera-only fallback 或 GT 路由换门。若仍不能过门，重新预登记候选基数/语义变更，再决定是否放弃当前密集取证方案。

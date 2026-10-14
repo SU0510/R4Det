@@ -12,8 +12,10 @@ if str(ROOT) not in sys.path:
 from me_rssm.sanity.gpmsf_run_checks import (  # noqa: E402
     completed_phase, numeric_leaves, performance, read_rows, source_hashes, write_json)
 
-ARM_CFG = 'me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py'
-MAIN_CFG = 'configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr.py'
+LEGACY_ARM_CFG = 'me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py'
+LEGACY_MAIN_CFG = 'configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr.py'
+BPTT0_ARM_CFG = 'me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf_activecells_bptt0.py'
+BPTT0_MAIN_CFG = 'configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_bptt0.py'
 FROZEN = dict(max_iters=450, new_params=177726, fusion_conv_params=1475072,
               height_refs=(-1.1230436265, -0.3003779650, 0.6601446867), perf_ratio_cap=1.2)
 REQUIRED_REAL = ('common_initial_state', 'initial_rng', 'zero_projections',
@@ -86,12 +88,12 @@ def smoke_artifacts(directory, expected_config):
     return rows, checkpoint
 
 
-def single_variable_contract():
+def single_variable_contract(arm_cfg=LEGACY_ARM_CFG, main_cfg=LEGACY_MAIN_CFG):
     from mmcv import Config
     import me_rssm  # noqa: F401
     from mmdet3d.models.builder import FUSION_LAYERS
     import torch
-    arm, main = Config.fromfile(ARM_CFG), Config.fromfile(MAIN_CFG)
+    arm, main = Config.fromfile(arm_cfg), Config.fromfile(main_cfg)
     diff = sorted(k for k in set(arm.model) | set(main.model)
                   if arm.model.get(k) != main.model.get(k))
     # Bootstrap-only values are not research/solver changes.
@@ -126,10 +128,16 @@ def single_variable_contract():
     return dict(model_diff=diff, recipe_diff=recipe_diff, new_params=new, shared_params=shared)
 
 
-def verdict(work_dir, baseline_dir, real_path):
+def verdict(work_dir, baseline_dir, real_path,
+            arm_cfg=LEGACY_ARM_CFG, main_cfg=LEGACY_MAIN_CFG):
     result = dict(S0_ALL_PASS=False, frozen=FROZEN)
     try:
-        result['config_contract'] = single_variable_contract()
+        # Keep the zero-argument call for legacy callers/tests that replace
+        # the contract checker; versioned S0 passes explicit config paths.
+        if arm_cfg == LEGACY_ARM_CFG and main_cfg == LEGACY_MAIN_CFG:
+            result['config_contract'] = single_variable_contract()
+        else:
+            result['config_contract'] = single_variable_contract(arm_cfg, main_cfg)
         real = json.loads(Path(real_path).read_text())
         if (real.get('status') != 'PASS' or real.get('source_sha') != source_hashes()
                 or any(real.get('checks', {}).get(k) is not True for k in REQUIRED_REAL)):
@@ -176,9 +184,14 @@ def main():
     parser.add_argument('--work-dir', required=True)
     parser.add_argument('--baseline-dir', required=True)
     parser.add_argument('--real-preflight', required=True)
+    # Preserve legacy invocation semantics.  The BPTT0 queue passes the new
+    # versioned pair explicitly; old artifacts remain auditable unchanged.
+    parser.add_argument('--arm-config', default=LEGACY_ARM_CFG)
+    parser.add_argument('--main-config', default=LEGACY_MAIN_CFG)
     parser.add_argument('--out')
     args = parser.parse_args()
-    result = verdict(args.work_dir, args.baseline_dir, args.real_preflight)
+    result = verdict(args.work_dir, args.baseline_dir, args.real_preflight,
+                     args.arm_config, args.main_config)
     write_json(args.out or str(Path(args.work_dir) / 's0_verdict.json'), result)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result['S0_ALL_PASS'] else 1

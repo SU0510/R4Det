@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# GP-MSF replaces F1. Serial after A2-R; owns/kills ONLY its spawned sessions.
-# Fail closed: CPU -> real preflight -> matched B0/arm DDP S0 -> 24e.
+# GP-MSF BPTT0 resource gate. Serial after A2-R; owns/kills ONLY its spawned
+# sessions. Fail closed: CPU -> real preflight -> matched B0/arm DDP S0.
+# Formal continuation is intentionally NOT automatic: it must use the saved
+# S0 verdict and an explicit --resume-from epoch_4.pth command.
 set -eo pipefail
 cd /home/lurui/workspace/R4Det
 source .envrc
 set -u
 export CUDA_VISIBLE_DEVICES=5,6,7
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
-WD=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0
-CFG=me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py
-MAIN_CFG=configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr.py
+WD=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_bptt0_s0_seed0
+CFG=me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf_activecells_bptt0.py
+MAIN_CFG=configs/r4det/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_bptt0.py
 B0=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_seed0
 A2R=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_semA2R_seed0
 QLOG=$WD/queue_gpmsf.log
@@ -143,24 +145,15 @@ for arm in baseline gpmsf; do
   if [ "$arm" = baseline ]; then SMOKE_CFG=me_rssm/sanity/gpmsf_baseline_smoke_450iter.py
   else SMOKE_CFG=me_rssm/sanity/gpmsf_smoke_450iter.py; fi
   "${CHECK[@]}" start --work-dir "$PHASE_WD" --config "$SMOKE_CFG"
-  run_owned 21600 "$ATTEMPT/${arm}_smoke.log" no bash tools/dist_train.sh \
-    "$SMOKE_CFG" 3 --seed 0 --deterministic --work-dir "$PHASE_WD"
+  run_owned 21600 "$ATTEMPT/${arm}_smoke.log" no bash tools/dist_train_runtime.sh \
+    "$SMOKE_CFG" 3 --detect-anomaly off --seed 0 --deterministic \
+    --work-dir "$PHASE_WD"
   "${CHECK[@]}" finish --work-dir "$PHASE_WD"
 done
 python me_rssm/sanity/gpmsf_s0_verdict.py --work-dir "$ATTEMPT/gpmsf_450iter" \
   --baseline-dir "$ATTEMPT/baseline_450iter" \
   --real-preflight "$ATTEMPT/preflight/real_preflight.json" \
+  --arm-config "$CFG" --main-config "$MAIN_CFG" \
   --out "$ATTEMPT/s0_verdict.json" >> "$QLOG" 2>&1
 say "S0_ALL_PASS including matched <=1.20x resources; artifacts=$ATTEMPT"
-drain
-"${CHECK[@]}" start --work-dir "$WD" --config "$CFG"
-run_owned 259200 "$WD/train_gpmsf.log" yes bash tools/dist_train.sh "$CFG" 3 \
-  --seed 0 --deterministic --work-dir "$WD"
-"${CHECK[@]}" finish --work-dir "$WD"
-[ -f "$WD/epoch_24.pth" ] || { say 'epoch_24 checkpoint missing'; exit 1; }
-# Recheck ep6 even if the trainer finished between two watchdog polls.
-"${CHECK[@]}" curve --work-dir "$WD" --b0 "$B0" --window 1-6 --early-stop \
-  --out "$WD/gpmsf_ep6_report.json" >> "$QLOG" 2>&1
-"${CHECK[@]}" curve --work-dir "$WD" --b0 "$B0" --window 12-16 --expected-epochs 24 \
-  --out "$WD/gpmsf_full_curve_report.json" >> "$QLOG" 2>&1
-say 'DONE: trainer exited 0; ep24 saved; full ep1-24 curve and ep12-16 report verified'
+say 'S0 only: formal continuation requires manual review and explicit resume-from epoch_4.pth'

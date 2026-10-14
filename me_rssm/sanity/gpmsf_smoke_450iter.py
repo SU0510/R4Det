@@ -8,7 +8,7 @@
 # must be <=1.20x; missing evidence or over-budget means no automatic 24e run.
 _base_ = [
     '../configs/'
-    'TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py'
+    'TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf_activecells_bptt0.py'
 ]
 
 runner = dict(_delete_=True, type='IterBasedRunner', max_iters=450)

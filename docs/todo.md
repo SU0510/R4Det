@@ -124,15 +124,16 @@
     决定性对照（纯稠密 4096 vs 1365）m_i 9.09e-2/out 3.6e-3 ≈**1000×**⇒ 7e-5 是既有舍入非压缩。mask pass 仅 3.39 ms/call。
     模块 fwd+bwd **280.31→101.21 ms（2.77×）**、kernel **27,148→8,130**。真实整步短测 arm **1.712/1.773** vs B0 **1.465** s/iter ⇒ **≈1.21×**（仍近门，短测≠S0）。
     **提交 `bd1ac10`**。`active_cells_only` 目前只在 probe 配置；arm 主配置未开，正式 S0 前须显式打开。
-  - [ ] **BPTT1 vs BPTT0 真实配对探针 → 450-iter 资源 S0 → 决定是否开 24e（2026-10-14，§104.10，进行中）**：
+  - [x] **BPTT1 vs BPTT0 真实配对探针（2026-10-14，§104.10）**：
     N=4 默认 `rssm_bptt_steps=1` 使 t0/t1 burn-in、**t2 历史 + t3 当前共 2 个有梯度 forward**（非两次 optimizer update；`cumulative_iters=2`）。
     `rssm_bptt_steps=0` 只删 t2 反向图（保留 4 帧前向），预计中等收益、非数量级。探针 config 已建（arm/b0 × bptt1/bptt0，probe-only）。
-    探针 → 若收益明确则用 `active_cells_only=True + rssm_bptt_steps=0` 进配对 S0（arm 与 B0 同 temporal 变量）；S0 过 ≤1.20× 才开续训。
-  - **下一步（需用户决策后再动代码）**：在 **S1 候选压缩**（只对有效 (view,candidate) 取证；数学精确等价、
+    150-iter 真实配对结果显示 BPTT0 arm/B0 = **1.190×**，显存约 **18.0→10.4 GB**；该结果仅为短测，不替代 S0。
+  - [ ] **BPTT0 版本化配对 S0（2026-10-14，§104.11）**：使用共享 `rssm_bptt_steps=0` 的 B0 reference 与 GP-MSF arm，arm 仅额外改变 `RCFusion`；anomaly off、N4/bs2/DDP3、GPU 5/6/7、450 iter。时间与显存均须 ≤1.20×，否则不自动开长训。
+  - **S0 后续计划**：S0 通过后，从旧 `epoch_4.pth` 以 `--resume-from` 另开 work-dir 续训 ep5–24；该续训跨越 BPTT1+anomaly-on → BPTT0+anomaly-off 协议边界，不能与旧段合并成严格单配方 AP 结论。必须另补 BPTT0 B0 完整对照。
+  - **后续优化候选（S0 未通过才执行）**：在 **S1 候选压缩**（只对有效 (view,candidate) 取证；数学精确等价、
     但放弃逐位相同、需新等价契约）、**S2 逐头 GEMM 合并**（§102 已证有退化风险）、**S3 减 DtoD/memset**、
     **S4 重审候选基数**（k/n_h/level 稠密组合 = 语义变更，须预登记）之间选择；**不得**缩 N4、砍尺度、删 fallback。
-    达标（arm off ≤ 1.20 × B0 off ≈ 1.758 均值口径）后才从 `epoch_4.pth` 另开目录续训 ep5–24（`--resume-from`，
-    恢复 optimizer/epoch/iter，写明续训与 RNG 边界）。
+    旧 BPTT1 主线配置保持不变，禁止直接放宽旧 verdict 的单变量契约。
 
 - [ ] **方向 2：对象 query 驱动的多模态检测器（与方向 4 二选一）**
   - **状态：已有相关 detector/采样代码；当前 RSSM 主线尚未接入，未发现对应训练归档。**
