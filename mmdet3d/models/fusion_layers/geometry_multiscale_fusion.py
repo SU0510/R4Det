@@ -142,6 +142,8 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
         null_score_init (float): initial learnable null score per head.
         new_param_seed (int): seed of the isolated new-parameter RNG.
         collect_stats (bool): record cheap diagnostics under ``self.last_stats``.
+        active_cells_only (bool): skip the candidate chains of cells whose both
+            messages are provably zero (implementation switch, section 104.9).
             Diagnostics are python scalars and therefore force a sync; with
             ``grad_checkpoint`` the chunk statistics are counted twice.
     """
@@ -181,7 +183,8 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
                  null_score_init=0.0,
                  new_param_seed=20261013,
                  require_geo=False,
-                 collect_stats=False):
+                 collect_stats=False,
+                 active_cells_only=False):
         super(GeometryPairedMultiScaleFusion, self).__init__(
             img_channels=img_channels,
             rad_channels=rad_channels,
@@ -232,6 +235,10 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
         self.query_chunk = int(query_chunk)
         self.grad_checkpoint = bool(grad_checkpoint)
         self.collect_stats = bool(collect_stats)
+        # Resource-only switch (training record section 104.9): run the dense
+        # candidate chains only on cells whose two messages can be non-zero.
+        # Exact by construction (see ``_active_cells``); no new mechanism.
+        self.active_cells_only = bool(active_cells_only)
         self.new_param_seed = int(new_param_seed)
         # Train/eval hard guard against a silently unwired arm (the detector
         # must pass `geo`; otherwise this module would be the plain baseline).
@@ -349,6 +356,147 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
         inside = ((xi >= -0.5 - eps) & (xi <= w - 0.5 + eps) &
                   (yi >= -0.5 - eps) & (yi <= h - 0.5 + eps))
         return torch.stack([grid_x, grid_y], dim=-1), inside
+
+    # ------------------------------------------------------------------
+    # shared geometry helpers (the dense chunk path and the active-cell
+    # selection must see *bit-identical* masks, so both call these)
+    # ------------------------------------------------------------------
+    def _addresses(self, f_cat_c, cell_xy, e_r, e_t):
+        """Bounded metric addresses ``a_hk(p)`` for one chunk of cells.
+
+        ``f_cat_c`` is ``(B, 3*D, qc)``; ``cell_xy``/``e_r``/``e_t`` are the
+        already sliced (or gathered) cell geometry: ``(1|B, qc, 2)``.  Returns
+        ``addr`` and ``disp`` (both ``(B,Hd,qc,K,2)``).
+
+        The ``cell_xy`` row axis is *kept*: a dense slice carries one row (the
+        canvas grid is shared by the batch and broadcasts), while the gathered
+        active-cell subset carries B rows whose *columns* hold different cells
+        per sample -- taking row 0 there would silently address sample 0's
+        cells for every sample (proved by the degenerate-image A9 fixture).
+        """
+        b = f_cat_c.shape[0]
+        qc = f_cat_c.shape[-1]
+        hd, k = self.num_heads, self.num_offsets
+        dtype = f_cat_c.dtype
+        off = self.offset_conv(f_cat_c.unsqueeze(-1)).squeeze(-1)
+        off = off.view(b, hd, k - 1, 2, qc).permute(0, 1, 4, 2, 3)
+        bounds = self.offset_bounds.view(1, hd, 1, 1, 2).to(dtype)
+        tanh_off = torch.tanh(off) * bounds                             # (B,Hd,qc,K-1,2)
+        zeros = torch.zeros_like(tanh_off[..., :1, :])
+        tanh_off = torch.cat([zeros, tanh_off], dim=3)                  # (B,Hd,qc,K,2)
+
+        # (1|B, qc, 2) -> (1|B, 1, qc, 1, 2); broadcast over (B, Hd, qc, K, 2)
+        rows = int(cell_xy.shape[0])
+        assert rows in (1, b) and int(cell_xy.shape[1]) == qc, (
+            f'cell geometry {tuple(cell_xy.shape)} does not match chunk (B={b}, qc={qc})')
+        assert int(e_r.shape[0]) in (1, b) and int(e_t.shape[0]) in (1, b), (
+            'radial/tangential basis must be single-row or per-sample')
+        p_e = cell_xy.unsqueeze(1).unsqueeze(3)
+        e_r = e_r.unsqueeze(1).unsqueeze(3)
+        e_t = e_t.unsqueeze(1).unsqueeze(3)
+        addr = (p_e + tanh_off[..., 0:1] * e_r + tanh_off[..., 1:2] * e_t)
+        disp = addr - p_e                                               # (B,Hd,qc,K,2)
+        return addr, disp
+
+    def _project_candidates(self, ctx, addr):
+        """Camera-frame projection of every candidate address in a chunk.
+
+        ``addr`` ``(B,Hd,qc,K,2)`` -> ``cam_mask``/``grid_uv`` in the
+        ``(B*Hd*N, qc*K*n_h(,2))`` layout the sampling uses, plus the raw
+        camera-frame ``depth`` (B,Hd,N,M).  Both the dense chunk path and the
+        active-cell selection call this exact function so the validity masks
+        can never drift apart.
+        """
+        b = ctx['b']
+        hd, dk = self.num_heads, self.head_dim
+        qc, k = int(addr.shape[2]), int(addr.shape[3])
+        n_h, n_views = self.num_heights, ctx['num_views']
+        device, dtype = ctx['device'], ctx['dtype']
+        h_img, w_img = self.image_size
+        mc = qc * k * n_h
+
+        z_refs = self.z_refs.to(device=device, dtype=dtype).view(1, 1, 1, 1, n_h)
+        z_aug = (ctx['z_scale'].view(b, 1, 1, 1, 1) * z_refs
+                 + ctx['z_shift'].view(b, 1, 1, 1, 1))
+        pts = torch.cat([
+            addr.unsqueeze(4).expand(b, hd, qc, k, n_h, 2),
+            z_aug.view(b, 1, 1, 1, n_h, 1).expand(b, hd, qc, k, n_h, 1),
+        ], dim=-1).reshape(b, hd, mc, 3)
+        pts4 = torch.cat([pts, torch.ones(b, hd, mc, 1, device=device, dtype=dtype)], dim=-1)
+
+        proj = torch.einsum('bnij,bhmj->bhnmi', ctx['lidar2img'], pts4)  # (B,Hd,N,M,4)
+        # KITTI-style 4x4 P: row 3 is [0,0,0,1]; the camera-frame depth is the
+        # *third* homogeneous component (R4Det.py:1072 does the same).
+        depth = proj[..., 2]
+        depth_safe = depth.clamp_min(1e-3)
+        u = proj[..., 0] / depth_safe
+        v = proj[..., 1] / depth_safe
+        valid = ((depth > self.min_camera_depth) &
+                 (u >= 0) & (u <= w_img - 1) & (v >= 0) & (v <= h_img - 1))
+
+        # Real (un-padded) image support: invert the pixel-space augmentation and
+        # require the point to fall inside the *resized* image rectangle.
+        rel = torch.stack([u, v], dim=-1) - ctx['post_trans'].view(b, 1, n_views, 1, 2)
+        p_res = torch.einsum('bnij,bhnmj->bhnmi', ctx['inv_post_rot'], rel)
+        new_w = ctx['new_hw'][..., 1].view(b, 1, n_views, 1)
+        new_h = ctx['new_hw'][..., 0].view(b, 1, n_views, 1)
+        valid = (valid & (p_res[..., 0] >= 0) & (p_res[..., 0] <= new_w - 1) &
+                 (p_res[..., 1] >= 0) & (p_res[..., 1] <= new_h - 1))
+
+        cam_mask = valid.reshape(b * hd * n_views, mc)
+        grid_uv = torch.stack([u, v], dim=-1).reshape(b * hd * n_views, mc, 2)
+        return cam_mask, grid_uv, depth
+
+    def _radar_candidate_geometry(self, ctx, addr_flat):
+        """Echo support and in-canvas masks of every candidate address.
+
+        ``addr_flat`` ``(B*Hd, qc, K, 2)`` -> ``m_hk`` ``(B*Hd, qc, K)`` bool
+        and, per native level, the normalised grid and in-bounds mask in the
+        flattened ``(B*Hd, qc*K(,2))`` layout that ``_sample_map`` consumes.
+        """
+        m_hk = self._sample_head(ctx['support_hd'], addr_flat, self.radar_origin,
+                                 self.radar_base_cell)[0][..., 0] > 0.5
+        rows = addr_flat.shape[0]
+        grids, insides = [], []
+        for lev in range(self.num_rad_levels):
+            shape = ctx['rad_src'][lev].shape[-2:]
+            grid, inside = self._grid_from_meter(addr_flat, self.radar_origin,
+                                                 self.radar_level_steps[lev], shape)
+            grids.append(grid.reshape(rows, -1, 2))
+            insides.append(inside.reshape(rows, -1))
+        return m_hk, grids, insides
+
+    def _active_cells(self, ctx, f_cat_f, cell_xy, e_r, e_t):
+        """Cells whose two messages cannot both be provably zero.
+
+        A cell is *inactive* only when no candidate address of any head has
+        image validity (``ok_h``) and none has radar echo support
+        (``radar_valid``).  For such a cell the module provably returns
+        ``M_R = M_I = 0`` and ``valid_r = valid_i = False`` (every candidate is
+        excluded from both candidate softmaxes, so each softmax puts weight 1 on
+        its null entry) -- the residual projections are then multiplied by zero.
+        Skipping the cell therefore cannot change the fusion output.
+
+        Runs under ``no_grad`` on purpose: masks are comparisons (zero
+        subgradient a.e.) and the differentiable geometry is recomputed inside
+        each processed chunk, so the sampling-grid gradient is untouched.
+        """
+        b = ctx['b']
+        q = f_cat_f.shape[-1]
+        hd = self.num_heads
+        n_views = ctx['num_views']
+        with torch.no_grad():
+            addr, _ = self._addresses(f_cat_f, cell_xy, e_r, e_t)
+            cam_mask, _, _ = self._project_candidates(ctx, addr)
+            mc = cam_mask.shape[1]
+            image_ok = cam_mask.view(b, hd, n_views, mc).any(dim=2)     # (B,Hd,M)
+            image_ok = image_ok.view(b, hd, q, -1).any(dim=3)
+            addr_flat = addr.reshape(b * hd, q, self.num_offsets, 2)
+            m_hk, _, rad_inside = self._radar_candidate_geometry(ctx, addr_flat)
+            inside_any = torch.stack(rad_inside, dim=-1)
+            inside_any = inside_any.view(b * hd, q, self.num_offsets, -1).any(dim=-1)
+            radar_sup = (m_hk & inside_any).view(b, hd, q, self.num_offsets).any(dim=3)
+            return (image_ok | radar_sup).any(dim=1)                    # (B,q) bool
 
     @staticmethod
     def _sample_map(feat, grid, mask):
@@ -512,36 +660,9 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
         h_img, w_img = self.image_size
         mc = qc * k * n_h
 
-        z_refs = self.z_refs.to(device=device, dtype=dtype).view(1, 1, 1, 1, n_h)
-        z_aug = (ctx['z_scale'].view(b, 1, 1, 1, 1) * z_refs
-                 + ctx['z_shift'].view(b, 1, 1, 1, 1))
-        pts = torch.cat([
-            addr.unsqueeze(4).expand(b, hd, qc, k, n_h, 2),
-            z_aug.view(b, 1, 1, 1, n_h, 1).expand(b, hd, qc, k, n_h, 1),
-        ], dim=-1).reshape(b, hd, mc, 3)
-        pts4 = torch.cat([pts, torch.ones(b, hd, mc, 1, device=device, dtype=dtype)], dim=-1)
-
-        proj = torch.einsum('bnij,bhmj->bhnmi', ctx['lidar2img'], pts4)  # (B,Hd,N,M,4)
-        # KITTI-style 4x4 P: row 3 is [0,0,0,1]; the camera-frame depth is the
-        # *third* homogeneous component (R4Det.py:1072 does the same).
-        depth = proj[..., 2]
-        depth_safe = depth.clamp_min(1e-3)
-        u = proj[..., 0] / depth_safe
-        v = proj[..., 1] / depth_safe
-        valid = ((depth > self.min_camera_depth) &
-                 (u >= 0) & (u <= w_img - 1) & (v >= 0) & (v <= h_img - 1))
-
-        # Real (un-padded) image support: invert the pixel-space augmentation and
-        # require the point to fall inside the *resized* image rectangle.
-        rel = torch.stack([u, v], dim=-1) - ctx['post_trans'].view(b, 1, n_views, 1, 2)
-        p_res = torch.einsum('bnij,bhnmj->bhnmi', ctx['inv_post_rot'], rel)
-        new_w = ctx['new_hw'][..., 1].view(b, 1, n_views, 1)
-        new_h = ctx['new_hw'][..., 0].view(b, 1, n_views, 1)
-        valid = (valid & (p_res[..., 0] >= 0) & (p_res[..., 0] <= new_w - 1) &
-                 (p_res[..., 1] >= 0) & (p_res[..., 1] <= new_h - 1))
-
-        cam_mask = valid.reshape(b * hd * n_views, mc)
-        grid_uv = torch.stack([u, v], dim=-1).reshape(b * hd * n_views, mc, 2)
+        # geometry lives in one shared helper: the dense chunk path and the
+        # active-cell selection call the *same* code, so their masks cannot drift
+        cam_mask, grid_uv, depth = self._project_candidates(ctx, addr)
         count = cam_mask.view(b, hd, n_views, mc).sum(dim=2).to(dtype)    # (B,Hd,M)
         denom = count.clamp_min(1.0).unsqueeze(-1)                      # (B,Hd,M,1)
         ok = count > 0                                                  # (B,Hd,M)
@@ -607,35 +728,29 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
     # ------------------------------------------------------------------
     # one chunk of cells
     # ------------------------------------------------------------------
-    def _chunk(self, q_cam_c, q_rad_c, f_cat_c, ctx, start):
+    def _chunk(self, q_cam_c, q_rad_c, f_cat_c, cell_xy_c, e_r_c, e_t_c, m_par_c, ctx):
         """Chunk of cells -> (M_R, M_I), each (B, D, qc).
 
         The head axis is explicit everywhere (``Hd`` sits right after the
         batch) so a chunk costs a constant number of launches instead of
         ``chunk * head * level`` copies of them.  Addresses, offsets, level
         mixing, null candidates and validity gates are unchanged.
+
+        The cell geometry (``cell_xy_c``/``e_r_c``/``e_t_c``/``m_par_c``) is
+        passed in already sliced -- or gathered, when the caller runs only the
+        active-cell subset (``active_cells_only``).  The cell axis carries no
+        identity of its own, so both routes are the same computation.
         """
         b = q_cam_c.shape[0]
         qc = q_cam_c.shape[-1]
         hd, dk, k, n_h = self.num_heads, self.head_dim, self.num_offsets, self.num_heights
         dtype = ctx['dtype']
-        end = start + qc
 
         # ---- bounded metric addresses -----------------------------------
-        off = self.offset_conv(f_cat_c.unsqueeze(-1)).squeeze(-1)
-        off = off.view(b, hd, k - 1, 2, qc).permute(0, 1, 4, 2, 3)
-        bounds = self.offset_bounds.view(1, hd, 1, 1, 2).to(dtype)
-        tanh_off = torch.tanh(off) * bounds                             # (B,Hd,qc,K-1,2)
-        zeros = torch.zeros_like(tanh_off[..., :1, :])
-        tanh_off = torch.cat([zeros, tanh_off], dim=3)                  # (B,Hd,qc,K,2)
+        addr, disp = self._addresses(f_cat_c, cell_xy_c, e_r_c, e_t_c)
 
-        cell_xy = ctx['cell_xy'][:, start:end]                          # (1,qc,2)
-        p_e = cell_xy.view(1, 1, qc, 1, 2)
-        e_r = ctx['e_r'][:, start:end].view(b, 1, qc, 1, 2)
-        e_t = ctx['e_t'][:, start:end].view(b, 1, qc, 1, 2)
-        addr = (p_e + tanh_off[..., 0:1] * e_r + tanh_off[..., 1:2] * e_t)
-        disp = addr - p_e                                               # (B,Hd,qc,K,2)
-
+        e_r = e_r_c.unsqueeze(1).unsqueeze(3)
+        e_t = e_t_c.unsqueeze(1).unsqueeze(3)
         geo_feat = torch.cat([
             (disp[..., 0:1]) / 1.28, (disp[..., 1:2]) / 1.28,
             disp.norm(dim=-1, keepdim=True) / 1.28,
@@ -649,27 +764,25 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
 
         q_cam_h = q_cam_c.view(b, hd, dk, qc).permute(0, 1, 3, 2)       # (B,Hd,qc,dk)
         q_rad_h = q_rad_c.view(b, hd, dk, qc).permute(0, 1, 3, 2)
-        m_par = ctx['m_parent'][:, start:end, 0].view(b, 1, qc, 1)
+        m_par = m_par_c.view(b, 1, qc, 1)
         q_ift_h = q_cam_h + m_par * q_rad_h                             # (B,Hd,qc,dk)
 
         gamma = F.softplus(self.gamma_raw)
         addr_flat = addr.reshape(b * hd, qc, k, 2)
-        m_hk = self._sample_head(ctx['support_hd'], addr_flat, self.radar_origin,
-                                 self.radar_base_cell)[0][..., 0] > 0.5
-        m_hk = m_hk.view(b, hd, qc, k)
+        m_hk_flat, rad_grids, rad_insides = self._radar_candidate_geometry(ctx, addr_flat)
+        m_hk = m_hk_flat.view(b, hd, qc, k)
 
         # ---- radar: native levels ---------------------------------------
         rad_val, rad_mask, rad_score = [], [], []
         for lev in range(self.num_rad_levels):
             src = ctx['rad_src'][lev]
             feat = src.view(b * hd, dk, *src.shape[-2:])
-            val_l, inside_l = self._sample_head(feat, addr_flat, self.radar_origin,
-                                                self.radar_level_steps[lev])
+            val_l = self._sample_map(feat, rad_grids[lev], rad_insides[lev])
             val_l = val_l.view(b, hd, qc, k, dk)
             keyed = _head_linear(self.key_rad, val_l)
             sc = (keyed * q_cam_h.unsqueeze(3)).sum(-1) / math.sqrt(dk)
             rad_val.append(val_l)
-            rad_mask.append(inside_l.view(b, hd, qc, k))
+            rad_mask.append(rad_insides[lev].view(b, hd, qc, k))
             rad_score.append(sc + self.level_rad_bias.view(1, hd, 1, 1, -1)[..., lev])
         rad_score = torch.stack(rad_score, dim=-1)                      # (B,Hd,qc,K,L)
         rad_mask = torch.stack(rad_mask, dim=-1)
@@ -803,17 +916,65 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
                'lv_rad': [0.0] * self.num_rad_levels,
                'lv_img': [0.0] * self.image_num_levels}
         use_ckpt = self.grad_checkpoint and self.training and torch.is_grad_enabled()
-        for start in range(0, q, chunk):
-            end = min(start + chunk, q)
-            args = (q_cam_f[..., start:end], q_rad_f[..., start:end], f_cat_f[..., start:end])
-            if use_ckpt:
-                out = checkpoint(self._chunk, *args, ctx, start, use_reentrant=False)
+
+        # ---- active-cell subset (training record section 104.9) ----------
+        # Only cells whose two messages can be non-zero are computed.  The
+        # permutation is active-first and the canvases are zero-initialised, so
+        # every dropped cell keeps exactly the values the dense path produces
+        # for it: M_R = M_I = 0 and valid_r = valid_i = False (each candidate
+        # softmax puts weight 1 on its null entry), hence a zero residual.
+        order, n_cells = None, q
+        if self.active_cells_only:
+            active = self._active_cells(ctx, f_cat_f, ctx['cell_xy'],
+                                        ctx['e_r'], ctx['e_t'])
+            n_max = int(active.sum(dim=1).max().item()) if b else 0
+            if n_max > 0:
+                order = torch.argsort(active.to(torch.uint8), dim=1,
+                                      descending=True, stable=True)
+                n_cells = n_max
+        compact = order is not None
+        if compact:
+            m_r = torch.zeros((b, self.embed_dim, q), device=device, dtype=dtype)
+            m_i = torch.zeros_like(m_r)
+            valid_r = torch.zeros((b, 1, q), device=device, dtype=torch.bool)
+            valid_i = torch.zeros_like(valid_r)
+
+        for start in range(0, n_cells, chunk):
+            end = min(start + chunk, n_cells)
+            if compact:
+                idx = order[:, start:end]
+                idx_c = idx.unsqueeze(1)
+                q_cam_c = q_cam_f.gather(2, idx_c.expand(-1, self.embed_dim, -1))
+                q_rad_c = q_rad_f.gather(2, idx_c.expand(-1, self.embed_dim, -1))
+                f_cat_c = f_cat_f.gather(2, idx_c.expand(-1, 3 * self.embed_dim, -1))
+                idx_xy = idx.unsqueeze(-1).expand(-1, -1, 2)
+                cell_xy_c = ctx['cell_xy'].expand(b, -1, -1).gather(1, idx_xy)
+                e_r_c = ctx['e_r'].gather(1, idx_xy)
+                e_t_c = ctx['e_t'].gather(1, idx_xy)
+                m_par_c = ctx['m_parent'][:, :, 0].gather(1, idx).unsqueeze(-1)
             else:
-                out = self._chunk(*args, ctx, start)
-            m_r_parts.append(out[0])
-            m_i_parts.append(out[1])
-            valid_r_parts.append(out[3])
-            valid_i_parts.append(out[4])
+                q_cam_c = q_cam_f[..., start:end]
+                q_rad_c = q_rad_f[..., start:end]
+                f_cat_c = f_cat_f[..., start:end]
+                cell_xy_c = ctx['cell_xy'][:, start:end]
+                e_r_c = ctx['e_r'][:, start:end]
+                e_t_c = ctx['e_t'][:, start:end]
+                m_par_c = ctx['m_parent'][:, start:end]
+            args = (q_cam_c, q_rad_c, f_cat_c, cell_xy_c, e_r_c, e_t_c, m_par_c)
+            if use_ckpt:
+                out = checkpoint(self._chunk, *args, ctx, use_reentrant=False)
+            else:
+                out = self._chunk(*args, ctx)
+            if compact:
+                m_r.scatter_(2, idx_c.expand(-1, self.embed_dim, -1), out[0])
+                m_i.scatter_(2, idx_c.expand(-1, self.embed_dim, -1), out[1])
+                valid_r.scatter_(2, idx_c, out[3])
+                valid_i.scatter_(2, idx_c, out[4])
+            else:
+                m_r_parts.append(out[0])
+                m_i_parts.append(out[1])
+                valid_r_parts.append(out[3])
+                valid_i_parts.append(out[4])
             if self.collect_stats:
                 for key in ('sup', 'null_rad', 'null_img'):
                     agg[key] += out[2][key]
@@ -824,10 +985,27 @@ class GeometryPairedMultiScaleFusion(ConcatConvFusion):
                 for s in range(self.image_num_levels):
                     agg['lv_img'][s] += out[2]['lv_img'][s]
 
-        m_r = torch.cat(m_r_parts, dim=-1).view(b, self.embed_dim, h, w)
-        m_i = torch.cat(m_i_parts, dim=-1).view(b, self.embed_dim, h, w)
-        valid_r = torch.cat(valid_r_parts, dim=-1).view(b, 1, h, w)
-        valid_i = torch.cat(valid_i_parts, dim=-1).view(b, 1, h, w)
+        if compact:
+            # Cells at permuted positions >= every sample's active count are
+            # inactive for every sample (no echo support, no image validity):
+            # sup = 0, null weights = 1, level weights = 0.  Adding that
+            # contribution analytically keeps the diagnostics means over the
+            # *whole* canvas, exactly as in the dense path.
+            extra = (q - n_cells) * self.num_heads
+            if extra:
+                agg['n_rad'] += extra * b
+                agg['n_img'] += extra * b
+                agg['null_rad'] += float(extra * b)
+                agg['null_img'] += float(extra * b)
+        else:
+            m_r = torch.cat(m_r_parts, dim=-1)
+            m_i = torch.cat(m_i_parts, dim=-1)
+            valid_r = torch.cat(valid_r_parts, dim=-1)
+            valid_i = torch.cat(valid_i_parts, dim=-1)
+        m_r = m_r.view(b, self.embed_dim, h, w)
+        m_i = m_i.view(b, self.embed_dim, h, w)
+        valid_r = valid_r.view(b, 1, h, w)
+        valid_i = valid_i.view(b, 1, h, w)
         c_new = img_bev + self.proj_r2c(m_r) * valid_r.to(dtype)
         r_new = radar_bev + self.proj_i2r(m_i) * valid_i.to(dtype)
 

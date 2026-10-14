@@ -136,6 +136,11 @@ def _queries(fz, img, rad):
     return q_cam, q_rad, f_cat
 
 
+def _cell_geo(ctx):
+    """The cell-geometry argument tail of ``_chunk`` for a whole canvas."""
+    return (ctx['cell_xy'], ctx['e_r'], ctx['e_t'], ctx['m_parent'], ctx)
+
+
 def _address_for_pixel(lidar2img, u_t, v_t, z0):
     """Solve for (x, y) on the plane z=z0 that projects to (u_t, v_t)."""
     m = lidar2img.double()
@@ -310,7 +315,7 @@ def t5_zero_radar():
         ctx = fz._build_context(geo, B, DEV, torch.float32)
         assert float(ctx['support'].sum()) == 0.0
         q_cam, q_rad, f_cat = _queries(fz, img, rad)
-        m_r, m_i, *_ = fz._chunk(q_cam, q_rad, f_cat, ctx, 0)
+        m_r, m_i, *_ = fz._chunk(q_cam, q_rad, f_cat, *_cell_geo(ctx))
         c_new = img + fz.proj_r2c(m_r.view(B, -1, *TOY['bev_shape']))
         r_new = rad + fz.proj_i2r(m_i.view(B, -1, *TOY['bev_shape']))
     assert float(m_r.abs().sum()) == 0.0, 'radar message not exactly zero without support'
@@ -327,7 +332,7 @@ def t6_no_image():
     with torch.no_grad():
         ctx = fz._build_context(geo, B, DEV, torch.float32)
         q_cam, q_rad, f_cat = _queries(fz, img, rad)
-        m_r, m_i, *_ = fz._chunk(q_cam, q_rad, f_cat, ctx, 0)
+        m_r, m_i, *_ = fz._chunk(q_cam, q_rad, f_cat, *_cell_geo(ctx))
         r_new = rad + fz.proj_i2r(m_i.view(B, -1, *TOY['bev_shape']))
     assert float(m_i.abs().sum()) == 0.0, 'image message not zero with all-invalid projections'
     assert torch.equal(r_new, rad), 'radar BEV changed despite zero image message'
