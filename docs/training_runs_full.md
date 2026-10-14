@@ -19221,8 +19221,10 @@ forward差约1e-7、共享conv梯度最大差1.1026859e-6，原1e-6绝对门FAIL
 - 有限性：三臂 `loss`/`grad_norm` 全有限（arm on 5.0379/38.767、arm off 5.0335/38.796、B0 4.7220/33.144），
   日志中 `nan/NaN/Inf` 匹配 **0**。（探针日志里唯一的 `Traceback` 是**我们自己发 SIGTERM** 时 elastic launcher 的
   "Received 15 death signal" 收尾栈，不是训练异常。）
-- 诚实边界：on/off 的 loss/grad_norm 在 GPU 上相差 ~0.1%（5.0379 vs 5.0335），属 GPU 归约非确定的量级；
-  **逐位等价**只在 CPU 审计（`docs/gpmsf_runtime_fast_cpu_audit_20261014.json`）里成立，不拿 GPU 短测冒充。
+- 诚实边界（按用户 2026-10-14 指正改口径）：on/off 的 loss/grad_norm 在 GPU 上相差 ~0.1%（5.0379 vs 5.0335）。
+  **该差异尚未归因**：归约非确定性只是候选解释之一，也可能来自不同 kernel 选择或不同的取数顺序；本轮没有做归因实验，
+  不得写成"已确认是归约非确定"。**逐位等价**只在 CPU 审计（`docs/gpmsf_runtime_fast_cpu_audit_20261014.json`）里成立，
+  不拿 GPU 短测冒充；短测只有 iter50/iter100 两行日志窗口，**不替代 450 iter 配对 S0**（见 §104.3 表下注与 §104.7）。
 
 ### 104.4 资源门判定（诚实口径）
 
@@ -19260,13 +19262,16 @@ chunk4096、ckpt 开、anomaly off；**per-iteration = 27,105 次 CUDA launch**�
 
 - 折算：14 个 chunk（53,568/4096）⇒ 约 **1,936 launch/chunk**；`_chunk`+`_image_terms` 前向约 250 个张量算子/chunk，
   反向再乘 ~2 ⇒ 量级吻合。**成本结构是"稠密小算子"，不是 FLOPs，也不是显存带宽。**
-- **对四刀的定量预期**（按上面数出来的 launch 数）：① 深度均值/熵两次采样合成一次双通道 ≈ −7 launch/chunk ≈ −100/iter；
+- **对四刀的定量预期（仅按 launch 数折算，不是耗时预测）**：① 深度均值/熵两次采样合成一次双通道 ≈ −7 launch/chunk ≈ −100/iter；
   ② `stats_h` 等重复布局转换移出 chunk ≈ −4/chunk ≈ −56/iter；③ pointwise offset 整帧一次 ≈ −4/chunk ≈ −56/iter；
-  ④ 缩小 ckpt 重算范围（把 ③ 的卷积移出被重算区）= ③ 的一部分。**合计 ≈ −200~250 launch/iter ≈ 全程 0.8–1%。**
-- **预算算术**：门是 arm ≤ 1.20 × B0(off)。均值口径 B0=1.465 s/iter ⇒ 预算 **1.758**，当前 arm=**2.221**
-  ⇒ 需砍 **0.463 s/iter**；而 GP-MSF 相对 B0 的**增量**本身只有 0.756 s/iter
-  ⇒ 等价优化必须砍掉**增量的 61%**。1% 级的算子裁剪**在数学上不可能**达到该目标。
-- **因此（与用户预判一致）：等价四刀做完也必须重审"密集取证结构"。** 可选结构方向（均需先获批，且都不许缩 N4/砍尺度/删 fallback）：
+  ④ 缩小 ckpt 重算范围（把 ③ 的卷积移出被重算区）= ③ 的一部分。合计 ≈ −200~250 launch/iter（≈ 全程 0.8–1%），
+  但**这只是 launch 数，不是耗时**。
+- **勘误（按用户 2026-10-14 指正）：kernel 数量占比 ≠ 耗时占比。** elementwise 小算子单价低、gemm/memcpy 单价高，
+  上表**不能**推出"四刀在数学上不可能达标"，"1% 级裁剪必然无效"的表述撤回。四刀与 S1 一并要**真的实现、真的计时**。
+- **预算算术（未被指正，仍然有效）**：门是 arm ≤ 1.20 × B0(off)。均值口径 B0=1.465 s/iter ⇒ 预算 **1.758**，
+  当前 arm=**2.221** ⇒ 需砍 **0.463 s/iter**；而 GP-MSF 相对 B0 的**增量**本身只有 0.756 s/iter
+  ⇒ 所有优化路径合计都要砍掉**增量的 61%**。这是一条与"哪个算子贵"无关的硬账。
+- **因此：等价四刀与"密集取证结构"必须并行评估，不能先否定其一。** 结构方向（均不许缩 N4/砍尺度/删 fallback）：
   - **S1 候选压缩（潜力最大）**：`i_h`/`keyed_i`/`s_img`/`compat`/depth descriptor 在**无效候选**上算完即被
     mask/softmax 丢弃（`mask_img=ok_h`、`cm=masked_fill(~ok_h,-1e4)`），因此"只对有效 (view,candidate) 对取证"在
     **数学上精确等价**，但会改变归约顺序 ⇒ **不再逐位相同**（需接受 ≤1e-6 级差异 + 新的等价契约）。
@@ -19275,3 +19280,194 @@ chunk4096、ckpt 开、anomaly off；**per-iteration = 27,105 次 CUDA launch**�
   - **S3 减少 DtoD/memset**（980+527 launch，5.5%）：去掉 `.contiguous()`/expand+reshape 的物化，收益中等。
   - **S4 重审候选基数**（k=4 offsets × n_h=3 heights × 3 image levels 的稠密组合）：属**语义变更**，
     必须走预登记 + 消融，不能在提速名义下偷偷改。
+
+### 104.7 时间归因：相位剖面 + 消融，以及仍然缺的 in-situ 测量（2026-10-14，GPU5 单卡，无训练）
+
+方法说明：`torch.profiler` 的**显式 `record_function` 区间**（torch 2.0.1 的 CUDA event 在本 build 里
+不填 `stack`，`with_stack=True` 的按行归因拿不到东西；`cpu_parent` 同样不可用），形状同 §101/§102：
+B=2、单视角、248×216、chunk4096、`grad_checkpoint=True`、anomaly off。**这是孤立微基准，不是 in-situ。**
+
+| record_function 区间 | CUDA ms / 3 iter | per-iter ms | 次数 |
+| --- | ---: | ---: | ---: |
+| `_chunk`（前向 + ckpt 重算） | 285.49 | 95.16 | 84 |
+| `_image_terms`（相机取证链） | 164.87 | 54.96 | 84 |
+| `_head_linear`（图像 + 雷达 + keyed_r/i） | 56.57 | 18.86 | 672 |
+| `_sample_map`（雷达/支撑/图像/深度采样） | 27.90 | 9.30 | 759 |
+| `_build_context` | 2.07 | 0.69 | 3 |
+
+消融对照（单卡，5 次计时迭代；把整段替换成同形状 stub，只用于划上界，不作为语义等价证据）：
+
+| 配置 | ms / 单次 module 调用 | 结论 |
+| --- | ---: | --- |
+| full | 280.12 | 基准 |
+| `_chunk` 整段跳过 | 23.63（复测 full 277.95） | chunk 循环 ≈ **91.6%** 的 module 时间；稠密画布管线（proj/pos/norm/cat）只 ≈ 24 ms |
+| full（复测） | 280.46 | — |
+| `_image_terms` 整段跳过 | 167.59 | 相机取证链 ≈ **112.9 ms ≈ 40%**；雷达 + 地址 + compat + gating ≈ 167.6 ms ≈ **60%** |
+
+- **归因结论（只在孤立微基准范围内）**：开销集中在 `_chunk` 内的稠密候选链，其中相机侧 ≈ 40%、雷达/地址/打分/gating ≈ 60%。
+  这与"成本结构是稠密小算子"一致，但不构成 in-situ 的耗时占比。
+- **尚未做的测量（必须补）**：**真实 DDP 整步内的分相位计时**。孤立数字与整步增量不同量级：
+  孤立单次 module 调用（fwd+bwd）≈ 280 ms，而配对整步里 arm − B0 的增量（anomaly off）是
+  0.756 s/iter，除以每步 4 次融合调用 ≈ **0.19 s/call**，比孤立值更小；反过来说，孤立微基准
+  **不能线性外推**到整步预算，两个方向的换算都不成立。任何优化都必须以**整步配对探针**（§104.3 口径）收尾。
+- **本节不做的事**：不用 kernel 数占比代替耗时占比；不宣布四刀无效（见 §104.6 勘误）；不拿两行短测当 S0。
+
+### 104.8 下一步：S1 有效候选压缩（用户指令，2026-10-14）
+
+用户指令原文口径：**"优先验证有效候选压缩，同时保留全部有效候选、三尺度和 camera-only fallback；
+通过消息/梯度等价检查，再测真实整步，暂不开长训。"** 本节记录执行顺序与验收口径。
+
+1. **先量出"可压缩集"到底多大**（`me_rssm/sanity/gpmsf_cand_census.py`，只读、GPU5、真实 TJ4D 数据 +
+   ep4 训练后 offset）：统计候选槽 `ok_h`、逐 cell 可用率、完全无有效候选的 chunk 数、雷达侧对照，
+   并把当帧真实融合输入落盘，供后续离线计时复用。**没有这份测量就不动结构。**
+2. **只有"证明为零"的候选可以被跳过**：`ok_h=False` 的槽在现值实现里贡献恰好 0（level softmax 掩码
+   + `mask_img=ok_h`），因此压缩必须保全部**有效**候选、三尺度和 camera-only fallback；不允许丢弃任何
+   *全局有效* 候选，不允许用 GT 路由。
+3. **等价契约**：跳过零贡献槽会改变归约顺序 ⇒ 不再逐位相同，必须给出 ≤1e-6 级的等价证据（CPU golden +
+   直接消息/梯度对照 + 空证据 identity），而不是只跑"有梯度"就算过。
+4. **再测真实整步**：同起点（`epoch_4.pth`）、同 iter 数、同 DDP 口径，arm(off) vs B0(off)，门 ≤ 1.20×；
+   短测只作为诊断，**S0 合规仍以 450 iter 配对为准**。
+5. 未过门之前**不开长训**；不缩 N4/batch、不砍尺度、不删 camera-only fallback。
+
+### 104.9 S1 有效候选压缩：全门通过 + 真实整步/真实数据等价（2026-10-14，未开长训）
+
+**本段没有训练。** 统一口径中"区间均值（fixed window ep12–16，5 轮等权）"与"全轮峰值"本段**不适用**（无新 val 记录）；
+引用最近一段已停止训练的可用读数：区间均值 **30.3739（实际跨度 ep1–4，n=4，窗口不完整）**；
+全轮峰值 = **37.1528 @ ep4**；best saved = **37.1528 @ ep4**（checkpoint
+`/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/epoch_4.pth`，
+sha256 `167dcad8d954d898bcd33529e9621b5f2dbcd41f1ed448ff77d89d48ec277aea`）。这些读数**不参与本段性能排名**，只作背景。
+
+#### 104.9.1 唯一变量与机制保持
+
+- 变量：`RCFusion.active_cells_only`（默认 False = 稠密路径；True = 跳过**可证为零**的 BEV cell）。
+- **不是机制改动**：一个 cell 的**所有**候选均无效时（`ok_h` 全 False：既无图像有效性、也无雷达回波支持），
+  该 cell 的 `M_R = M_I = 0` 且 `valid_r = valid_i = False`，融合输出与稠密路径一致地贡献 0。
+  压缩**不丢任何全局有效候选**，保留全部三个 image level、三个 native radar level、三个 height ref、camera-only fallback，不用 GT 路由。
+- **修复的根因**：`_addresses` 原先把 `cell_xy.reshape(-1,1,qc,1,2)[:1]` 强制取第 0 行 cell——稠密画布是共享/广播（1 行）时正确，
+  但按样本 gather 出 active 子集时就错位（退化图像 A9 症状：dense-valid 8/9 … vs compacted 12/21）。
+  修正：保留 row 轴（`p_e = cell_xy.unsqueeze(1).unsqueeze(3)`），断言 `rows in (1, b)`；`_chunk` 用 `unsqueeze` 取代 `view`。
+
+#### 104.9.2 CPU 等价门（全部 PASS）
+
+| 检查 | 结果 |
+| --- | --- |
+| `gpmsf_active_cells_checks.py` A1–A10 | 10/10 PASS；A10 在**等 chunk** 下 param + input grad = **0.0（逐位）** |
+| `gpmsf_cpu_checks.py` | **13/13** PASS（同时修正 t5/t6 调用的旧 `_chunk(...ctx,start)` 签名，加 `_cell_geo(ctx)`） |
+| `gpmsf_golden_compare.py` vs `/tmp/ref_before_opt_20261014.pt` | **GOLDEN MATCH**，稠密路径 worst \|delta\| = **0.000e+00** |
+| `test_gpmsf_wiring.py` | 11 passed |
+| `test_gpmsf_queue_checks.py` | 27 passed |
+
+脚本自身修的两个 bug：`make_geo()` 随机张量需**只抽一次**（A3 混合 fixture）；
+A5 input grad 需 `requires_grad_` 叶子（加 `input_grad` 开关 + `_grad_diff`）。
+
+#### 104.9.3 真实数据等价 + 归因对照（GPU5，ep4 checkpoint，真实 TJ4D 帧，无训练、无写权重）
+
+落盘：`/data/lurui/work_dirs/gpmsf_ops/real_equiv_20261014/real_equiv.json`（`status: PASS`）。
+
+- **可压缩集**：active cells **12,873 / 12,713**（每样本，共 53,568）⇒ 丢弃率 **76.1%**，active rate **23.9%**。
+- **chunk4096 稠密 vs 压缩**：`m_r` **0.0**、`m_i` **7.316e-05**、`out` **7.099e-05**、worst param grad **7.83e-09**；
+  loss 两侧同为 **0.93789721**。
+- **决定性归因对照**：纯稠密不同 chunk（4096 vs 1365）给出 `m_i` **9.09e-02**、`out` **3.61e-03**，
+  比压缩差 **≈1000×**；每条路径重复前向**逐位可复现（0.0）**。
+  ⇒ 7e-05 是**实现既有的 shape/kernel 舍入**，**不是**压缩引入的误差。
+
+#### 104.9.4 真实整步配对探针（短测，**不是 S0**）
+
+口径：真实 config、N4、batch 2/rank、DDP3（GPU5/6/7）、anomaly **off**、同起点 `epoch_4.pth`、stop iter 100
+（`/data/lurui/work_dirs/gpmsf_ops/probes.log`）。
+
+| 臂 | s/iter | memory |
+| --- | ---: | ---: |
+| `armcmp`（GP-MSF + active_cells） | **1.773** | 17,983 MiB |
+| `b0off`（基线） | **1.465** | 16,959 MiB |
+
+比值 **1.210×**，资源门 **≤1.20×**：**短测仍在门附近/略超**。旧值对照：`armon` 5.445、`armoff` 2.221。
+**短测 ≠ 450-iter 配对 S0**，不能替代合规判定（§104.4 口径）。
+
+#### 104.9.5 模块级 fwd+bwd 剖面与 kernel 账（GPU5，5 次计时迭代，仅融合模块）
+
+| 口径 | dense | compact |
+| --- | ---: | ---: |
+| fwd+bwd ms/call | **280.31** | **101.21**（**2.77×**） |
+| kernels / step | **27,148** | **8,130** |
+| CUDA μs / step | 239,736.7 | 88,288.7 |
+
+compact bucket 占比：elementwise/reduce **47.2%**、matmul/conv **33.6%**、grid_sample **13.9%**、
+memcpy/other 2.5%、other 2.0%、index/gather 0.6%、softmax 0.18%。
+
+- **mask pass `_active_cells` 只 3.39 ms/call** ⇒ 不是瓶颈。
+- **不把 kernel 数占比当耗时占比**（§104.6 勘误沿用）；本节只用实测 ms 与 CUDA μs。
+- 仍未解释的 **~0.1% GPU loss 差异**不做归因。
+
+#### 104.9.6 结论与下一步
+
+- 结论：S1 有效候选压缩在 CPU、golden、真实数据三层都通过等价契约；模块级 fwd+bwd 降到 **2.77×**，
+  真实整步 **1.210×**（**仍 ≥1.20 门**，需 S0 定论）。
+- 诚实边界：**短测两行不能定案**；`active_cells_only` 目前只在 probe 配置上，**arm 主配置未开**，
+  直接跑 S0 会走稠密路径。
+- 下一步（用户指令 2026-10-14）：在 450-iter 配对 S0 之前，先做 **BPTT1 vs BPTT0** 的真实配对探针，
+  再决定是否用 `active_cells_only=True + rssm_bptt_steps=0` 进 S0（见 §104.10）。
+
+### 104.10 BPTT1 vs BPTT0 四臂真实配对探针（2026-10-14，短测，GPU5/6/7，未开长训）
+
+**本段没有训练。** 区间均值（fixed window ep12–16）**不适用**（无新 val）；引用可用读数：区间均值 **30.3739（实测跨度 ep1–4，n=4）**，
+全轮峰值 = **37.1528 @ ep4**，best saved = **37.1528 @ ep4**。**不参与本段排名。**
+
+#### 104.10.1 动机与变量
+
+用户指令 2026-10-14：先验证"历史帧 BPTT 边（t2）是否值得付出"，用 `active_cells_only=True + rssm_bptt_steps=0` 做四臂配对。
+- N=4、默认 `rssm_bptt_steps=1`：t0/t1 burn-in（no_grad），**t2 历史 + t3 当前共 2 个有梯度 forward**；
+  注意**不是两次 optimizer update**（`optimizer_config.cumulative_iters=2`）。
+- `rssm_bptt_steps=0`：t0/t1/t2 全部 burn-in，只剩 t3 有梯度。**只删 t2 的反向图 + checkpoint 重算，不删任何帧、不减少 4 次 `extract_feat`/GP-MSF 调用。**
+- 已确认：arm 主配置**未**开 `active_cells_only`（只有 probe 配置有）；`rssm_bptt_steps` 走 `R4Det.py:188` 默认 1，resolved dump 无显式项。
+
+#### 104.10.2 探针配置（probe-only，均不改 arm 主配置）
+
+| 配置 | RCFusion | rssm_bptt_steps |
+| --- | --- | ---: |
+| `..._gpmsf_activecells_probe.py`（armB1） | GP-MSF + active_cells_only | 1（默认） |
+| `..._gpmsf_activecells_bptt0_probe.py`（armB0） | GP-MSF + active_cells_only | 0 |
+| `configs/r4det/..._no2d_igdr.py`（b0B1） | ConcatConvFusion | 1（默认） |
+| `..._no2d_igdr_bptt0_probe.py`（b0B0） | ConcatConvFusion | 0 |
+
+四配置均解析校验通过（`active_cells_only` 与 `rssm_bptt_steps` 落到 resolved config）。
+
+#### 104.10.3 真实整步配对（150-iter 均值，anomaly off，N4/bs2/DDP3，GPU5/6/7）
+
+口径：真实 config、N4、batch 2/rank、DDP3、anomaly off、stop iter 150；arm 臂自 `epoch_4.pth` resume（→epoch 5），
+B0 臂从零（epoch 1）。映射到真实整步（`/data/lurui/work_dirs/gpmsf_ops/probes.log`）。
+
+| 臂 | RCFusion | BPTT | s/iter（150 均值） | 逐行 time | 显存 |
+| --- | --- | ---: | ---: | --- | ---: |
+| armB1 | GP-MSF + active | 1 | **1.712** | 1.958 / 1.573 / 1.605 | 17,985 MiB |
+| armB0 | GP-MSF + active | 0 | **1.573** | 1.850 / 1.424 / 1.446 | 10,402 MiB |
+| b0B1 | ConcatConv | 1 | **1.420** | 1.712 / 1.254 / 1.294 | 16,959 MiB |
+| b0B0 | ConcatConv | 0 | **1.352** | 1.645 / 1.179 / 1.233 | 10,035 MiB |
+
+**资源门（arm/B0，均值口径）**：
+
+| 组合 | 比值 | vs ≤1.20× |
+| --- | ---: | --- |
+| BPTT1：armB1 / b0B1 | 1.712 / 1.420 = **1.206×** | 刚好压门附近 |
+| BPTT0：armB0 / b0B0 | 1.573 / 1.352 = **1.163×** | **过门** |
+
+**BPTT0 效果**：arm 省 **0.139 s/iter（−8.1%）**、显存 **17,985→10,402 MiB（−42%）**；
+B0 省 **0.068 s/iter（−4.8%）**、显存 **16,959→10,035 MiB（−41%）**。
+增量对齐后，arm 相对 B0 的**比例**从 1.206× 降到 **1.163×**。
+
+#### 104.10.4 诚实边界
+
+- 这是 **150-iter 短测，不是 450-iter 配对 S0**，不能替代资源门定案（§104.4 口径）。
+- arm 臂 resume ep4、B0 臂从零：对**纯计时**影响小，但**不是严格同起点**。
+- b0B1 首跑被 `run_probe.sh` 的 setsid/pgid **启动 race** 误杀（SIGTERM，非 NaN/OOM）；
+  已在 harness 加"先观测到存活一次才判 exited_early"的守卫后重跑得到 1.420。
+- `rssm_bptt_steps=0` 是 **RSSM 时序变量**（删 t2 recon/KL 梯度），不是免费优化；论文主线须与 BPTT1 消融并列。
+- 现有 `queue_gpmsf.sh` 的 S0 用 `tools/dist_train.sh`（**anomaly ON**），会让 arm≈5.4 vs B0≈1.55 ⇒ 必然超门；
+  合规 S0 必须走 `tools/dist_train_runtime.sh --detect-anomaly off`（两臂同口径）。
+
+#### 104.10.5 结论与下一步
+
+- 结论：**BPTT0 把 arm/B0 从 1.206× 压到 1.163×（过 ≤1.20 门），并把 arm 显存砍到 ≈10.4 GB**；
+  代价是丢掉 t2 历史帧的 recon/KL 梯度（机制变量，须消融）。
+- 下一步：把 `active_cells_only=True + rssm_bptt_steps=0` 落进 arm 配置，用 **anomaly off** 跑 450-iter 配对 S0（`gpmsf_smoke_450iter.py`
+  与 `gpmsf_baseline_smoke_450iter.py` 两臂都继承新配置），过门后再从 `epoch_4.pth` 另开目录续训 ep5–24。

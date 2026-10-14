@@ -116,6 +116,18 @@
   - [x] **为什么等价四刀不够（2026-10-14，§104.6，单卡 profile）**：一次 fwd+bwd **27,105 launch**，其中
     elementwise/reduce **81.8%**（22,181）、gemm 2,153（948 个 `sgemm_32x128`）、memcpy 980、memset 527；
     四刀合计只减 ≈200–250 launch/iter（**≈1%**），而门要求砍掉增量（0.756 s/iter）的 **61%** ⇒ 必须重审密集取证结构。
+  - [x] **S1 有效候选压缩：全门通过 + 真实整步/真实数据等价（2026-10-14，§104.9，未开长训）**：
+    唯一变量 `RCFusion.active_cells_only`（默认 False）。跳过**可证为零**的 BEV cell（全候选无效：无图像有效性且无雷达回波支持），
+    不丢任何全局有效候选，保三尺度和 camera-only fallback，不用 GT 路由。修复 `_addresses` 强制第 0 行 cell 的 gather 错位。
+    CPU 门全过：A1–A10（10/10，等 chunk param+input grad=0.0）、`gpmsf_cpu_checks` 13/13、golden **worst|Δ|=0.0**、pytest 38。
+    真实数据（ep4 帧）：active 12,873/12,713 of 53,568 ⇒ 丢 **76.1%**；chunk4096 dense-vs-compact m_r **0.0**/m_i **7.3e-5**/out **7.1e-5**；
+    决定性对照（纯稠密 4096 vs 1365）m_i 9.09e-2/out 3.6e-3 ≈**1000×**⇒ 7e-5 是既有舍入非压缩。mask pass 仅 3.39 ms/call。
+    模块 fwd+bwd **280.31→101.21 ms（2.77×）**、kernel **27,148→8,130**。真实整步短测 arm **1.712/1.773** vs B0 **1.465** s/iter ⇒ **≈1.21×**（仍近门，短测≠S0）。
+    **提交 `bd1ac10`**。`active_cells_only` 目前只在 probe 配置；arm 主配置未开，正式 S0 前须显式打开。
+  - [ ] **BPTT1 vs BPTT0 真实配对探针 → 450-iter 资源 S0 → 决定是否开 24e（2026-10-14，§104.10，进行中）**：
+    N=4 默认 `rssm_bptt_steps=1` 使 t0/t1 burn-in、**t2 历史 + t3 当前共 2 个有梯度 forward**（非两次 optimizer update；`cumulative_iters=2`）。
+    `rssm_bptt_steps=0` 只删 t2 反向图（保留 4 帧前向），预计中等收益、非数量级。探针 config 已建（arm/b0 × bptt1/bptt0，probe-only）。
+    探针 → 若收益明确则用 `active_cells_only=True + rssm_bptt_steps=0` 进配对 S0（arm 与 B0 同 temporal 变量）；S0 过 ≤1.20× 才开续训。
   - **下一步（需用户决策后再动代码）**：在 **S1 候选压缩**（只对有效 (view,candidate) 取证；数学精确等价、
     但放弃逐位相同、需新等价契约）、**S2 逐头 GEMM 合并**（§102 已证有退化风险）、**S3 减 DtoD/memset**、
     **S4 重审候选基数**（k/n_h/level 稠密组合 = 语义变更，须预登记）之间选择；**不得**缩 N4、砍尺度、删 fallback。
