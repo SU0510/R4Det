@@ -1,0 +1,1993 @@
+{
+  "checked_at_utc": "2026-10-14T01:50:49.966396+00:00",
+  "commit": "baecef4e219de55e162a04ef1aa845f7b7ba23ad",
+  "processes": [
+    {
+      "pid": 3551139,
+      "pgid": 3551130,
+      "cmd": [
+        "/home/lurui/envs/miniforge3/envs/r4det/bin/python",
+        "-u",
+        "tools/train_vod.py",
+        "--local-rank=0",
+        "--config",
+        "me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py",
+        "--seed",
+        "0",
+        "--launcher",
+        "pytorch",
+        "--seed",
+        "0",
+        "--deterministic",
+        "--work-dir",
+        "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0"
+      ],
+      "kind": "rank",
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "5,6,7",
+        "WORLD_SIZE": "3",
+        "RANK": "0",
+        "LOCAL_RANK": "0"
+      }
+    },
+    {
+      "pid": 3551140,
+      "pgid": 3551130,
+      "cmd": [
+        "/home/lurui/envs/miniforge3/envs/r4det/bin/python",
+        "-u",
+        "tools/train_vod.py",
+        "--local-rank=1",
+        "--config",
+        "me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py",
+        "--seed",
+        "0",
+        "--launcher",
+        "pytorch",
+        "--seed",
+        "0",
+        "--deterministic",
+        "--work-dir",
+        "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0"
+      ],
+      "kind": "rank",
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "5,6,7",
+        "WORLD_SIZE": "3",
+        "RANK": "1",
+        "LOCAL_RANK": "1"
+      }
+    },
+    {
+      "pid": 3551141,
+      "pgid": 3551130,
+      "cmd": [
+        "/home/lurui/envs/miniforge3/envs/r4det/bin/python",
+        "-u",
+        "tools/train_vod.py",
+        "--local-rank=2",
+        "--config",
+        "me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py",
+        "--seed",
+        "0",
+        "--launcher",
+        "pytorch",
+        "--seed",
+        "0",
+        "--deterministic",
+        "--work-dir",
+        "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0"
+      ],
+      "kind": "rank",
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "5,6,7",
+        "WORLD_SIZE": "3",
+        "RANK": "2",
+        "LOCAL_RANK": "2"
+      }
+    },
+    {
+      "pid": 3552704,
+      "pgid": 3552704,
+      "cmd": [
+        "bash",
+        "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/watchdog_gpmsf.sh"
+      ],
+      "kind": "watchdog",
+      "env": {
+        "CUDA_VISIBLE_DEVICES": null,
+        "WORLD_SIZE": null,
+        "RANK": null,
+        "LOCAL_RANK": null
+      }
+    }
+  ],
+  "phase": {
+    "config": "me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py",
+    "exit_code": null,
+    "gpus": [
+      5,
+      6,
+      7
+    ],
+    "seed": 0,
+    "started_at": 1791909783.6771598,
+    "world_size": 3
+  },
+  "frozen_research_file_count": 832,
+  "launch_source_drift": [],
+  "preflight_source_drift": [],
+  "real_preflight_status": "PASS",
+  "real_preflight_checks": {
+    "common_initial_state": true,
+    "eval_input_unchanged": true,
+    "eval_step0_head": true,
+    "eval_step0_outputs": true,
+    "initial_rng": true,
+    "invalid_image_identity": true,
+    "mixed_batch_identity": true,
+    "native_source_gradients": true,
+    "no_gt_geometry": true,
+    "real_aug_projection": true,
+    "train_input_unchanged": true,
+    "train_step0_head": true,
+    "train_step0_outputs": true,
+    "two_step_offsets": true,
+    "zero_projections": true,
+    "zero_radar_identity": true
+  },
+  "model_diff_vs_mainline": [
+    "RCFusion"
+  ],
+  "recipe_diff_vs_mainline": [],
+  "actual_model_matches_registered": true,
+  "actual_recipe_diff": [],
+  "actual_gpu_ids": "range(0, 3)",
+  "actual_seed": null,
+  "arm_settings": {
+    "runner": {
+      "type": "EpochBasedRunner",
+      "max_epochs": 24
+    },
+    "data": {
+      "samples_per_gpu": 2,
+      "workers_per_gpu": 2,
+      "train": {
+        "type": "RepeatDataset",
+        "times": 2,
+        "dataset": {
+          "type": "TJ4DDataset",
+          "data_root": "data/TJ4D/",
+          "ann_file": "data/TJ4D/TJ4D_infos_train.pkl",
+          "split": "training",
+          "pts_prefix": "velodyne_reduced",
+          "pipeline": [
+            {
+              "type": "LoadPointsFromFile",
+              "coord_type": "LIDAR",
+              "load_dim": 8,
+              "use_dim": [
+                0,
+                1,
+                2,
+                3,
+                5
+              ]
+            },
+            {
+              "type": "LoadImageFromFile",
+              "to_float32": true
+            },
+            {
+              "type": "loadSegmentation",
+              "data_root": "data/TJ4D/",
+              "dataset": "TJ4D",
+              "seg_type": "detectron2"
+            },
+            {
+              "type": "LoadAnnotations3D",
+              "with_bbox_3d": true,
+              "with_label_3d": true,
+              "with_bbox": true,
+              "with_label": true
+            },
+            {
+              "type": "LoadVLSAMAnnotations",
+              "ann_root_path": "/data/yanzexin/TJ4D/annotations/",
+              "mask_root_path": "/data/yanzexin/TJ4D/"
+            },
+            {
+              "type": "LoadMyDepthFromFile",
+              "depth_base_path": "/data/TJ4D/training/depth_npy_predict"
+            },
+            {
+              "type": "ImageAug3D2",
+              "data_aug_conf": {
+                "resize_lim": [
+                  0.4,
+                  0.5
+                ],
+                "final_dim": [
+                  480,
+                  640
+                ],
+                "final_dim_test": [
+                  480,
+                  640
+                ],
+                "bot_pct_lim": [
+                  0.0,
+                  0.0
+                ],
+                "top_pct_lim": [
+                  0.0,
+                  0.1
+                ],
+                "rot_lim": [
+                  -2.7,
+                  2.7
+                ],
+                "rand_flip": true
+              },
+              "is_train": true
+            },
+            {
+              "type": "DownsampleDepthMap",
+              "target_shape": [
+                60,
+                80
+              ]
+            },
+            {
+              "type": "GlobalRotScaleTransFlipAll",
+              "bda_aug_conf": {
+                "rot_range": [
+                  -0.3925,
+                  0.3925
+                ],
+                "scale_ratio_range": [
+                  0.95,
+                  1.05
+                ],
+                "translation_std": [
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                "flip_dx_ratio": 0.0,
+                "flip_dy_ratio": 0.5
+              },
+              "is_train": true
+            },
+            {
+              "type": "PointsRangeFilter",
+              "point_cloud_range": [
+                0,
+                -39.68,
+                -4,
+                69.12,
+                39.68,
+                2
+              ]
+            },
+            {
+              "type": "ObjectRangeFilter",
+              "point_cloud_range": [
+                0,
+                -39.68,
+                -4,
+                69.12,
+                39.68,
+                2
+              ]
+            },
+            {
+              "type": "PointShuffle"
+            },
+            {
+              "type": "Normalize",
+              "mean": [
+                103.53,
+                116.28,
+                123.675
+              ],
+              "std": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "to_rgb": false
+            },
+            {
+              "type": "Pad",
+              "size_divisor": 32
+            },
+            {
+              "type": "CreateDepthFromLiDAR",
+              "data_root": "data/TJ4D/",
+              "dataset": "TJ4D"
+            },
+            {
+              "type": "gen2DMask",
+              "use_seg": false,
+              "use_softlabel": false,
+              "is_train": true
+            },
+            {
+              "type": "DefaultFormatBundle3D",
+              "class_names": [
+                "Pedestrian",
+                "Cyclist",
+                "Car",
+                "Truck"
+              ]
+            },
+            {
+              "type": "CustomCollect3D2",
+              "keys": [
+                "points",
+                "img",
+                "gt_bboxes_3d",
+                "gt_labels_3d",
+                "gt_bboxes",
+                "gt_labels",
+                "gt_masks",
+                "my_gt_depth"
+              ],
+              "meta_keys": [
+                "filename",
+                "ori_shape",
+                "img_shape",
+                "lidar2img",
+                "depth2img",
+                "cam2img",
+                "pad_shape",
+                "scale_factor",
+                "flip",
+                "pcd_horizontal_flip",
+                "pcd_vertical_flip",
+                "box_mode_3d",
+                "box_type_3d",
+                "img_norm_cfg",
+                "pcd_trans",
+                "sample_idx",
+                "pcd_scale_factor",
+                "pcd_rotation",
+                "pts_filename",
+                "transformation_3d_flow",
+                "img_aug_matrix",
+                "lidar_aug_matrix",
+                "lidar2cam",
+                "gt_depths",
+                "cam_aware",
+                "bda_rot",
+                "segmentation",
+                "bbox_Mask"
+              ]
+            }
+          ],
+          "modality": {
+            "use_lidar": true,
+            "use_camera": true
+          },
+          "classes": [
+            "Pedestrian",
+            "Cyclist",
+            "Car",
+            "Truck"
+          ],
+          "test_mode": false,
+          "box_type_3d": "LiDAR",
+          "seq_len": 4
+        }
+      },
+      "val": {
+        "type": "TJ4DDataset",
+        "data_root": "data/TJ4D/",
+        "ann_file": "data/TJ4D/TJ4D_infos_val.pkl",
+        "split": "training",
+        "pts_prefix": "velodyne_reduced",
+        "pipeline": [
+          {
+            "type": "LoadPointsFromFile",
+            "coord_type": "LIDAR",
+            "load_dim": 8,
+            "use_dim": [
+              0,
+              1,
+              2,
+              3,
+              5
+            ]
+          },
+          {
+            "type": "LoadImageFromFile",
+            "to_float32": true
+          },
+          {
+            "type": "LoadAnnotations3D",
+            "with_bbox_3d": true,
+            "with_label_3d": true
+          },
+          {
+            "type": "ImageAug3D2",
+            "data_aug_conf": {
+              "resize_lim": [
+                0.4,
+                0.5
+              ],
+              "final_dim": [
+                480,
+                640
+              ],
+              "final_dim_test": [
+                480,
+                640
+              ],
+              "bot_pct_lim": [
+                0.0,
+                0.0
+              ],
+              "top_pct_lim": [
+                0.0,
+                0.1
+              ],
+              "rot_lim": [
+                -2.7,
+                2.7
+              ],
+              "rand_flip": true
+            },
+            "is_train": false
+          },
+          {
+            "type": "GlobalRotScaleTransFlipAll",
+            "bda_aug_conf": {
+              "rot_range": [
+                -0.3925,
+                0.3925
+              ],
+              "scale_ratio_range": [
+                0.95,
+                1.05
+              ],
+              "translation_std": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "flip_dx_ratio": 0.0,
+              "flip_dy_ratio": 0.5
+            },
+            "is_train": false
+          },
+          {
+            "type": "PointsRangeFilter",
+            "point_cloud_range": [
+              0,
+              -39.68,
+              -4,
+              69.12,
+              39.68,
+              2
+            ]
+          },
+          {
+            "type": "Normalize",
+            "mean": [
+              103.53,
+              116.28,
+              123.675
+            ],
+            "std": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "to_rgb": false
+          },
+          {
+            "type": "Pad",
+            "size_divisor": 32
+          },
+          {
+            "type": "DefaultFormatBundle3D",
+            "class_names": [
+              "Pedestrian",
+              "Cyclist",
+              "Car",
+              "Truck"
+            ],
+            "with_label": false
+          },
+          {
+            "type": "CustomCollect3D2",
+            "keys": [
+              "points",
+              "img",
+              "gt_bboxes_3d",
+              "gt_labels_3d"
+            ],
+            "meta_keys": [
+              "filename",
+              "ori_shape",
+              "img_shape",
+              "lidar2img",
+              "depth2img",
+              "cam2img",
+              "pad_shape",
+              "scale_factor",
+              "flip",
+              "pcd_horizontal_flip",
+              "pcd_vertical_flip",
+              "box_mode_3d",
+              "box_type_3d",
+              "img_norm_cfg",
+              "pcd_trans",
+              "sample_idx",
+              "pcd_scale_factor",
+              "pcd_rotation",
+              "pts_filename",
+              "transformation_3d_flow",
+              "img_aug_matrix",
+              "lidar_aug_matrix",
+              "lidar2cam",
+              "gt_depths",
+              "cam_aware",
+              "bda_rot"
+            ]
+          }
+        ],
+        "modality": {
+          "use_lidar": true,
+          "use_camera": true
+        },
+        "classes": [
+          "Pedestrian",
+          "Cyclist",
+          "Car",
+          "Truck"
+        ],
+        "test_mode": true,
+        "box_type_3d": "LiDAR",
+        "seq_len": 4,
+        "samples_per_gpu": 4
+      },
+      "test": {
+        "type": "TJ4DDataset",
+        "data_root": "data/TJ4D/",
+        "ann_file": "data/TJ4D/TJ4D_infos_val.pkl",
+        "split": "training",
+        "pts_prefix": "velodyne_reduced",
+        "pipeline": [
+          {
+            "type": "LoadPointsFromFile",
+            "coord_type": "LIDAR",
+            "load_dim": 8,
+            "use_dim": [
+              0,
+              1,
+              2,
+              3,
+              5
+            ]
+          },
+          {
+            "type": "LoadImageFromFile",
+            "to_float32": true
+          },
+          {
+            "type": "LoadAnnotations3D",
+            "with_bbox_3d": true,
+            "with_label_3d": true
+          },
+          {
+            "type": "ImageAug3D2",
+            "data_aug_conf": {
+              "resize_lim": [
+                0.4,
+                0.5
+              ],
+              "final_dim": [
+                480,
+                640
+              ],
+              "final_dim_test": [
+                480,
+                640
+              ],
+              "bot_pct_lim": [
+                0.0,
+                0.0
+              ],
+              "top_pct_lim": [
+                0.0,
+                0.1
+              ],
+              "rot_lim": [
+                -2.7,
+                2.7
+              ],
+              "rand_flip": true
+            },
+            "is_train": false
+          },
+          {
+            "type": "GlobalRotScaleTransFlipAll",
+            "bda_aug_conf": {
+              "rot_range": [
+                -0.3925,
+                0.3925
+              ],
+              "scale_ratio_range": [
+                0.95,
+                1.05
+              ],
+              "translation_std": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "flip_dx_ratio": 0.0,
+              "flip_dy_ratio": 0.5
+            },
+            "is_train": false
+          },
+          {
+            "type": "PointsRangeFilter",
+            "point_cloud_range": [
+              0,
+              -39.68,
+              -4,
+              69.12,
+              39.68,
+              2
+            ]
+          },
+          {
+            "type": "Normalize",
+            "mean": [
+              103.53,
+              116.28,
+              123.675
+            ],
+            "std": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "to_rgb": false
+          },
+          {
+            "type": "Pad",
+            "size_divisor": 32
+          },
+          {
+            "type": "DefaultFormatBundle3D",
+            "class_names": [
+              "Pedestrian",
+              "Cyclist",
+              "Car",
+              "Truck"
+            ],
+            "with_label": false
+          },
+          {
+            "type": "CustomCollect3D2",
+            "keys": [
+              "points",
+              "img",
+              "gt_bboxes_3d",
+              "gt_labels_3d"
+            ],
+            "meta_keys": [
+              "filename",
+              "ori_shape",
+              "img_shape",
+              "lidar2img",
+              "depth2img",
+              "cam2img",
+              "pad_shape",
+              "scale_factor",
+              "flip",
+              "pcd_horizontal_flip",
+              "pcd_vertical_flip",
+              "box_mode_3d",
+              "box_type_3d",
+              "img_norm_cfg",
+              "pcd_trans",
+              "sample_idx",
+              "pcd_scale_factor",
+              "pcd_rotation",
+              "pts_filename",
+              "transformation_3d_flow",
+              "img_aug_matrix",
+              "lidar_aug_matrix",
+              "lidar2cam",
+              "gt_depths",
+              "cam_aware",
+              "bda_rot"
+            ]
+          }
+        ],
+        "modality": {
+          "use_lidar": true,
+          "use_camera": true
+        },
+        "classes": [
+          "Pedestrian",
+          "Cyclist",
+          "Car",
+          "Truck"
+        ],
+        "test_mode": true,
+        "box_type_3d": "LiDAR",
+        "seq_len": 4
+      }
+    },
+    "optimizer": {
+      "type": "AdamW",
+      "lr": 0.00015,
+      "betas": [
+        0.95,
+        0.99
+      ],
+      "weight_decay": 0.01
+    },
+    "optimizer_config": {
+      "grad_clip": {
+        "max_norm": 35,
+        "norm_type": 2
+      },
+      "type": "GradientCumulativeOptimizerHook",
+      "cumulative_iters": 2
+    },
+    "lr_config": {
+      "policy": "CosineAnnealing",
+      "warmup": null,
+      "warmup_iters": 500,
+      "warmup_ratio": 0.1,
+      "min_lr_ratio": 1e-05
+    },
+    "evaluation": {
+      "interval": 1,
+      "pipeline": [
+        {
+          "type": "LoadPointsFromFile",
+          "coord_type": "LIDAR",
+          "load_dim": 8,
+          "use_dim": [
+            0,
+            1,
+            2,
+            3,
+            5
+          ]
+        },
+        {
+          "type": "LoadImageFromFile",
+          "to_float32": true
+        },
+        {
+          "type": "LoadAnnotations3D",
+          "with_bbox_3d": true,
+          "with_label_3d": true
+        },
+        {
+          "type": "ImageAug3D2",
+          "data_aug_conf": {
+            "resize_lim": [
+              0.4,
+              0.5
+            ],
+            "final_dim": [
+              480,
+              640
+            ],
+            "final_dim_test": [
+              480,
+              640
+            ],
+            "bot_pct_lim": [
+              0.0,
+              0.0
+            ],
+            "top_pct_lim": [
+              0.0,
+              0.1
+            ],
+            "rot_lim": [
+              -2.7,
+              2.7
+            ],
+            "rand_flip": true
+          },
+          "is_train": false
+        },
+        {
+          "type": "GlobalRotScaleTransFlipAll",
+          "bda_aug_conf": {
+            "rot_range": [
+              -0.3925,
+              0.3925
+            ],
+            "scale_ratio_range": [
+              0.95,
+              1.05
+            ],
+            "translation_std": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "flip_dx_ratio": 0.0,
+            "flip_dy_ratio": 0.5
+          },
+          "is_train": false
+        },
+        {
+          "type": "PointsRangeFilter",
+          "point_cloud_range": [
+            0,
+            -39.68,
+            -4,
+            69.12,
+            39.68,
+            2
+          ]
+        },
+        {
+          "type": "Normalize",
+          "mean": [
+            103.53,
+            116.28,
+            123.675
+          ],
+          "std": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "to_rgb": false
+        },
+        {
+          "type": "Pad",
+          "size_divisor": 32
+        },
+        {
+          "type": "DefaultFormatBundle3D",
+          "class_names": [
+            "Pedestrian",
+            "Cyclist",
+            "Car",
+            "Truck"
+          ],
+          "with_label": false
+        },
+        {
+          "type": "CustomCollect3D2",
+          "keys": [
+            "points",
+            "img",
+            "gt_bboxes_3d",
+            "gt_labels_3d"
+          ],
+          "meta_keys": [
+            "filename",
+            "ori_shape",
+            "img_shape",
+            "lidar2img",
+            "depth2img",
+            "cam2img",
+            "pad_shape",
+            "scale_factor",
+            "flip",
+            "pcd_horizontal_flip",
+            "pcd_vertical_flip",
+            "box_mode_3d",
+            "box_type_3d",
+            "img_norm_cfg",
+            "pcd_trans",
+            "sample_idx",
+            "pcd_scale_factor",
+            "pcd_rotation",
+            "pts_filename",
+            "transformation_3d_flow",
+            "img_aug_matrix",
+            "lidar_aug_matrix",
+            "lidar2cam",
+            "gt_depths",
+            "cam_aware",
+            "bda_rot"
+          ]
+        }
+      ]
+    },
+    "checkpoint_config": {
+      "interval": 2
+    },
+    "custom_hooks": [
+      {
+        "type": "KLScaleSchedulerHook",
+        "start_epoch": 0,
+        "end_epoch": 10,
+        "start_value": 0.0,
+        "end_value": 1.0
+      }
+    ],
+    "load_from": "checkpoints/pretrained_tj4d.pth",
+    "resume_from": null,
+    "find_unused_parameters": true
+  },
+  "fusion_settings": {
+    "type": "GeometryPairedMultiScaleFusion",
+    "img_channels": 256,
+    "rad_channels": 384,
+    "out_channels": 256,
+    "kernel_size": 3,
+    "norm_cfg": {
+      "type": "BN",
+      "eps": 0.001,
+      "momentum": 0.01
+    },
+    "act_cfg": {
+      "type": "ReLU",
+      "inplace": true
+    },
+    "bev_shape": [
+      248,
+      216
+    ],
+    "bev_origin": [
+      0.0,
+      -39.68
+    ],
+    "bev_cell": 0.32,
+    "radar_origin": [
+      0.08,
+      -39.6
+    ],
+    "radar_base_cell": 0.16,
+    "radar_base_shape": [
+      496,
+      432
+    ],
+    "radar_level_channels": [
+      64,
+      128,
+      256
+    ],
+    "radar_level_steps": [
+      0.32,
+      0.64,
+      1.28
+    ],
+    "image_channels": 256,
+    "image_size": [
+      480,
+      640
+    ],
+    "image_level_strides": [
+      4,
+      8,
+      16
+    ],
+    "depth_downsample": 8,
+    "embed_dim": 64,
+    "num_heads": 4,
+    "num_offsets": 4,
+    "height_refs": [
+      -1.1230436265,
+      -0.300377965,
+      0.6601446867
+    ],
+    "gamma_init": 1.0,
+    "null_score_init": 0.0,
+    "query_chunk": 4096,
+    "grad_checkpoint": true,
+    "new_param_seed": 20261013,
+    "require_geo": true
+  },
+  "last_train_row": {
+    "mode": "train",
+    "epoch": 4,
+    "iter": 50,
+    "lr": 0.00014,
+    "memory": 17913,
+    "data_time": 0.52002,
+    "loss_rssm_kl": 0.3026,
+    "loss_rssm_recon": 0.0069,
+    "stat_kl_raw_mean": 0.5798,
+    "stat_kl_effective_mean": 1.00835,
+    "stat_clamped_ratio": 0.99309,
+    "stat_mu_diff_sq": 0.02462,
+    "stat_posterior_std": 0.12034,
+    "stat_prior_std": 0.30877,
+    "loss_cls": 0.2175,
+    "loss_bbox": 0.45679,
+    "loss_dir": 0.02107,
+    "loss_iou": 0.03584,
+    "depth_loss_prob": 0.0,
+    "depth_loss_abs": 0.0,
+    "depth_loss_sam2": 0.0,
+    "loss_depth_relative": 0.02087,
+    "bev_mask_ce_loss_former": 0.02878,
+    "bev_mask_dc_loss_former": 0.3018,
+    "range_loss_box": 0.02131,
+    "range_loss_seg": 0.02456,
+    "loss": 1.43803,
+    "time": 5.85393,
+    "grad_norm": 8.41977
+  },
+  "validation_curve": [
+    {
+      "epoch": 1,
+      "iter": 170,
+      "pts_bbox/KITTI/Overall_3D_moderate": 16.7038,
+      "pts_bbox/KITTI/Car_3D_moderate_strict": 27.1852,
+      "pts_bbox/KITTI/Truck_3D_moderate_strict": 3.2925,
+      "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 12.631,
+      "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 23.7064,
+      "pts_bbox/KITTI/Overall_BEV_moderate": 23.9986
+    },
+    {
+      "epoch": 2,
+      "iter": 170,
+      "pts_bbox/KITTI/Overall_3D_moderate": 31.1923,
+      "pts_bbox/KITTI/Car_3D_moderate_strict": 44.2634,
+      "pts_bbox/KITTI/Truck_3D_moderate_strict": 20.0222,
+      "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 22.2176,
+      "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 38.2659,
+      "pts_bbox/KITTI/Overall_BEV_moderate": 38.8706
+    },
+    {
+      "epoch": 3,
+      "iter": 170,
+      "pts_bbox/KITTI/Overall_3D_moderate": 36.4467,
+      "pts_bbox/KITTI/Car_3D_moderate_strict": 45.9897,
+      "pts_bbox/KITTI/Truck_3D_moderate_strict": 27.3842,
+      "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 21.859,
+      "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.554,
+      "pts_bbox/KITTI/Overall_BEV_moderate": 43.0202
+    }
+  ],
+  "baseline_validation_curve": [
+    {
+      "epoch": 1,
+      "iter": 680,
+      "pts_bbox/KITTI/Overall_3D_moderate": 15.264,
+      "pts_bbox/KITTI/Car_3D_moderate_strict": 29.4114,
+      "pts_bbox/KITTI/Truck_3D_moderate_strict": 7.1599,
+      "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 13.9757,
+      "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 10.5091,
+      "pts_bbox/KITTI/Overall_BEV_moderate": 23.2541
+    },
+    {
+      "epoch": 2,
+      "iter": 680,
+      "pts_bbox/KITTI/Overall_3D_moderate": 26.3716,
+      "pts_bbox/KITTI/Car_3D_moderate_strict": 37.6748,
+      "pts_bbox/KITTI/Truck_3D_moderate_strict": 22.447,
+      "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 11.5293,
+      "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 33.8351,
+      "pts_bbox/KITTI/Overall_BEV_moderate": 33.2335
+    },
+    {
+      "epoch": 3,
+      "iter": 680,
+      "pts_bbox/KITTI/Overall_3D_moderate": 31.6591,
+      "pts_bbox/KITTI/Car_3D_moderate_strict": 44.9349,
+      "pts_bbox/KITTI/Truck_3D_moderate_strict": 19.5616,
+      "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 22.2242,
+      "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 39.9158,
+      "pts_bbox/KITTI/Overall_BEV_moderate": 39.5683
+    }
+  ],
+  "provisional_summary": {
+    "window": {
+      "start": 1,
+      "end": 3,
+      "n": 3,
+      "complete": true,
+      "mean": {
+        "pts_bbox/KITTI/Car_2D_easy_loose": 62.128166666666665,
+        "pts_bbox/KITTI/Car_2D_easy_strict": 49.854533333333336,
+        "pts_bbox/KITTI/Car_2D_hard_loose": 59.832,
+        "pts_bbox/KITTI/Car_2D_hard_strict": 49.291666666666664,
+        "pts_bbox/KITTI/Car_2D_moderate_loose": 61.98843333333333,
+        "pts_bbox/KITTI/Car_2D_moderate_strict": 51.1231,
+        "pts_bbox/KITTI/Car_3D_easy_loose": 61.3503,
+        "pts_bbox/KITTI/Car_3D_easy_strict": 38.346199999999996,
+        "pts_bbox/KITTI/Car_3D_hard_loose": 58.05533333333334,
+        "pts_bbox/KITTI/Car_3D_hard_strict": 37.691433333333336,
+        "pts_bbox/KITTI/Car_3D_moderate_loose": 60.33036666666666,
+        "pts_bbox/KITTI/Car_3D_moderate_strict": 39.1461,
+        "pts_bbox/KITTI/Car_BEV_easy_loose": 62.07946666666667,
+        "pts_bbox/KITTI/Car_BEV_easy_strict": 54.79253333333333,
+        "pts_bbox/KITTI/Car_BEV_hard_loose": 58.84173333333333,
+        "pts_bbox/KITTI/Car_BEV_hard_strict": 52.699333333333335,
+        "pts_bbox/KITTI/Car_BEV_moderate_loose": 61.1186,
+        "pts_bbox/KITTI/Car_BEV_moderate_strict": 54.7883,
+        "pts_bbox/KITTI/Cyclist_2D_easy_loose": 43.49073333333334,
+        "pts_bbox/KITTI/Cyclist_2D_easy_strict": 33.75243333333333,
+        "pts_bbox/KITTI/Cyclist_2D_hard_loose": 40.0137,
+        "pts_bbox/KITTI/Cyclist_2D_hard_strict": 30.490166666666667,
+        "pts_bbox/KITTI/Cyclist_2D_moderate_loose": 40.177366666666664,
+        "pts_bbox/KITTI/Cyclist_2D_moderate_strict": 30.620066666666666,
+        "pts_bbox/KITTI/Cyclist_3D_easy_loose": 40.84186666666667,
+        "pts_bbox/KITTI/Cyclist_3D_easy_strict": 17.018,
+        "pts_bbox/KITTI/Cyclist_3D_hard_loose": 37.353633333333335,
+        "pts_bbox/KITTI/Cyclist_3D_hard_strict": 15.356466666666668,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 37.508766666666666,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_strict": 15.393233333333333,
+        "pts_bbox/KITTI/Cyclist_BEV_easy_loose": 41.77856666666666,
+        "pts_bbox/KITTI/Cyclist_BEV_easy_strict": 27.956766666666667,
+        "pts_bbox/KITTI/Cyclist_BEV_hard_loose": 38.25556666666667,
+        "pts_bbox/KITTI/Cyclist_BEV_hard_strict": 25.482733333333332,
+        "pts_bbox/KITTI/Cyclist_BEV_moderate_loose": 38.4111,
+        "pts_bbox/KITTI/Cyclist_BEV_moderate_strict": 25.583366666666667,
+        "pts_bbox/KITTI/Overall_2D_easy": 36.880066666666664,
+        "pts_bbox/KITTI/Overall_2D_hard": 34.241566666666664,
+        "pts_bbox/KITTI/Overall_2D_moderate": 35.49153333333334,
+        "pts_bbox/KITTI/Overall_3D_easy": 29.6589,
+        "pts_bbox/KITTI/Overall_3D_hard": 27.177866666666667,
+        "pts_bbox/KITTI/Overall_3D_moderate": 28.114266666666666,
+        "pts_bbox/KITTI/Overall_BEV_easy": 37.243566666666666,
+        "pts_bbox/KITTI/Overall_BEV_hard": 33.86783333333334,
+        "pts_bbox/KITTI/Overall_BEV_moderate": 35.29646666666667,
+        "pts_bbox/KITTI/Pedestrian_2D_easy_loose": 27.140800000000002,
+        "pts_bbox/KITTI/Pedestrian_2D_easy_strict": 24.267666666666667,
+        "pts_bbox/KITTI/Pedestrian_2D_hard_loose": 23.8777,
+        "pts_bbox/KITTI/Pedestrian_2D_hard_strict": 21.314933333333332,
+        "pts_bbox/KITTI/Pedestrian_2D_moderate_loose": 23.946233333333332,
+        "pts_bbox/KITTI/Pedestrian_2D_moderate_strict": 21.346866666666667,
+        "pts_bbox/KITTI/Pedestrian_3D_easy_loose": 21.508533333333332,
+        "pts_bbox/KITTI/Pedestrian_3D_easy_strict": 0.08053333333333333,
+        "pts_bbox/KITTI/Pedestrian_3D_hard_loose": 18.864033333333335,
+        "pts_bbox/KITTI/Pedestrian_3D_hard_strict": 0.07376666666666667,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 18.902533333333334,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_strict": 0.07376666666666667,
+        "pts_bbox/KITTI/Pedestrian_BEV_easy_loose": 23.0741,
+        "pts_bbox/KITTI/Pedestrian_BEV_easy_strict": 0.6866666666666666,
+        "pts_bbox/KITTI/Pedestrian_BEV_hard_loose": 20.278200000000002,
+        "pts_bbox/KITTI/Pedestrian_BEV_hard_strict": 0.6017,
+        "pts_bbox/KITTI/Pedestrian_BEV_moderate_loose": 20.338733333333334,
+        "pts_bbox/KITTI/Pedestrian_BEV_moderate_strict": 0.6016666666666667,
+        "pts_bbox/KITTI/Truck_2D_easy_loose": 36.13726666666667,
+        "pts_bbox/KITTI/Truck_2D_easy_strict": 27.034133333333333,
+        "pts_bbox/KITTI/Truck_2D_hard_loose": 31.787933333333335,
+        "pts_bbox/KITTI/Truck_2D_hard_strict": 23.7832,
+        "pts_bbox/KITTI/Truck_2D_moderate_loose": 35.28646666666667,
+        "pts_bbox/KITTI/Truck_2D_moderate_strict": 26.719466666666666,
+        "pts_bbox/KITTI/Truck_3D_easy_loose": 38.6185,
+        "pts_bbox/KITTI/Truck_3D_easy_strict": 17.939033333333334,
+        "pts_bbox/KITTI/Truck_3D_hard_loose": 31.4621,
+        "pts_bbox/KITTI/Truck_3D_hard_strict": 14.802266666666666,
+        "pts_bbox/KITTI/Truck_3D_moderate_loose": 35.80453333333333,
+        "pts_bbox/KITTI/Truck_3D_moderate_strict": 16.899633333333334,
+        "pts_bbox/KITTI/Truck_BEV_easy_loose": 39.58463333333333,
+        "pts_bbox/KITTI/Truck_BEV_easy_strict": 29.328866666666666,
+        "pts_bbox/KITTI/Truck_BEV_hard_loose": 32.2475,
+        "pts_bbox/KITTI/Truck_BEV_hard_strict": 24.2384,
+        "pts_bbox/KITTI/Truck_BEV_moderate_loose": 36.66806666666667,
+        "pts_bbox/KITTI/Truck_BEV_moderate_strict": 27.64756666666667
+      }
+    },
+    "vs_b0": {
+      "mean": {
+        "pts_bbox/KITTI/Car_2D_easy_loose": 59.429899999999996,
+        "pts_bbox/KITTI/Car_2D_easy_strict": 44.724466666666665,
+        "pts_bbox/KITTI/Car_2D_hard_loose": 57.8377,
+        "pts_bbox/KITTI/Car_2D_hard_strict": 45.62023333333333,
+        "pts_bbox/KITTI/Car_2D_moderate_loose": 59.98323333333333,
+        "pts_bbox/KITTI/Car_2D_moderate_strict": 47.33646666666667,
+        "pts_bbox/KITTI/Car_3D_easy_loose": 59.15453333333333,
+        "pts_bbox/KITTI/Car_3D_easy_strict": 36.150733333333335,
+        "pts_bbox/KITTI/Car_3D_hard_loose": 56.25406666666667,
+        "pts_bbox/KITTI/Car_3D_hard_strict": 35.919466666666665,
+        "pts_bbox/KITTI/Car_3D_moderate_loose": 58.479366666666664,
+        "pts_bbox/KITTI/Car_3D_moderate_strict": 37.34036666666667,
+        "pts_bbox/KITTI/Car_BEV_easy_loose": 59.77446666666667,
+        "pts_bbox/KITTI/Car_BEV_easy_strict": 52.22043333333333,
+        "pts_bbox/KITTI/Car_BEV_hard_loose": 56.99603333333334,
+        "pts_bbox/KITTI/Car_BEV_hard_strict": 50.2656,
+        "pts_bbox/KITTI/Car_BEV_moderate_loose": 59.28633333333333,
+        "pts_bbox/KITTI/Car_BEV_moderate_strict": 52.32803333333334,
+        "pts_bbox/KITTI/Cyclist_2D_easy_loose": 33.02876666666667,
+        "pts_bbox/KITTI/Cyclist_2D_easy_strict": 27.226133333333333,
+        "pts_bbox/KITTI/Cyclist_2D_hard_loose": 29.884933333333333,
+        "pts_bbox/KITTI/Cyclist_2D_hard_strict": 24.484133333333336,
+        "pts_bbox/KITTI/Cyclist_2D_moderate_loose": 30.018700000000003,
+        "pts_bbox/KITTI/Cyclist_2D_moderate_strict": 24.5947,
+        "pts_bbox/KITTI/Cyclist_3D_easy_loose": 31.04566666666667,
+        "pts_bbox/KITTI/Cyclist_3D_easy_strict": 12.899366666666666,
+        "pts_bbox/KITTI/Cyclist_3D_hard_loose": 27.9624,
+        "pts_bbox/KITTI/Cyclist_3D_hard_strict": 11.684666666666667,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 28.086666666666666,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_strict": 11.724,
+        "pts_bbox/KITTI/Cyclist_BEV_easy_loose": 31.662333333333333,
+        "pts_bbox/KITTI/Cyclist_BEV_easy_strict": 21.630066666666668,
+        "pts_bbox/KITTI/Cyclist_BEV_hard_loose": 28.5745,
+        "pts_bbox/KITTI/Cyclist_BEV_hard_strict": 19.531833333333335,
+        "pts_bbox/KITTI/Cyclist_BEV_moderate_loose": 28.689766666666667,
+        "pts_bbox/KITTI/Cyclist_BEV_moderate_strict": 19.599666666666668,
+        "pts_bbox/KITTI/Overall_2D_easy": 31.72853333333333,
+        "pts_bbox/KITTI/Overall_2D_hard": 29.398666666666667,
+        "pts_bbox/KITTI/Overall_2D_moderate": 30.5762,
+        "pts_bbox/KITTI/Overall_3D_easy": 25.695066666666666,
+        "pts_bbox/KITTI/Overall_3D_hard": 23.4991,
+        "pts_bbox/KITTI/Overall_3D_moderate": 24.431566666666665,
+        "pts_bbox/KITTI/Overall_BEV_easy": 34.304966666666665,
+        "pts_bbox/KITTI/Overall_BEV_hard": 30.5296,
+        "pts_bbox/KITTI/Overall_BEV_moderate": 32.018633333333334,
+        "pts_bbox/KITTI/Pedestrian_2D_easy_loose": 23.37623333333333,
+        "pts_bbox/KITTI/Pedestrian_2D_easy_strict": 21.5989,
+        "pts_bbox/KITTI/Pedestrian_2D_hard_loose": 20.6175,
+        "pts_bbox/KITTI/Pedestrian_2D_hard_strict": 18.962966666666667,
+        "pts_bbox/KITTI/Pedestrian_2D_moderate_loose": 20.668266666666668,
+        "pts_bbox/KITTI/Pedestrian_2D_moderate_strict": 19.0379,
+        "pts_bbox/KITTI/Pedestrian_3D_easy_loose": 18.0073,
+        "pts_bbox/KITTI/Pedestrian_3D_easy_strict": 0.4714333333333333,
+        "pts_bbox/KITTI/Pedestrian_3D_hard_loose": 15.851333333333333,
+        "pts_bbox/KITTI/Pedestrian_3D_hard_strict": 0.4395,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 15.909733333333334,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_strict": 0.4395,
+        "pts_bbox/KITTI/Pedestrian_BEV_easy_loose": 19.167299999999997,
+        "pts_bbox/KITTI/Pedestrian_BEV_easy_strict": 1.9507333333333332,
+        "pts_bbox/KITTI/Pedestrian_BEV_hard_loose": 16.8137,
+        "pts_bbox/KITTI/Pedestrian_BEV_hard_strict": 1.7968666666666666,
+        "pts_bbox/KITTI/Pedestrian_BEV_moderate_loose": 16.837766666666667,
+        "pts_bbox/KITTI/Pedestrian_BEV_moderate_strict": 1.8023333333333333,
+        "pts_bbox/KITTI/Truck_2D_easy_loose": 39.3544,
+        "pts_bbox/KITTI/Truck_2D_easy_strict": 25.784733333333335,
+        "pts_bbox/KITTI/Truck_2D_hard_loose": 32.786833333333334,
+        "pts_bbox/KITTI/Truck_2D_hard_strict": 21.472,
+        "pts_bbox/KITTI/Truck_2D_moderate_loose": 36.637933333333336,
+        "pts_bbox/KITTI/Truck_2D_moderate_strict": 24.281266666666667,
+        "pts_bbox/KITTI/Truck_3D_easy_loose": 43.69683333333333,
+        "pts_bbox/KITTI/Truck_3D_easy_strict": 17.576433333333334,
+        "pts_bbox/KITTI/Truck_3D_hard_loose": 33.995266666666666,
+        "pts_bbox/KITTI/Truck_3D_hard_strict": 14.263366666666668,
+        "pts_bbox/KITTI/Truck_3D_moderate_loose": 38.806,
+        "pts_bbox/KITTI/Truck_3D_moderate_strict": 16.389499999999998,
+        "pts_bbox/KITTI/Truck_BEV_easy_loose": 45.07946666666667,
+        "pts_bbox/KITTI/Truck_BEV_easy_strict": 34.169799999999995,
+        "pts_bbox/KITTI/Truck_BEV_hard_loose": 35.1642,
+        "pts_bbox/KITTI/Truck_BEV_hard_strict": 26.464766666666666,
+        "pts_bbox/KITTI/Truck_BEV_moderate_loose": 40.14893333333333,
+        "pts_bbox/KITTI/Truck_BEV_moderate_strict": 30.219
+      },
+      "delta": {
+        "pts_bbox/KITTI/Car_2D_easy_loose": 2.698266666666669,
+        "pts_bbox/KITTI/Car_2D_easy_strict": 5.130066666666671,
+        "pts_bbox/KITTI/Car_2D_hard_loose": 1.9943000000000026,
+        "pts_bbox/KITTI/Car_2D_hard_strict": 3.671433333333333,
+        "pts_bbox/KITTI/Car_2D_moderate_loose": 2.005200000000002,
+        "pts_bbox/KITTI/Car_2D_moderate_strict": 3.7866333333333344,
+        "pts_bbox/KITTI/Car_3D_easy_loose": 2.195766666666664,
+        "pts_bbox/KITTI/Car_3D_easy_strict": 2.195466666666661,
+        "pts_bbox/KITTI/Car_3D_hard_loose": 1.8012666666666703,
+        "pts_bbox/KITTI/Car_3D_hard_strict": 1.7719666666666711,
+        "pts_bbox/KITTI/Car_3D_moderate_loose": 1.850999999999999,
+        "pts_bbox/KITTI/Car_3D_moderate_strict": 1.805733333333329,
+        "pts_bbox/KITTI/Car_BEV_easy_loose": 2.3049999999999997,
+        "pts_bbox/KITTI/Car_BEV_easy_strict": 2.572099999999999,
+        "pts_bbox/KITTI/Car_BEV_hard_loose": 1.8456999999999937,
+        "pts_bbox/KITTI/Car_BEV_hard_strict": 2.433733333333336,
+        "pts_bbox/KITTI/Car_BEV_moderate_loose": 1.8322666666666692,
+        "pts_bbox/KITTI/Car_BEV_moderate_strict": 2.460266666666662,
+        "pts_bbox/KITTI/Cyclist_2D_easy_loose": 10.461966666666669,
+        "pts_bbox/KITTI/Cyclist_2D_easy_strict": 6.5262999999999955,
+        "pts_bbox/KITTI/Cyclist_2D_hard_loose": 10.128766666666667,
+        "pts_bbox/KITTI/Cyclist_2D_hard_strict": 6.006033333333331,
+        "pts_bbox/KITTI/Cyclist_2D_moderate_loose": 10.158666666666662,
+        "pts_bbox/KITTI/Cyclist_2D_moderate_strict": 6.025366666666667,
+        "pts_bbox/KITTI/Cyclist_3D_easy_loose": 9.796199999999999,
+        "pts_bbox/KITTI/Cyclist_3D_easy_strict": 4.118633333333335,
+        "pts_bbox/KITTI/Cyclist_3D_hard_loose": 9.391233333333336,
+        "pts_bbox/KITTI/Cyclist_3D_hard_strict": 3.671800000000001,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 9.4221,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_strict": 3.6692333333333327,
+        "pts_bbox/KITTI/Cyclist_BEV_easy_loose": 10.11623333333333,
+        "pts_bbox/KITTI/Cyclist_BEV_easy_strict": 6.326699999999999,
+        "pts_bbox/KITTI/Cyclist_BEV_hard_loose": 9.681066666666666,
+        "pts_bbox/KITTI/Cyclist_BEV_hard_strict": 5.950899999999997,
+        "pts_bbox/KITTI/Cyclist_BEV_moderate_loose": 9.72133333333333,
+        "pts_bbox/KITTI/Cyclist_BEV_moderate_strict": 5.983699999999999,
+        "pts_bbox/KITTI/Overall_2D_easy": 5.151533333333333,
+        "pts_bbox/KITTI/Overall_2D_hard": 4.842899999999997,
+        "pts_bbox/KITTI/Overall_2D_moderate": 4.915333333333336,
+        "pts_bbox/KITTI/Overall_3D_easy": 3.9638333333333335,
+        "pts_bbox/KITTI/Overall_3D_hard": 3.678766666666668,
+        "pts_bbox/KITTI/Overall_3D_moderate": 3.6827000000000005,
+        "pts_bbox/KITTI/Overall_BEV_easy": 2.938600000000001,
+        "pts_bbox/KITTI/Overall_BEV_hard": 3.3382333333333385,
+        "pts_bbox/KITTI/Overall_BEV_moderate": 3.2778333333333336,
+        "pts_bbox/KITTI/Pedestrian_2D_easy_loose": 3.7645666666666706,
+        "pts_bbox/KITTI/Pedestrian_2D_easy_strict": 2.6687666666666665,
+        "pts_bbox/KITTI/Pedestrian_2D_hard_loose": 3.260200000000001,
+        "pts_bbox/KITTI/Pedestrian_2D_hard_strict": 2.351966666666666,
+        "pts_bbox/KITTI/Pedestrian_2D_moderate_loose": 3.2779666666666643,
+        "pts_bbox/KITTI/Pedestrian_2D_moderate_strict": 2.3089666666666666,
+        "pts_bbox/KITTI/Pedestrian_3D_easy_loose": 3.5012333333333316,
+        "pts_bbox/KITTI/Pedestrian_3D_easy_strict": -0.39089999999999997,
+        "pts_bbox/KITTI/Pedestrian_3D_hard_loose": 3.0127000000000024,
+        "pts_bbox/KITTI/Pedestrian_3D_hard_strict": -0.36573333333333335,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 2.992800000000001,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_strict": -0.36573333333333335,
+        "pts_bbox/KITTI/Pedestrian_BEV_easy_loose": 3.906800000000004,
+        "pts_bbox/KITTI/Pedestrian_BEV_easy_strict": -1.2640666666666664,
+        "pts_bbox/KITTI/Pedestrian_BEV_hard_loose": 3.464500000000001,
+        "pts_bbox/KITTI/Pedestrian_BEV_hard_strict": -1.1951666666666667,
+        "pts_bbox/KITTI/Pedestrian_BEV_moderate_loose": 3.500966666666667,
+        "pts_bbox/KITTI/Pedestrian_BEV_moderate_strict": -1.2006666666666668,
+        "pts_bbox/KITTI/Truck_2D_easy_loose": -3.2171333333333294,
+        "pts_bbox/KITTI/Truck_2D_easy_strict": 1.2493999999999978,
+        "pts_bbox/KITTI/Truck_2D_hard_loose": -0.998899999999999,
+        "pts_bbox/KITTI/Truck_2D_hard_strict": 2.3111999999999995,
+        "pts_bbox/KITTI/Truck_2D_moderate_loose": -1.351466666666667,
+        "pts_bbox/KITTI/Truck_2D_moderate_strict": 2.4381999999999984,
+        "pts_bbox/KITTI/Truck_3D_easy_loose": -5.078333333333333,
+        "pts_bbox/KITTI/Truck_3D_easy_strict": 0.3626000000000005,
+        "pts_bbox/KITTI/Truck_3D_hard_loose": -2.5331666666666663,
+        "pts_bbox/KITTI/Truck_3D_hard_strict": 0.5388999999999982,
+        "pts_bbox/KITTI/Truck_3D_moderate_loose": -3.0014666666666656,
+        "pts_bbox/KITTI/Truck_3D_moderate_strict": 0.5101333333333358,
+        "pts_bbox/KITTI/Truck_BEV_easy_loose": -5.4948333333333395,
+        "pts_bbox/KITTI/Truck_BEV_easy_strict": -4.840933333333329,
+        "pts_bbox/KITTI/Truck_BEV_hard_loose": -2.9166999999999987,
+        "pts_bbox/KITTI/Truck_BEV_hard_strict": -2.2263666666666673,
+        "pts_bbox/KITTI/Truck_BEV_moderate_loose": -3.480866666666664,
+        "pts_bbox/KITTI/Truck_BEV_moderate_strict": -2.5714333333333315
+      }
+    },
+    "all_epoch_peak": {
+      "value": 36.4467,
+      "epoch": 3
+    },
+    "best_saved": {
+      "value": 31.1923,
+      "epoch": 2
+    },
+    "fixed_window_12_16_n": 0
+  },
+  "epoch_performance": {
+    "1": {
+      "n_rows": 38,
+      "last_iter": 1900,
+      "all_rows_mean_time_s": 5.241193421052632,
+      "post_first50_n_rows": 37,
+      "post_first50_mean_time_s": 5.23431,
+      "data_time_s": 0.07844184210526316,
+      "max_memory_mib": 17912
+    },
+    "2": {
+      "n_rows": 38,
+      "last_iter": 1900,
+      "all_rows_mean_time_s": 5.2801544736842105,
+      "post_first50_n_rows": 37,
+      "post_first50_mean_time_s": 5.268184864864865,
+      "data_time_s": 0.07971473684210527,
+      "max_memory_mib": 17913
+    },
+    "3": {
+      "n_rows": 38,
+      "last_iter": 1900,
+      "all_rows_mean_time_s": 5.292142894736842,
+      "post_first50_n_rows": 37,
+      "post_first50_mean_time_s": 5.279384054054054,
+      "data_time_s": 0.08484921052631579,
+      "max_memory_mib": 17913
+    },
+    "4": {
+      "n_rows": 1,
+      "last_iter": 50,
+      "all_rows_mean_time_s": 5.85393,
+      "post_first50_n_rows": 0,
+      "post_first50_mean_time_s": null,
+      "data_time_s": 0.52002,
+      "max_memory_mib": 17913
+    }
+  },
+  "total_train_rows": 115,
+  "total_validation_rows": 3,
+  "all_logged_numbers_finite": true,
+  "exception_patterns": [],
+  "new_s0_verdict_exists": false,
+  "new_s0_paired_baseline_exists": false,
+  "new_s0_paired_arm_exists": false,
+  "old_s0_verdict_source_matches_current": false,
+  "watchdog_sha256": "040c9950009cb15151cdf48283f50d5ff9176b9f21e22fdef00aef59ded767a1",
+  "checkpoint_files": [
+    "epoch_2.pth"
+  ],
+  "checkpoint_audit": {
+    "checked_at_utc": "2026-10-14T01:53:42.405004+00:00",
+    "path": "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/epoch_2.pth",
+    "meta_epoch": 2,
+    "meta_iter": 3804,
+    "meta_seed": 0,
+    "model_matches_registered": true,
+    "recipe_mismatches": [],
+    "gpu_ids": [
+      0,
+      1,
+      2
+    ],
+    "all_checkpoint_state_finite": true,
+    "fusion_projection_stats": {
+      "cross_attention.proj_r2c.weight": {
+        "abs_mean": 0.004881360102444887,
+        "abs_max": 0.03341668099164963
+      },
+      "cross_attention.proj_r2c.bias": {
+        "abs_mean": 0.0038080825470387936,
+        "abs_max": 0.017803199589252472
+      },
+      "cross_attention.proj_i2r.weight": {
+        "abs_mean": 0.0036012467462569475,
+        "abs_max": 0.021656008437275887
+      },
+      "cross_attention.proj_i2r.bias": {
+        "abs_mean": 0.004746417049318552,
+        "abs_max": 0.018608011305332184
+      }
+    },
+    "cuda_initialized": false
+  },
+  "cpu_gate_runs": {
+    "cpu_wiring": {
+      "exit_code": 0,
+      "log": "/tmp/gpmsf_verify_20261014_cpu_wiring.log",
+      "sha256": "02ab3192b8e7bd73d3931b31714ad9caa62400fcc8f0b270f2b29c820389f299",
+      "output": "PASS t1_step0_identity: bitwise identical to same-state ConcatConv (geo present and geo=None)\nPASS t2_rng_isolation: downstream RNG stream preserved; new params reproducible from new_param_seed\nPASS t3_index_bookkeeping: 3 native radar levels + 3 image levels sample their cell centres exactly\nPASS t4_image_path: P3 delta read back within 0.0e+00 of level weight 0.3333 x conv(delta); three height refs read 0.259/0.194/0.117 (max err 1.2e-07) = their own projected ramp rows\nPASS t5_zero_radar: M_R == 0 exactly (camera path untouched), M_I still non-zero\nPASS t6_no_image: M_I == 0 exactly with every projection invalid; radar message survives\nPASS t7_two_step_grad: offsets 0 at step0 then 4.73; keys 1.53; level weights 0.18\nPASS t8_chunking: chunked (5 cells) == single chunk\nPASS t9_bounds: max radius 1.0051 m <= per-head cap 1.3194 m\nPASS t10_smoke: checkpointed forward/backward finite; 60 tensors, all with grad\nPASS t11_chunking_nonzero_residual: non-zero residual moves the output by 3.5380; chunk-5 == chunk-0 exactly\nPASS t12_direct_message_and_grad_chunking: messages peak 0.543, M_R/M_I+output identical, 60 grads within 3.13e-07\nPASS t13_message_spatial_impulse: impulse (row 2, col 2) -> [(1, 1), (1, 2), (2, 1), (2, 2)]; col 3 -> [(1, 2), (1, 3), (2, 2), (2, 3)]; exact +1 shift, zero outside\n\n13/13 CPU wiring checks passed\n"
+    },
+    "pytest_wiring_queue": {
+      "exit_code": 0,
+      "log": "/tmp/gpmsf_verify_20261014_pytest_wiring_queue.log",
+      "sha256": "feaeacc3cb41b68a89580a0163ef86600e550a61ce4ab092e1fbfacb3c30420b",
+      "output": "......................................                                   [100%]\n=============================== warnings summary ===============================\n../../envs/miniforge3/envs/r4det/lib/python3.8/site-packages/_pytest/config/__init__.py:1277\n  /home/lurui/envs/miniforge3/envs/r4det/lib/python3.8/site-packages/_pytest/config/__init__.py:1277: PytestAssertRewriteWarning: Module already imported so cannot be rewritten: dash\n    self._mark_plugins_for_rewrite(hook)\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n38 passed, 1 warning in 9.07s\n"
+    },
+    "golden_compare": {
+      "exit_code": 1,
+      "log": "/tmp/gpmsf_verify_20261014_golden_compare.log",
+      "sha256": "64ae46b3d7391a8b4576470bcda0dde696587f5e6c58dd1310e142a467c421cd",
+      "output": "full.m_r: max|d| = 4.265e-07\nfull.m_i: max|d| = 1.192e-07\nfull.o: max|d| = 7.153e-07\nc5.m_r: max|d| = 4.265e-07\nc5.m_i: max|d| = 1.192e-07\nc5.o: max|d| = 3.576e-07\n  GRAD c5.fusion_conv.conv.weight: 1.103e-06\nworst |delta| = 1.103e-06\nTraceback (most recent call last):\n  File \"<stdin>\", line 19, in <module>\n  File \"/home/lurui/envs/miniforge3/envs/r4det/lib/python3.8/runpy.py\", line 265, in run_path\n    return _run_module_code(code, init_globals, run_name,\n  File \"/home/lurui/envs/miniforge3/envs/r4det/lib/python3.8/runpy.py\", line 97, in _run_module_code\n    _run_code(code, mod_globals, init_globals,\n  File \"/home/lurui/envs/miniforge3/envs/r4det/lib/python3.8/runpy.py\", line 87, in _run_code\n    exec(code, run_globals)\n  File \"me_rssm/sanity/gpmsf_golden_compare.py\", line 69, in <module>\n    assert worst <= 1e-6, f'tolerance exceeded: {worst}'\nAssertionError: tolerance exceeded: 1.1026859283447266e-06\n"
+    },
+    "cuda_initialized": false,
+    "checked_at_utc": "2026-10-14T01:53:03.309099+00:00",
+    "golden_comparison_interpretation": "Stored reference failed the absolute1e-6 check in this CPU environment. Independently regenerate old source4332858 in the same environment: old/current forward identical; all60 gradients and stats within original1e-6. Stored-reference vs fresh-old also differs, so failure is not evidence of a current-code regression. Old artifact lacks backend/thread provenance; exact origin of cross-run numerical drift not established."
+  },
+  "watchdog_audit": {
+    "checked_at_utc": "2026-10-14T01:54:18.167416+00:00",
+    "path": "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/watchdog_gpmsf.sh",
+    "sha256": "040c9950009cb15151cdf48283f50d5ff9176b9f21e22fdef00aef59ded767a1",
+    "script_lines": {
+      "20": "    say 'EXCEPTION/OOM detected; stopping owned session'; stop_owned; say 'STOPPED_EXCEPTION'; exit 1",
+      "23": "    if \"${CHECK[@]}\" ready --work-dir \"$WD\" --expected-epochs 6 > \"$WD/.wd_ready6.log\" 2>&1; then",
+      "24": "      if \"${CHECK[@]}\" curve --work-dir \"$WD\" --b0 \"$B0\" --window 1-6 --early-stop --live \\",
+      "32": "  if [ \"$mature\" -eq 0 ] && \"${CHECK[@]}\" ready --work-dir \"$WD\" --expected-epochs 16 > \"$WD/.wd_ready16.log\" 2>&1; then",
+      "33": "    if \"${CHECK[@]}\" curve --work-dir \"$WD\" --b0 \"$B0\" --window 12-16 --live \\",
+      "40": "  sleep 60",
+      "44": "  \"${CHECK[@]}\" curve --work-dir \"$WD\" --b0 \"$B0\" --window 1-6 --early-stop \\",
+      "45": "     --out \"$WD/gpmsf_ep6_report.json\" >> \"$WLOG\" 2>&1 || say 'final ep6 recheck failed'",
+      "46": "  \"${CHECK[@]}\" curve --work-dir \"$WD\" --b0 \"$B0\" --window 12-16 --expected-epochs 24 \\",
+      "47": "     --out \"$WD/gpmsf_full_curve_report.json\" >> \"$WLOG\" 2>&1 || say 'final full-curve report failed'",
+      "48": "  say 'DONE: epoch_24.pth present; reports written'"
+    },
+    "script_full": "#!/usr/bin/env bash\n# Fail-closed watchdog for the GP-MSF 24e run launched 2026-10-13 (outside queue).\n# Mirrors queue_gpmsf.sh run_owned: exception/OOM -> stop; ep6 stop-loss; ep12-16 report.\ncd /home/lurui/workspace/R4Det\nsource .envrc\nexport CUDA_VISIBLE_DEVICES=5,6,7\nexport PYTHONPATH=\"$PWD:${PYTHONPATH:-}\"\nWD=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0\nB0=/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_seed0\nLOG=$WD/train_gpmsf.log\nWLOG=$WD/watchdog_gpmsf.log\nPGID=3551130\nCHECK=(python me_rssm/sanity/gpmsf_run_checks.py)\nsay(){ echo \"[watchdog] $(date -u '+%F %T') $*\" >> \"$WLOG\"; }\nstop_owned(){ kill -TERM -- \"-$PGID\" 2>/dev/null || true; sleep 20; kill -KILL -- \"-$PGID\" 2>/dev/null || true; }\nsay \"armed pgid=$PGID\"\nearly=0; mature=0\nwhile kill -0 -- \"-$PGID\" 2>/dev/null; do\n  if grep -Eqi 'CAUGHT AN EXCEPTION|Traceback \\(most recent call last\\)|CUDA out of memory' \"$LOG\"; then\n    say 'EXCEPTION/OOM detected; stopping owned session'; stop_owned; say 'STOPPED_EXCEPTION'; exit 1\n  fi\n  if [ \"$early\" -eq 0 ]; then\n    if \"${CHECK[@]}\" ready --work-dir \"$WD\" --expected-epochs 6 > \"$WD/.wd_ready6.log\" 2>&1; then\n      if \"${CHECK[@]}\" curve --work-dir \"$WD\" --b0 \"$B0\" --window 1-6 --early-stop --live \\\n            --out \"$WD/gpmsf_ep6_report.json\" >> \"$WLOG\" 2>&1; then\n        early=1; say 'ep1-6 complete; no >2 AP task harm'\n      else\n        say 'EP6 STOP-LOSS TRIPPED (task harm or evidence failure)'; stop_owned; say 'STOPPED_EP6'; exit 2\n      fi\n    fi\n  fi\n  if [ \"$mature\" -eq 0 ] && \"${CHECK[@]}\" ready --work-dir \"$WD\" --expected-epochs 16 > \"$WD/.wd_ready16.log\" 2>&1; then\n    if \"${CHECK[@]}\" curve --work-dir \"$WD\" --b0 \"$B0\" --window 12-16 --live \\\n          --out \"$WD/gpmsf_ep16_report.json\" >> \"$WLOG\" 2>&1; then\n      mature=1; say 'ep12-16 complete; report written; training continues to ep24'\n    else\n      say 'ep12-16 live evidence not ready/invalid; will retry'\n    fi\n  fi\n  sleep 60\ndone\nsay 'trainer process group exited'\nif [ -f \"$WD/epoch_24.pth\" ]; then\n  \"${CHECK[@]}\" curve --work-dir \"$WD\" --b0 \"$B0\" --window 1-6 --early-stop \\\n     --out \"$WD/gpmsf_ep6_report.json\" >> \"$WLOG\" 2>&1 || say 'final ep6 recheck failed'\n  \"${CHECK[@]}\" curve --work-dir \"$WD\" --b0 \"$B0\" --window 12-16 --expected-epochs 24 \\\n     --out \"$WD/gpmsf_full_curve_report.json\" >> \"$WLOG\" 2>&1 || say 'final full-curve report failed'\n  say 'DONE: epoch_24.pth present; reports written'\nelse\n  say 'NO epoch_24.pth; stopped short (review required)'\nfi\n",
+    "has_finish_phase_call": false,
+    "has_exit_code_check_for_ready": false,
+    "nonfinite_ready_probe": {
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "CHECK FAILED: non-finite log /tmp/gpmsf_watchdog_readiness_l9o3l6l_/probe.log.json:1: ['.loss']\n"
+    },
+    "incomplete_ready_probe": {
+      "exit_code": 3,
+      "stdout": "",
+      "stderr": ""
+    },
+    "malformed_ready_probe": {
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "CHECK FAILED: malformed log /tmp/gpmsf_watchdog_readiness_l9o3l6l_/probe.log.json:2\n"
+    },
+    "ignored_ready_status_demo": {
+      "exit_code": 0,
+      "stdout": "STILL_RUNNING\n"
+    },
+    "active_watchdog_executed_or_modified": false,
+    "findings": [
+      "Readiness failures return 1 but watchdog has no else branch to distinguish them from not-ready=3",
+      "Final curve check failure is logged then unconditional DONE is emitted whenever epoch_24.pth exists",
+      "No finish_phase call or actual trainer exit code receipt before DONE",
+      "External watchdog is not part of frozen/version-controlled research source set"
+    ]
+  },
+  "latest_snapshot": {
+    "checked_at_utc": "2026-10-14T02:03:56.329904+00:00",
+    "last_train_row": {
+      "mode": "train",
+      "epoch": 4,
+      "iter": 200,
+      "lr": 0.00014,
+      "memory": 17913,
+      "data_time": 0.07959,
+      "loss_rssm_kl": 0.30284,
+      "loss_rssm_recon": 0.00671,
+      "stat_kl_raw_mean": 0.63429,
+      "stat_kl_effective_mean": 1.00925,
+      "stat_clamped_ratio": 0.99396,
+      "stat_mu_diff_sq": 0.02912,
+      "stat_posterior_std": 0.12289,
+      "stat_prior_std": 0.33418,
+      "loss_cls": 0.23887,
+      "loss_bbox": 0.45202,
+      "loss_dir": 0.01931,
+      "loss_iou": 0.03746,
+      "depth_loss_prob": 0.0,
+      "depth_loss_abs": 0.0,
+      "depth_loss_sam2": 0.0,
+      "loss_depth_relative": 0.02017,
+      "bev_mask_ce_loss_former": 0.02626,
+      "bev_mask_dc_loss_former": 0.31693,
+      "range_loss_box": 0.02521,
+      "range_loss_seg": 0.0253,
+      "loss": 1.47108,
+      "time": 5.2819,
+      "grad_norm": 7.71953
+    },
+    "complete_epoch_val_rows": [
+      {
+        "mode": "val",
+        "epoch": 1,
+        "iter": 170,
+        "lr": 0.00015,
+        "pts_bbox/KITTI/Pedestrian_3D_easy_strict": 0.107,
+        "pts_bbox/KITTI/Pedestrian_BEV_easy_strict": 1.1935,
+        "pts_bbox/KITTI/Pedestrian_2D_easy_strict": 16.1259,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_strict": 0.0968,
+        "pts_bbox/KITTI/Pedestrian_BEV_moderate_strict": 1.0185,
+        "pts_bbox/KITTI/Pedestrian_2D_moderate_strict": 14.2074,
+        "pts_bbox/KITTI/Pedestrian_3D_hard_strict": 0.0968,
+        "pts_bbox/KITTI/Pedestrian_BEV_hard_strict": 1.0185,
+        "pts_bbox/KITTI/Pedestrian_2D_hard_strict": 14.1795,
+        "pts_bbox/KITTI/Pedestrian_3D_easy_loose": 14.1656,
+        "pts_bbox/KITTI/Pedestrian_BEV_easy_loose": 14.5285,
+        "pts_bbox/KITTI/Pedestrian_2D_easy_loose": 18.6015,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 12.631,
+        "pts_bbox/KITTI/Pedestrian_BEV_moderate_loose": 12.9267,
+        "pts_bbox/KITTI/Pedestrian_2D_moderate_loose": 16.2888,
+        "pts_bbox/KITTI/Pedestrian_3D_hard_loose": 12.6297,
+        "pts_bbox/KITTI/Pedestrian_BEV_hard_loose": 12.8826,
+        "pts_bbox/KITTI/Pedestrian_2D_hard_loose": 16.2477,
+        "pts_bbox/KITTI/Cyclist_3D_easy_strict": 2.1239,
+        "pts_bbox/KITTI/Cyclist_BEV_easy_strict": 16.6332,
+        "pts_bbox/KITTI/Cyclist_2D_easy_strict": 14.4663,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_strict": 1.9818,
+        "pts_bbox/KITTI/Cyclist_BEV_moderate_strict": 15.2382,
+        "pts_bbox/KITTI/Cyclist_2D_moderate_strict": 13.1729,
+        "pts_bbox/KITTI/Cyclist_3D_hard_strict": 1.9817,
+        "pts_bbox/KITTI/Cyclist_BEV_hard_strict": 15.2034,
+        "pts_bbox/KITTI/Cyclist_2D_hard_strict": 13.1272,
+        "pts_bbox/KITTI/Cyclist_3D_easy_loose": 25.8791,
+        "pts_bbox/KITTI/Cyclist_BEV_easy_loose": 27.2439,
+        "pts_bbox/KITTI/Cyclist_2D_easy_loose": 28.493,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 23.7064,
+        "pts_bbox/KITTI/Cyclist_BEV_moderate_loose": 25.018,
+        "pts_bbox/KITTI/Cyclist_2D_moderate_loose": 26.2214,
+        "pts_bbox/KITTI/Cyclist_3D_hard_loose": 23.6412,
+        "pts_bbox/KITTI/Cyclist_BEV_hard_loose": 24.9231,
+        "pts_bbox/KITTI/Cyclist_2D_hard_loose": 26.1128,
+        "pts_bbox/KITTI/Car_3D_easy_strict": 22.4948,
+        "pts_bbox/KITTI/Car_BEV_easy_strict": 44.5937,
+        "pts_bbox/KITTI/Car_2D_easy_strict": 42.4134,
+        "pts_bbox/KITTI/Car_3D_moderate_strict": 27.1852,
+        "pts_bbox/KITTI/Car_BEV_moderate_strict": 46.9406,
+        "pts_bbox/KITTI/Car_2D_moderate_strict": 45.1598,
+        "pts_bbox/KITTI/Car_3D_hard_strict": 26.1448,
+        "pts_bbox/KITTI/Car_BEV_hard_strict": 45.0522,
+        "pts_bbox/KITTI/Car_2D_hard_strict": 43.4612,
+        "pts_bbox/KITTI/Car_3D_easy_loose": 52.1613,
+        "pts_bbox/KITTI/Car_BEV_easy_loose": 53.6968,
+        "pts_bbox/KITTI/Car_2D_easy_loose": 56.4974,
+        "pts_bbox/KITTI/Car_3D_moderate_loose": 52.8957,
+        "pts_bbox/KITTI/Car_BEV_moderate_loose": 54.4659,
+        "pts_bbox/KITTI/Car_2D_moderate_loose": 57.618,
+        "pts_bbox/KITTI/Car_3D_hard_loose": 50.7376,
+        "pts_bbox/KITTI/Car_BEV_hard_loose": 52.3311,
+        "pts_bbox/KITTI/Car_2D_hard_loose": 55.3865,
+        "pts_bbox/KITTI/Truck_3D_easy_strict": 3.9282,
+        "pts_bbox/KITTI/Truck_BEV_easy_strict": 10.1186,
+        "pts_bbox/KITTI/Truck_2D_easy_strict": 6.0373,
+        "pts_bbox/KITTI/Truck_3D_moderate_strict": 3.2925,
+        "pts_bbox/KITTI/Truck_BEV_moderate_strict": 11.1089,
+        "pts_bbox/KITTI/Truck_2D_moderate_strict": 7.8599,
+        "pts_bbox/KITTI/Truck_3D_hard_strict": 2.834,
+        "pts_bbox/KITTI/Truck_BEV_hard_strict": 9.723,
+        "pts_bbox/KITTI/Truck_2D_hard_strict": 7.1058,
+        "pts_bbox/KITTI/Truck_3D_easy_loose": 19.6834,
+        "pts_bbox/KITTI/Truck_BEV_easy_loose": 20.66,
+        "pts_bbox/KITTI/Truck_2D_easy_loose": 20.787,
+        "pts_bbox/KITTI/Truck_3D_moderate_loose": 18.6381,
+        "pts_bbox/KITTI/Truck_BEV_moderate_loose": 19.5701,
+        "pts_bbox/KITTI/Truck_2D_moderate_loose": 21.8349,
+        "pts_bbox/KITTI/Truck_3D_hard_loose": 16.2223,
+        "pts_bbox/KITTI/Truck_BEV_hard_loose": 17.016,
+        "pts_bbox/KITTI/Truck_2D_hard_loose": 19.9492,
+        "pts_bbox/KITTI/Overall_3D_easy": 16.6169,
+        "pts_bbox/KITTI/Overall_BEV_easy": 24.1212,
+        "pts_bbox/KITTI/Overall_2D_easy": 23.8863,
+        "pts_bbox/KITTI/Overall_3D_moderate": 16.7038,
+        "pts_bbox/KITTI/Overall_BEV_moderate": 23.9986,
+        "pts_bbox/KITTI/Overall_2D_moderate": 23.8825,
+        "pts_bbox/KITTI/Overall_3D_hard": 16.3124,
+        "pts_bbox/KITTI/Overall_BEV_hard": 23.1452,
+        "pts_bbox/KITTI/Overall_2D_hard": 23.2319
+      },
+      {
+        "mode": "val",
+        "epoch": 2,
+        "iter": 170,
+        "lr": 0.00015,
+        "pts_bbox/KITTI/Pedestrian_3D_easy_strict": 0.0351,
+        "pts_bbox/KITTI/Pedestrian_BEV_easy_strict": 0.346,
+        "pts_bbox/KITTI/Pedestrian_2D_easy_strict": 27.6063,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_strict": 0.0342,
+        "pts_bbox/KITTI/Pedestrian_BEV_moderate_strict": 0.3127,
+        "pts_bbox/KITTI/Pedestrian_2D_moderate_strict": 24.237,
+        "pts_bbox/KITTI/Pedestrian_3D_hard_strict": 0.0342,
+        "pts_bbox/KITTI/Pedestrian_BEV_hard_strict": 0.3127,
+        "pts_bbox/KITTI/Pedestrian_2D_hard_strict": 24.2105,
+        "pts_bbox/KITTI/Pedestrian_3D_easy_loose": 25.437,
+        "pts_bbox/KITTI/Pedestrian_BEV_easy_loose": 28.2972,
+        "pts_bbox/KITTI/Pedestrian_2D_easy_loose": 31.6305,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 22.2176,
+        "pts_bbox/KITTI/Pedestrian_BEV_moderate_loose": 24.8759,
+        "pts_bbox/KITTI/Pedestrian_2D_moderate_loose": 27.8591,
+        "pts_bbox/KITTI/Pedestrian_3D_hard_loose": 22.1259,
+        "pts_bbox/KITTI/Pedestrian_BEV_hard_loose": 24.7951,
+        "pts_bbox/KITTI/Pedestrian_2D_hard_loose": 27.7882,
+        "pts_bbox/KITTI/Cyclist_3D_easy_strict": 20.0847,
+        "pts_bbox/KITTI/Cyclist_BEV_easy_strict": 27.2405,
+        "pts_bbox/KITTI/Cyclist_2D_easy_strict": 37.6461,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_strict": 17.9746,
+        "pts_bbox/KITTI/Cyclist_BEV_moderate_strict": 24.9378,
+        "pts_bbox/KITTI/Cyclist_2D_moderate_strict": 34.0751,
+        "pts_bbox/KITTI/Cyclist_3D_hard_strict": 17.9434,
+        "pts_bbox/KITTI/Cyclist_BEV_hard_strict": 24.8574,
+        "pts_bbox/KITTI/Cyclist_2D_hard_strict": 33.9488,
+        "pts_bbox/KITTI/Cyclist_3D_easy_loose": 41.642,
+        "pts_bbox/KITTI/Cyclist_BEV_easy_loose": 41.9156,
+        "pts_bbox/KITTI/Cyclist_2D_easy_loose": 43.3755,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 38.2659,
+        "pts_bbox/KITTI/Cyclist_BEV_moderate_loose": 38.5424,
+        "pts_bbox/KITTI/Cyclist_2D_moderate_loose": 40.1288,
+        "pts_bbox/KITTI/Cyclist_3D_hard_loose": 38.0681,
+        "pts_bbox/KITTI/Cyclist_BEV_hard_loose": 38.4096,
+        "pts_bbox/KITTI/Cyclist_2D_hard_loose": 40.008,
+        "pts_bbox/KITTI/Car_3D_easy_strict": 45.3007,
+        "pts_bbox/KITTI/Car_BEV_easy_strict": 58.9761,
+        "pts_bbox/KITTI/Car_2D_easy_strict": 53.5328,
+        "pts_bbox/KITTI/Car_3D_moderate_strict": 44.2634,
+        "pts_bbox/KITTI/Car_BEV_moderate_strict": 57.7858,
+        "pts_bbox/KITTI/Car_2D_moderate_strict": 54.0001,
+        "pts_bbox/KITTI/Car_3D_hard_strict": 42.6076,
+        "pts_bbox/KITTI/Car_BEV_hard_strict": 55.6246,
+        "pts_bbox/KITTI/Car_2D_hard_strict": 52.0711,
+        "pts_bbox/KITTI/Car_3D_easy_loose": 65.4091,
+        "pts_bbox/KITTI/Car_BEV_easy_loose": 65.7261,
+        "pts_bbox/KITTI/Car_2D_easy_loose": 64.9338,
+        "pts_bbox/KITTI/Car_3D_moderate_loose": 63.4021,
+        "pts_bbox/KITTI/Car_BEV_moderate_loose": 63.7075,
+        "pts_bbox/KITTI/Car_2D_moderate_loose": 63.8935,
+        "pts_bbox/KITTI/Car_3D_hard_loose": 61.0861,
+        "pts_bbox/KITTI/Car_BEV_hard_loose": 61.3872,
+        "pts_bbox/KITTI/Car_2D_hard_loose": 61.6893,
+        "pts_bbox/KITTI/Truck_3D_easy_strict": 20.0693,
+        "pts_bbox/KITTI/Truck_BEV_easy_strict": 36.1328,
+        "pts_bbox/KITTI/Truck_2D_easy_strict": 35.8389,
+        "pts_bbox/KITTI/Truck_3D_moderate_strict": 20.0222,
+        "pts_bbox/KITTI/Truck_BEV_moderate_strict": 34.2781,
+        "pts_bbox/KITTI/Truck_2D_moderate_strict": 34.829,
+        "pts_bbox/KITTI/Truck_3D_hard_strict": 17.5898,
+        "pts_bbox/KITTI/Truck_BEV_hard_strict": 29.9776,
+        "pts_bbox/KITTI/Truck_2D_hard_strict": 30.7103,
+        "pts_bbox/KITTI/Truck_3D_easy_loose": 44.1765,
+        "pts_bbox/KITTI/Truck_BEV_easy_loose": 45.1751,
+        "pts_bbox/KITTI/Truck_2D_easy_loose": 40.9902,
+        "pts_bbox/KITTI/Truck_3D_moderate_loose": 41.7223,
+        "pts_bbox/KITTI/Truck_BEV_moderate_loose": 42.5755,
+        "pts_bbox/KITTI/Truck_2D_moderate_loose": 40.4011,
+        "pts_bbox/KITTI/Truck_3D_hard_loose": 36.6282,
+        "pts_bbox/KITTI/Truck_BEV_hard_loose": 37.4398,
+        "pts_bbox/KITTI/Truck_2D_hard_loose": 36.1299,
+        "pts_bbox/KITTI/Overall_3D_easy": 33.1122,
+        "pts_bbox/KITTI/Overall_BEV_easy": 41.3305,
+        "pts_bbox/KITTI/Overall_2D_easy": 41.0945,
+        "pts_bbox/KITTI/Overall_3D_moderate": 31.1923,
+        "pts_bbox/KITTI/Overall_BEV_moderate": 38.8706,
+        "pts_bbox/KITTI/Overall_2D_moderate": 39.2042,
+        "pts_bbox/KITTI/Overall_3D_hard": 30.0979,
+        "pts_bbox/KITTI/Overall_BEV_hard": 37.2017,
+        "pts_bbox/KITTI/Overall_2D_hard": 37.6444
+      },
+      {
+        "mode": "val",
+        "epoch": 3,
+        "iter": 170,
+        "lr": 0.00015,
+        "pts_bbox/KITTI/Pedestrian_3D_easy_strict": 0.0995,
+        "pts_bbox/KITTI/Pedestrian_BEV_easy_strict": 0.5205,
+        "pts_bbox/KITTI/Pedestrian_2D_easy_strict": 29.0708,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_strict": 0.0903,
+        "pts_bbox/KITTI/Pedestrian_BEV_moderate_strict": 0.4738,
+        "pts_bbox/KITTI/Pedestrian_2D_moderate_strict": 25.5962,
+        "pts_bbox/KITTI/Pedestrian_3D_hard_strict": 0.0903,
+        "pts_bbox/KITTI/Pedestrian_BEV_hard_strict": 0.4739,
+        "pts_bbox/KITTI/Pedestrian_2D_hard_strict": 25.5548,
+        "pts_bbox/KITTI/Pedestrian_3D_easy_loose": 24.923,
+        "pts_bbox/KITTI/Pedestrian_BEV_easy_loose": 26.3966,
+        "pts_bbox/KITTI/Pedestrian_2D_easy_loose": 31.1904,
+        "pts_bbox/KITTI/Pedestrian_3D_moderate_loose": 21.859,
+        "pts_bbox/KITTI/Pedestrian_BEV_moderate_loose": 23.2136,
+        "pts_bbox/KITTI/Pedestrian_2D_moderate_loose": 27.6908,
+        "pts_bbox/KITTI/Pedestrian_3D_hard_loose": 21.8365,
+        "pts_bbox/KITTI/Pedestrian_BEV_hard_loose": 23.1569,
+        "pts_bbox/KITTI/Pedestrian_2D_hard_loose": 27.5972,
+        "pts_bbox/KITTI/Cyclist_3D_easy_strict": 28.8454,
+        "pts_bbox/KITTI/Cyclist_BEV_easy_strict": 39.9966,
+        "pts_bbox/KITTI/Cyclist_2D_easy_strict": 49.1449,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_strict": 26.2233,
+        "pts_bbox/KITTI/Cyclist_BEV_moderate_strict": 36.5741,
+        "pts_bbox/KITTI/Cyclist_2D_moderate_strict": 44.6122,
+        "pts_bbox/KITTI/Cyclist_3D_hard_strict": 26.1443,
+        "pts_bbox/KITTI/Cyclist_BEV_hard_strict": 36.3874,
+        "pts_bbox/KITTI/Cyclist_2D_hard_strict": 44.3945,
+        "pts_bbox/KITTI/Cyclist_3D_easy_loose": 55.0045,
+        "pts_bbox/KITTI/Cyclist_BEV_easy_loose": 56.1762,
+        "pts_bbox/KITTI/Cyclist_2D_easy_loose": 58.6037,
+        "pts_bbox/KITTI/Cyclist_3D_moderate_loose": 50.554,
+        "pts_bbox/KITTI/Cyclist_BEV_moderate_loose": 51.6729,
+        "pts_bbox/KITTI/Cyclist_2D_moderate_loose": 54.1819,
+        "pts_bbox/KITTI/Cyclist_3D_hard_loose": 50.3516,
+        "pts_bbox/KITTI/Cyclist_BEV_hard_loose": 51.434,
+        "pts_bbox/KITTI/Cyclist_2D_hard_loose": 53.9203,
+        "pts_bbox/KITTI/Car_3D_easy_strict": 47.2431,
+        "pts_bbox/KITTI/Car_BEV_easy_strict": 60.8078,
+        "pts_bbox/KITTI/Car_2D_easy_strict": 53.6174,
+        "pts_bbox/KITTI/Car_3D_moderate_strict": 45.9897,
+        "pts_bbox/KITTI/Car_BEV_moderate_strict": 59.6385,
+        "pts_bbox/KITTI/Car_2D_moderate_strict": 54.2094,
+        "pts_bbox/KITTI/Car_3D_hard_strict": 44.3219,
+        "pts_bbox/KITTI/Car_BEV_hard_strict": 57.4212,
+        "pts_bbox/KITTI/Car_2D_hard_strict": 52.3427,
+        "pts_bbox/KITTI/Car_3D_easy_loose": 66.4805,
+        "pts_bbox/KITTI/Car_BEV_easy_loose": 66.8155,
+        "pts_bbox/KITTI/Car_2D_easy_loose": 64.9533,
+        "pts_bbox/KITTI/Car_3D_moderate_loose": 64.6933,
+        "pts_bbox/KITTI/Car_BEV_moderate_loose": 65.1824,
+        "pts_bbox/KITTI/Car_2D_moderate_loose": 64.4538,
+        "pts_bbox/KITTI/Car_3D_hard_loose": 62.3423,
+        "pts_bbox/KITTI/Car_BEV_hard_loose": 62.8069,
+        "pts_bbox/KITTI/Car_2D_hard_loose": 62.4202,
+        "pts_bbox/KITTI/Truck_3D_easy_strict": 29.8196,
+        "pts_bbox/KITTI/Truck_BEV_easy_strict": 41.7352,
+        "pts_bbox/KITTI/Truck_2D_easy_strict": 39.2262,
+        "pts_bbox/KITTI/Truck_3D_moderate_strict": 27.3842,
+        "pts_bbox/KITTI/Truck_BEV_moderate_strict": 37.5557,
+        "pts_bbox/KITTI/Truck_2D_moderate_strict": 37.4695,
+        "pts_bbox/KITTI/Truck_3D_hard_strict": 23.983,
+        "pts_bbox/KITTI/Truck_BEV_hard_strict": 33.0146,
+        "pts_bbox/KITTI/Truck_2D_hard_strict": 33.5335,
+        "pts_bbox/KITTI/Truck_3D_easy_loose": 51.9956,
+        "pts_bbox/KITTI/Truck_BEV_easy_loose": 52.9188,
+        "pts_bbox/KITTI/Truck_2D_easy_loose": 46.6346,
+        "pts_bbox/KITTI/Truck_3D_moderate_loose": 47.0532,
+        "pts_bbox/KITTI/Truck_BEV_moderate_loose": 47.8586,
+        "pts_bbox/KITTI/Truck_2D_moderate_loose": 43.6234,
+        "pts_bbox/KITTI/Truck_3D_hard_loose": 41.5358,
+        "pts_bbox/KITTI/Truck_BEV_hard_loose": 42.2867,
+        "pts_bbox/KITTI/Truck_2D_hard_loose": 39.2847,
+        "pts_bbox/KITTI/Overall_3D_easy": 39.2476,
+        "pts_bbox/KITTI/Overall_BEV_easy": 46.279,
+        "pts_bbox/KITTI/Overall_2D_easy": 45.6594,
+        "pts_bbox/KITTI/Overall_3D_moderate": 36.4467,
+        "pts_bbox/KITTI/Overall_BEV_moderate": 43.0202,
+        "pts_bbox/KITTI/Overall_2D_moderate": 43.3879,
+        "pts_bbox/KITTI/Overall_3D_hard": 35.1233,
+        "pts_bbox/KITTI/Overall_BEV_hard": 41.2566,
+        "pts_bbox/KITTI/Overall_2D_hard": 41.8484
+      }
+    ],
+    "train_rows": 118,
+    "val_rows": 3,
+    "log_files": [
+      {
+        "path": "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0/20261013_164323.log.json",
+        "sha256": "1bd02ea4954ac977c193dd56706289d3fa8535fef02ac929c3e2b214bd46ad69"
+      }
+    ],
+    "current_primary_peak": {
+      "value": 36.4467,
+      "epoch": 3,
+      "scope_epochs": [
+        1,
+        2,
+        3
+      ]
+    },
+    "epoch_performance": {
+      "1": {
+        "n_rows": 38,
+        "last_iter": 1900,
+        "mean_iter_time_s": 5.241193421052632,
+        "max_logged_memory_mib": 17912
+      },
+      "2": {
+        "n_rows": 38,
+        "last_iter": 1900,
+        "mean_iter_time_s": 5.2801544736842105,
+        "max_logged_memory_mib": 17913
+      },
+      "3": {
+        "n_rows": 38,
+        "last_iter": 1900,
+        "mean_iter_time_s": 5.292142894736842,
+        "max_logged_memory_mib": 17913
+      },
+      "4": {
+        "n_rows": 4,
+        "last_iter": 200,
+        "mean_iter_time_s": 5.433097500000001,
+        "max_logged_memory_mib": 17913
+      }
+    }
+  },
+  "in_situ_ratio_vs_historical_smoke_b0": {
+    "reference_b0_s_per_iter": 1.55053,
+    "ep1_3_mean_s_per_iter": 5.2711635964912285,
+    "ratio_time": 3.3995882675544675,
+    "ratio_logged_memory": 1.0562533168229258,
+    "strict_new_paired_s0": false,
+    "resource_cap": 1.2,
+    "interpretation": "Observed formal-run resource overrun; not a certified fresh paired-S0 result"
+  },
+  "findings": [
+    {
+      "severity": "P1",
+      "requirement": "New recipe-matched S0 and <=1.20x resources before formal launch",
+      "status": "NOT_SATISFIED",
+      "evidence": "No new baseline/arm smoke or verdict; observed formal-run time about 3.4x historical same-recipe B0; launch bypass recorded in section103"
+    },
+    {
+      "severity": "P1",
+      "requirement": "Fail closed on corrupt/nonfinite live evidence",
+      "status": "FAIL",
+      "evidence": "External watchdog has no else branch for ready status1; temporary NaN/malformed probes return1 whereas incomplete epoch returns3"
+    },
+    {
+      "severity": "P1",
+      "requirement": "DONE only after trainer exit0, source consistency, full24-epoch curve and valid reports",
+      "status": "FAIL",
+      "evidence": "External watchdog never records finish/exit code; report failures only logged, followed by unconditional DONE if epoch24 exists"
+    },
+    {
+      "severity": "P2",
+      "requirement": "Record all current validation peaks independently of saved checkpoints and include actual gate counts",
+      "status": "DOCUMENTATION_CORRECTION_REQUIRED",
+      "evidence": "section103.6 calls all-epoch peak N/A due to incomplete run, despite 3 validation epochs; actual preflight checks16, not8"
+    }
+  ],
+  "passed_checks": [
+    "Only RCFusion differs from registered B0; other research recipe identical",
+    "Actual run snapshot and saved epoch2 model/recipe match registered arm",
+    "All832 frozen research paths match launch and real preflight SHA",
+    "GPU5/6/7 ranks0/1/2 world3 seed0 deterministic; saved checkpoint meta matches",
+    "CPU wiring13/13 and pytest38 pass; real preflight16/16 source current",
+    "Saved epoch2 state finite, both fusion projections nonzero; all numeric live logs finite at snapshot"
+  ],
+  "scope": {
+    "task": "Verify the currently running training only",
+    "training_or_watchdog_modified": false,
+    "training_stopped_or_restarted": false,
+    "additional_gpu_compute_started": false,
+    "documentation_only_changes_planned": true
+  },
+  "actual_seed_proof": "CLI --seed 0; launcher/rank args and log Set random seed0 deterministicTrue; epoch2 meta.seed0. Config dump lacks a seed field.",
+  "actual_gpu_ids_list": [
+    0,
+    1,
+    2
+  ],
+  "fresh_independent_golden": {
+    "checked_at_utc": "2026-10-14T02:00:25.211081+00:00",
+    "old_reference_commit": "43328580a2c2da45e3b9202b4c37d09b5f8859e2",
+    "old_source_sha256": "07790113ddb28c0a299f1d85911c0f628a445bab8e0bd00aebe20df7f0d0ccd5",
+    "reference_strategy": "Original class source from git object, only registry decorator removed to avoid name collision; all executable method bodies untouched. Same CPU backend/thread state and golden inputs for old/current. No repository source edit.",
+    "torch_version": "2.0.1+cu118",
+    "cpu_threads": 1,
+    "stored_reference_path": "/tmp/ref_prevec_4332858.pt",
+    "stored_reference_sha256": "22150cfea2327c7399e53b08c1700a8d7de0a3f69f255a9809b27209a9a71329",
+    "comparison": {
+      "full": {
+        "field_max_abs_differences": {
+          "m_r": 0.0,
+          "m_i": 0.0,
+          "o": 0.0
+        },
+        "max_parameter_gradient_abs_difference": 5.21540641784668e-08,
+        "gradient_count": 60,
+        "stats_exactly_equal": false,
+        "stats_max_abs_difference": 2.2351741790771484e-08,
+        "stats_match_at_original_tolerance": true
+      },
+      "c5": {
+        "field_max_abs_differences": {
+          "m_r": 0.0,
+          "m_i": 0.0,
+          "o": 0.0
+        },
+        "max_parameter_gradient_abs_difference": 1.4901161193847656e-08,
+        "gradient_count": 60,
+        "stats_exactly_equal": false,
+        "stats_max_abs_difference": 1.7074247182780056e-08,
+        "stats_match_at_original_tolerance": true
+      }
+    },
+    "stored_reference_vs_fresh_old": {
+      "full": {
+        "field_max_abs_differences": {
+          "m_r": 4.2654573917388916e-07,
+          "m_i": 1.1920928955078125e-07,
+          "o": 7.152557373046875e-07
+        },
+        "max_parameter_gradient_abs_difference": 9.5367431640625e-07
+      },
+      "c5": {
+        "field_max_abs_differences": {
+          "m_r": 4.2654573917388916e-07,
+          "m_i": 1.1920928955078125e-07,
+          "o": 3.5762786865234375e-07
+        },
+        "max_parameter_gradient_abs_difference": 1.1026859283447266e-06
+      }
+    },
+    "cuda_initialized": false,
+    "fresh_golden_max_abs_difference": 5.21540641784668e-08,
+    "fresh_golden_pass_at_original_tolerance": true,
+    "stats_field_differences": {
+      "full": {
+        "radar_support_rate": 7.450580596923828e-09,
+        "native_radar_requires_grad": 0,
+        "native_image_requires_grad": 0,
+        "native_radar_has_grad_fn": 0,
+        "native_image_has_grad_fn": 0,
+        "null_rad_weight": 1.4901161193847656e-08,
+        "null_img_weight": 2.7939677238464355e-09,
+        "level_rad_weight": 1.4901161193847656e-08,
+        "level_img_weight": 2.2351741790771484e-08
+      },
+      "c5": {
+        "radar_support_rate": 5.432715000086574e-09,
+        "native_radar_requires_grad": 0,
+        "native_image_requires_grad": 0,
+        "native_radar_has_grad_fn": 0,
+        "native_image_has_grad_fn": 0,
+        "null_rad_weight": 7.1401397017112345e-09,
+        "null_img_weight": 1.5522042956517268e-09,
+        "level_rad_weight": 1.7074247182780056e-08,
+        "level_img_weight": 8.381903171539307e-09
+      }
+    },
+    "fresh_full_golden_pass_at_original_tolerance": true,
+    "stats_checked_at_utc": "2026-10-14T02:02:40.151111+00:00"
+  },
+  "overall_conformance": "PARTIAL: recipe/correctness/runtime health pass; original S0/resource and fail-closed watchdog requirements not satisfied",
+  "documentation_corrections": [
+    "Real preflight16/16, not8/8",
+    "Current peak includes every validated epoch even when run incomplete:36.4467@ep3; saved31.1923@ep2 separately",
+    "Step0 zero gradients apply to inner new evidence paths; output projection/shared fusion have nonzero step0 gradients"
+  ]
+}

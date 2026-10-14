@@ -18919,7 +18919,7 @@ kernel 数确实从 74,450 降到 21,029，但 **GEMM 时间反而爆炸**（A/B
 | `gpmsf_cpu_checks.py` | **13/13 PASS** | 含 t11 非零残差分块等价、t12 直接消息+60 参数梯度分块（ragged chunk7）、t13 空间 impulse |
 | `test_gpmsf_wiring.py` + `test_gpmsf_queue_checks.py` | **38 passed** | 队列门禁回归（含 `test_chunked_residual_messages_are_not_scrambled`） |
 | `gpmsf_golden_compare.py`（对**干净 worktree @4332858** 的保存参考） | **GOLDEN MATCH** | M_R/M_I/输出 **max\|Δ\|=0.0**（full 与 chunk5+ckpt 两臂）；60 参数梯度 max\|Δ\|=**8.94e-08**；参数名/顺序与 `last_stats` 一致 |
-| `gpmsf_real_preflight.py`（真实 train/val 管线，GPU 5） | **status=PASS** | 8/8 check 为 True：`common_initial_state`、`initial_rng`、`eval_step0_head`、`eval_step0_outputs`、`eval_input_unchanged`、`invalid_image_identity`、`mixed_batch_identity`、`native_source_gradients`；几何重投影误差 ~1.2e-4 px；两步梯度**第 0 步全 0、第 1 步非零** |
+| `gpmsf_real_preflight.py`（真实 train/val 管线，GPU 5） | **status=PASS，16/16** | §103.7核对原始JSON：16项全部True（原文误写8/8）；几何重投影误差max1.83e-4 px。offset/key等内部取证路径第0步梯度0、第1步非零；output projection与共享fusion第0步已有非零梯度，不是所有参数第0步全0 |
 
 - 本次等价性复核**不是复述旧结论**：参考张量在预向量化提交 `4332858` 的独立 worktree 内**重新生成**
   （`/tmp/ref_prevec_4332858.pt`），再在当前工作区 `compare`，因此排除"用改后代码自比"的循环论证。
@@ -18978,8 +18978,8 @@ kernel 数确实从 74,450 降到 21,029，但 **GEMM 时间反而爆炸**（A/B
 
 - **进度**：ep1–ep3 已完成训练+val，正在 ep4。val 结束时刻 ep1 `19:41:42`、ep2 `22:41:31`、ep3 `01:42:10`
   ⇒ 每 epoch ≈ **2h58m–3h00m**（含 val），按当前速度 24e 预计 **2026-10-16 ≈16:20 UTC** 收尾。
-- **统一口径仍是 N/A**：区间均值（ep12–16，n=5）**N/A，窗口未形成（val n=0）**；
-  全轮峰值 **N/A，run 未结束**（截至 ep3 的暂定峰值 **36.4467 @ ep3**，不是最终全轮峰值）；
+- **统一口径（截至ep3；本段由§103.7纠正）**：区间均值（ep12–16）**N/A，窗口内val n=0；run累计val n=3**；
+  全轮峰值（所有已有val，scope ep1–3，随run继续更新）**36.4467 @ ep3**，不能因run未结束而记N/A；
   best saved **31.1923 @ ep2**（`epoch_2.pth` 22:29 落盘，`checkpoint_interval=2`；`latest.pth` 指向它）。
   **不得**把下面 ep1–3 的早期数字当作对照口径。
 - **资源（in-situ，同配方 DDP3）**：ep1/2/3 均值 **5.241 / 5.280 / 5.292 s/iter**（n=38 行/epoch），data_time ≈0.08，
@@ -18999,3 +18999,101 @@ kernel 数确实从 74,450 降到 21,029，但 **GEMM 时间反而爆炸**（A/B
   ep6 止损（watchdog 自动执行，预计 ≈10:45 UTC）与 ep12–16（n=5）窗口。
 - **外部因素核验**：GPU 5/6/7 上只有本 run 的 3 个 rank（3551139/40/41）；同时段其他用户作业在别的 GPU 上，
   **未共享我们的卡**，故 5.24–5.29 s/iter 不含外部争用。
+
+
+### 103.7 现役训练合规核验（2026-10-14 02:03:56 UTC / 北京时间10:03:56，只读验证）
+
+**本轮用户请求：检查当前训练是否符合要求。结论：部分符合，不能写“全部验收通过”。**
+本轮未改研究Python/config、未改/停/重启训练或watchdog、未启动额外GPU计算；只补记录与文档勘误。
+CPU检查需要可见GPU以通过仓库import断言，但所有探针`torch.cuda.is_initialized()==False`。
+结构/训练源仍为`1188acf`；核验前HEAD `baecef4`仅追加历史文档。完整原始审计：
+`docs/gpmsf_active_training_audit_20261014.json`。
+
+#### 103.7.1 已通过：配方、修复、源冻结、当前运行健康
+
+- 进程组3551130，ranks3551139/3551140/3551141，world3、rank0/1/2、GPU5/6/7；watchdog3552704存活。
+  CLI两处seed均0、`--deterministic`；训练日志明确`Set random seed to 0, deterministic: True`。
+  `nvidia-smi`核对5/6/7只包含这三个rank。配置dump未写seed字段，不据此误判：checkpoint meta.seed实际为0。
+- **832个研究源SHA全部匹配启动phase与修复后真实preflight，漂移0**。
+  当前resolved配置对B0模型差异恰为`['RCFusion']`，其他研究配方差异为空；实际work-dir配置与登记臂一致。
+  bs2/rank、N4、累积2、AdamW lr1.5e-4、24e、RSSM/head/KL日程/数据/评测/预训练权重均未另改。
+  query_chunk4096、gradient checkpoint、64维/4heads/4offsets/3原生radar+image层/3高度保持冻结。
+- 修复后真实preflight JSON实际**16/16 True**且源hash匹配；§103.2与TODO的“8/8”是记录漏数，已纠正。
+  独立重投影误差最大0.0001831055px；初值/RNG、真实train+val step0、缺测恒等、两步梯度、native梯度均通过。
+  “第0步全0”仅指内部offset/key等取证路径；output projection/shared fusion第0步有梯度，已澄清。
+- 本轮重新执行CPU门：`gpmsf_cpu_checks.py` **13/13**；wiring+queue pytest **38 passed**。
+  非零残差chunk一致、直接消息/60参数梯度、空间impulse门均PASS。旧query/channel混排已不在当前实现中。
+- **同环境独立old/current golden**：从git对象`4332858`取原类完整源码，只移除registry decorator以避免重名，
+  所有方法体原样；同CPU后端/输入与当前代码比较，full与chunk5+checkpoint的M_R/M_I/输出**max|Δ|=0**，
+  60参数梯度max|Δ| **5.22e-08 / 1.49e-08**；stats max|Δ| **2.24e-08 / 1.71e-08**，均在原1e-6门内。
+  没有改后自比、没有放宽容差。
+- 数值审计：截至快照118条train区间、3条val数值均有限，无异常/OOM/traceback匹配。
+  `epoch_2.pth`在CPU加载：meta epoch2/iter3804/seed0，actual model与完整recipe匹配，全部state有限。
+  两方向projection weight abs_mean分别**0.00488136 / 0.00360125**，已离零；不是基线静默回退。
+- 最新已记录训练为 **ep4 iter200/1902**，time5.28190s、memory17913MiB；正在运行，未声称完成24e或ep6门。
+
+复跑中的一个边界不隐藏：旧`/tmp/ref_prevec_4332858.pt`在本轮CPU环境直接compare，
+forward差约1e-7、共享conv梯度最大差1.1026859e-6，原1e-6绝对门FAIL。
+同环境重新执行**旧版自身**对这个旧artifact也有相同量级偏差，不能据此归因新实现退化；
+上述独立同环境old/current比较通过。旧artifact未记录CPU后端/线程指纹，跨运行微小数值漂移确切来源未定位。
+完整失败输出和重取参考证明均保留JSON，不删失败、不偷偷改阈值。
+
+#### 103.7.2 未符合：原S0/资源合同
+
+- 修复后的新attempt只有真实preflight，**没有配对B0/arm450iter、没有新S0 verdict**。
+  旧S0的source SHA不匹配当前代码；错排版本的DDP hash、9条stats与资源读数不能移植成当前验收。
+- 正式run ep1–3全部114条train区间time均值 **5.271164s/iter**；各ep均值分别5.241193/5.280154/5.292143。
+  对历史同配方B0冒烟1.550530为 **3.399588×**；当前logger峰值17913MiB对16959为 **1.056253×**。
+  这是in-situ资源超预算证据，**不是补跑成功的严格配对S0**；1.20×上限未变，也不能据显存通过称总门通过。
+- §103已记录收到“确认修复后直接开训”的指令并绕过S0；这证明直接启动的经过，
+  **不证明原资源门已通过，也不自动等同明确批准把1.20×改成3.4×**。
+  因此当前仅能归为“已直接开跑、资源合同有例外/偏离的性能探索”，不能归为全门合规开训。
+  不把预算失败写成AP失败；原合同若继续有效，此run不具备原定放行证明。
+
+#### 103.7.3 未符合：现役watchdog比原queue弱，非完整fail-closed
+
+审查对象是仓库外实际运行的`watchdog_gpmsf.sh`，不是已有38项pytest覆盖的`queue_gpmsf.sh`。
+其sha256：`040c9950009cb15151cdf48283f50d5ff9176b9f21e22fdef00aef59ded767a1`。
+
+1. **第23/32行ready失败被吞**：ready返回3表示epoch尚未到，返回1表示NaN/损坏JSON/IO错误；
+   外部watchdog没有else区分，二者都继续等待。临时目录探针实测正常未到轮返回3、NaN和损坏完整JSON均返回1；
+   最小相同shell分支实测status1后仍输出`STILL_RUNNING`。没有对现役日志注入NaN或执行其stop_owned。
+   当前日志干净不代表此失败分支合格。
+2. **第44–48行可假DONE**：最终curve失败仅`|| say '... failed'`，随后只要epoch24文件存在仍写DONE。
+   与“全部24轮val齐全且报告有效后才DONE”冲突；此为将来结束路径风险，不是假称目前已发生。
+3. **缺trainer真实退出码与phase finish核验**：仅检测进程组消失，没有wait/receipt证明trainer exit0，
+   未调用`finish_phase`或等价源hash+成功退出验证。`phase.json`本轮仍exit_code=null属正常进行态，
+   但该脚本结束时也不会补闭环；源码冻结的实际“结束失败”保障并不由此watchdog执行。
+   因而§103.3“复刻原queue语义”的描述过强。
+
+本轮只读验证，不热改正在执行的bash；即便以后改外部脚本文件，已运行bash也不会自动重载。
+若修守卫，应受控替换**守卫进程本身**，保留trainer进程组并单独证明退出/完成条件；
+不得随手kill持有GPU的trainer，亦不得为修守卫改动832个冻结研究源。
+
+#### 103.7.4 当前全部逐epoch曲线、两个必填口径与边界
+
+- 主窗口ep12–16：**N/A，窗口内val n=0**；当前run累计val n=3。
+- 补充早期窗口ep1–3等权均值：**28.1143（n=3）**，B0同窗**24.4316**，Δ**+3.6827**。
+- **全轮峰值（所有已有val，scope ep1–3，随run继续更新）：36.4467 @ ep3**。
+- best saved单列：**31.1923 @ ep2**；当前仅epoch2有实际权重，不参加性能排名。
+  §103.6把峰值因run未结束写N/A不符合统一口径，已纠正；成熟窗口未形成仍必须明确写N/A。
+
+| epoch | GP-MSF Overall3D mod | B0同轮 | Δ | Car strict mod | Truck strict mod | Ped loose mod | Cyc loose mod | OverallBEV mod |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 16.7038 | 15.2640 | +1.4398 | 27.1852 | 3.2925 | 12.6310 | 23.7064 | 23.9986 |
+| 2 | 31.1923 | 26.3716 | +4.8207 | 44.2634 | 20.0222 | 22.2176 | 38.2659 | 38.8706 |
+| 3 | 36.4467 | 31.6591 | +4.7876 | 45.9897 | 27.3842 | 21.8590 | 50.5540 | 43.0202 |
+
+| 窗口 | Overall3D mod | Car strict mod | Truck strict mod | Ped loose mod | Cyc loose mod | OverallBEV mod |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| GP-MSF ep1–3，n=3 | 28.1143 | 39.1461 | 16.8996 | 18.9025 | 37.5088 | 35.2965 |
+| B0 ep1–3，n=3 | 24.4316 | 37.3404 | 16.3895 | 15.9097 | 28.0867 | 32.0186 |
+| 同窗Δ | +3.6827 | +1.8057 | +0.5101 | +2.9928 | +9.4221 | +3.2778 |
+
+完整逐epoch所有评测指标在审计JSON的`latest_snapshot.complete_epoch_val_rows`；原train/val日志与hash亦留存。
+逐类早期波动、机制分层（目标区域条件null、high/low/zero、借点率、FP/FN）仍待专门诊断；
+当前不得把早期+3.68、projection离零或梯度连通当作稳定AP创新证据，也不因守卫漏洞宣称数值训练已坏。
+
+**下一步与停止边界**：本轮验证到此结束。不扩展网络或调参；先补强外部守卫fail-closed与退出闭环，
+并明确本轮是否接受资源例外；继续时按ep6止损、ep12–16成熟窗口与全轮逐类评估。
+方向1仍未完成；正式修复/重排/停训需要后续执行指令，本轮未擅自实施。

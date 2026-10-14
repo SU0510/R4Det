@@ -60,7 +60,7 @@
     T13 空间 impulse 与 1 项 pytest 回归，均通过「先红后绿」有齿证明。CPU 门禁 **13/13**、wiring **11**/queue **27**（合跑 38 passed）。
     修复未上 GPU：§99 的 6.7145×/1.0544× 属错排旧实现，须在新 attempt 重拆成本并重跑 S0；错排 `iter_450.pth` 禁用。**
     **2026-10-13 修复确认与正式启动（§102/§103）：head 向量化完成且 golden 逐位等价（输出 max|Δ|=0，梯度 8.94e-08）；
-    真实 train/val preflight PASS（8/8）；用户指令「确认全部修复正确以后直接开始正式训练」⇒ 16:43 UTC 在 GPU 5/6/7
+    真实 train/val preflight PASS（16/16，§103.7核对原始JSON纠正）；用户指令「确认全部修复正确以后直接开始正式训练」⇒ 16:43 UTC 在 GPU 5/6/7
     直接启动正式 24e（DDP3 seed0，pgid 3551130，`phase.json` 冻结 832 源文件）。**资源门未过**：in-situ ≈5.05 s/iter
     ⇒ ≈3.26×（B0 1.550530），显存 17,900 MiB ⇒ ≈1.055×，已如实记录、未伪造 S0 通过；错排期间的旧 S0 数字禁止混用。**
     详见 `docs/geometry_multiscale_fusion_design_20261013.md`（GP-MSF：共享米制地址、原生 image/radar 多尺度配对取证、null+camera fallback、基线保持残差）；首轮保留现有 RSSM/head。
@@ -90,11 +90,16 @@
     分块不再是时间惩罚但仍是显存必需项（2.3 vs 8.9 GB）。
   - [x] **修复确认与正式 24e 直接启动（2026-10-13，§103，GPU 5/6/7 进行中）**：冻结提交 `1188acf` 上重跑
     CPU 门禁 **13/13**、pytest **38 passed**；用**干净 worktree @4332858 重新生成**的参考张量做 golden 比对得
-    **GOLDEN MATCH**（M_R/M_I/输出 max|Δ|=0，梯度 8.94e-08，排除"改后自比"）；真实 train/val preflight **PASS 8/8**
-    （step0 head/output 逐位一致、几何误差 ~1.2e-4 px、两步梯度第 0 步全 0 第 1 步非零）。随后按用户指令
+    **GOLDEN MATCH**（M_R/M_I/输出 max|Δ|=0，梯度 8.94e-08，排除"改后自比"）；真实 train/val preflight **PASS 16/16**（§103.7纠正漏数）
+    （step0 head/output 逐位一致、几何误差 ~1.2e-4 px、内部offset/key第0步梯度0、第1步非零；output projection第0步已有梯度）。随后按用户指令
     **越过 fail-closed 的 S0 硬门**直接启动正式 24e（pgid 3551130，独立会话 + 仓库外 watchdog：异常/OOM 终止、
     ep6 止损、ep16 报告）。启动期 iter100 = **5.050 s/iter, 17,900 MiB**，无 NaN/OOM。
     **未跑修正实现的配对 S0**，"是否 ≤1.20×"仍 UNRESOLVED；旧 S0 数字属错排实现，禁止混用。
+  - [x] **现役训练合规核验（2026-10-14，§103.7）**：832源hash与actual配置/epoch2权重匹配；重跑CPU13/13、pytest38，独立old/current golden通过。
+    ep4运行正常；但新配对S0未跑、实测约3.40×预算未达标；仓库外watchdog吞ready错误且可假DONE，不能称全门合规。
+    本轮仅记录、未改训练或守卫；全val峰值截至ep3为36.4467@ep3，best saved31.1923@ep2，成熟窗口N/A。
+  - [ ] **补外部watchdog fail-closed与结束闭环**：区分ready未到轮(code3)和证据错误(code1)，报告失败不许DONE；
+    记录trainer真实exit0、源hash、epoch24与完整24轮val成功。不能热改冻结研究Python或误杀trainer；另须明确资源例外。
   - **下一步**：~~①修 query/channel 轴~~（§100）；~~②拆成本~~（§101）；~~head 向量化~~（§102）；~~修复确认~~（§103）
     → 训练中：等 ep6 止损判定与 ep12-16 窗口，随后写 §104（**必填**区间均值 ep12-16 n=5 + 全轮峰值值+epoch + best saved 单列，
     外加逐 epoch 曲线、四类、FP/FN、high/low/zero 组与错误借点率）；资源侧仍需补 **修正实现的配对 S0** 或分相
