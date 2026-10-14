@@ -19180,3 +19180,67 @@ forward差约1e-7、共享conv梯度最大差1.1026859e-6，原1e-6绝对门FAIL
 **28.1143（n=3，非成熟窗口）**，全轮已val峰值**36.4467 @ ep3**，best saved **31.1923 @ ep2**。
 完整逐epoch/逐类别表及窗口逐项均值保留在 §103.7.4；本节不重新筛选、不删除旧点，后续归档按完整曲线更新。
 提速值与新阶段AP **未测**；未把原“70%/33h”伪造为已经兑现的收益。
+
+---
+
+## 104. GP-MSF 受控分段续训：段 A 收尾 + 真实整步 anomaly on/off 配对测量（2026-10-14）
+
+### 104.1 范围、统一口径与唯一变量
+
+- 用户指令：**不再硬跑三天**；保留旧运行段，另开快训段续训。本节记录：①段 A（anomaly ON）受控停止；
+  ②真实 N4/DDP 整步的 anomaly on/off 配对测量；③资源门判定。
+- **统一口径（段 A 实际跨度 ep1–4，n=4，窗口不完整）**：区间均值（ep12–16 标准窗口）**N/A，窗口未形成（n=0）**；
+  段 A 的 ep1–4 等权均值 **30.3739**（不完整窗口，仅作续训边界参照）；全轮峰值 **N/A，run 未结束**
+  （截至段 A 结束的暂定峰值 **37.1528 @ ep4**）；best saved **37.1528 @ ep4**（`epoch_4.pth` 已落盘，670 MiB）。
+- **唯一变量（本节）**：`--detect-anomaly on|off`（`tools/train_vod_runtime.py` + `tools/dist_train_runtime.sh`，
+  commit `c85516b`）。config/batch/N4/seed/`--deterministic`/DDP3/精度全部相同；两臂读同一个起点。
+
+### 104.2 段 A 受控停止（不是崩溃、不是 S0 通过）
+
+- 等 `epoch_4.pth` **与** ep4 val 同时落盘后，先停 watchdog（pgid 3552704）再停训练（pgid 3551130）：
+  `segmentA_close.json` 记录 `closed_at=2026-10-14T04:42:33Z`、`last_logged_iter=Epoch [4][1900/1902]`、
+  `checkpoint_sha256=167dcad8d954d898bcd33529e9621b5f2dbcd41f1ed448ff77d89d48ec277aea`、`stop_kind=deliberate controlled stop`。
+- 段 A 是**故意停在 ep4**，不是训练成功结束，也不是资源门通过；旧 `phase.json` 的 832 源冻结保持未改（`exit_code=None`）。
+- 段 A val 曲线（唯一变量=GP-MSF；逐 epoch Overall 3D moderate）：
+  ep1 **16.7038**、ep2 **31.1923**、ep3 **36.4467**、ep4 **37.1528**（B0 同轮 15.2640/26.3716/31.6591/…）。
+
+### 104.3 配对整步测量（真实 config、N4、batch 2/rank、DDP3、同起点）
+
+方法：`--resume-from epoch_4.pth`（arm）或从零（B0，B0 无 ep4 权重）；各跑到 **iter100** 后受控停止；
+读 `time:` 整步字段（iter50 含预热，iter100 为稳态）。**不拿单块毫秒数外推**。
+
+| 探针 | 入口 | 起点 | iter50 | **iter100（稳态）** | 两行均值 | 显存 |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `armon` | runtime `on` | arm ep4 ckpt | 5.619 | **5.270** | 5.4445 | 17,897 |
+| `armoff` | runtime `off` | arm ep4 ckpt | 2.410 | **2.032** | 2.2210 | 17,897 |
+| `b0off` | runtime `off` | scratch | 1.690 | **1.240** | 1.4650 | 16,959 |
+
+- **anomaly off 对 arm 有效**：**2.45×（均值）/ 2.59×（稳态）**；对 B0 只有 1.06×（均值）/1.25×（稳态）
+  ⇒ 该全局调试开关**几乎只惩罚 GP-MSF 的算子数**，是测量偏差而非机制成本。
+- 24e 训练时长（45,648 iter，仅训练）：anomaly on ≈ **67 h**，anomaly off ≈ **28 h**。
+- 有限性：三臂 `loss`/`grad_norm` 全有限（arm on 5.0379/38.767、arm off 5.0335/38.796、B0 4.7220/33.144），
+  日志中 `nan/NaN/Inf` 匹配 **0**。（探针日志里唯一的 `Traceback` 是**我们自己发 SIGTERM** 时 elastic launcher 的
+  "Received 15 death signal" 收尾栈，不是训练异常。）
+- 诚实边界：on/off 的 loss/grad_norm 在 GPU 上相差 ~0.1%（5.0379 vs 5.0335），属 GPU 归约非确定的量级；
+  **逐位等价**只在 CPU 审计（`docs/gpmsf_runtime_fast_cpu_audit_20261014.json`）里成立，不拿 GPU 短测冒充。
+
+### 104.4 资源门判定（诚实口径）
+
+| 口径 | arm off | B0 off | 比值 | ≤1.20× 门 |
+| --- | ---: | ---: | ---: | --- |
+| 两行均值 | 2.2210 | 1.4650 | **1.516×** | **FAIL**（预算 1.758，超 26.3%） |
+| iter100 稳态 | 2.032 | 1.240 | **1.639×** | **FAIL**（预算 1.488，超 36.6%） |
+
+- **结论：关掉 anomaly 后仍**不在 ≤1.20× 门内（1.52–1.64×），但已从错排期的 6.71× 与修复前的 3.26×
+  降到这一水平；仍需**等价实现优化**（用户顺序第 3 步），本轮**未启动新长跑**。
+- 旧声明勘误：§103.7 的"关调试可省 ≈33 h"是**从单块微基准外推**、且把帧结构当成"4 帧各反向"，
+  **该外推撤回**；现在只有上表**实测**数字有效（off 后 24e 训练 ≈28 h vs on ≈67 h）。
+
+### 104.5 下一步
+
+1. 按用户顺序做**等价实现优化**：①深度均值/熵两次采样合成一次双通道采样；②重复布局转换移出 chunk；
+   ③pointwise offset 整帧计算一次；④缩小 checkpoint 重算范围。每步都必须过 CPU golden（逐位/≤1e-6）+ 13 项门禁 + 38 pytest。
+2. 优化后**重跑本节同样的配对探针**（同起点、同 iter 数），目标 arm off ≤ 1.20 × B0 off（预算 ≈1.76 均值口径）。
+3. 达标后再从 `epoch_4.pth` **另开目录续训 ep5–24**（`--resume-from`，恢复 optimizer/epoch/iter），
+   记录续训边界与 RNG 边界；不承诺恢复全部 RNG 轨迹；段 A/段 B 的 harness 差异必须同时写明。
+4. 不得用缩 N4、砍尺度、删 camera-only fallback 换速度。
