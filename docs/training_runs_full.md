@@ -19244,3 +19244,34 @@ forward差约1e-7、共享conv梯度最大差1.1026859e-6，原1e-6绝对门FAIL
 3. 达标后再从 `epoch_4.pth` **另开目录续训 ep5–24**（`--resume-from`，恢复 optimizer/epoch/iter），
    记录续训边界与 RNG 边界；不承诺恢复全部 RNG 轨迹；段 A/段 B 的 harness 差异必须同时写明。
 4. 不得用缩 N4、砍尺度、删 camera-only fallback 换速度。
+
+### 104.6 为什么"四刀等价优化"不够：算子级证据（2026-10-14，GPU5 单卡 profile，无训练）
+
+用 `torch.profiler` 对**冻结配置**的一次 forward+backward 统计（形状同 §101/§102：B=2、单视角、248×216、
+chunk4096、ckpt 开、anomaly off；**per-iteration = 27,105 次 CUDA launch**，与 §102 的 kernel 数逐位吻合）：
+
+| 类别 | launch/iter | 占比 |
+| --- | ---: | ---: |
+| elementwise / reduce | **22,181** | **81.8%** |
+| gemm（Linear/Conv，含 `ampere_sgemm_32x128_tn` 948 次） | 2,153 | 7.9% |
+| memcpy DtoD/HtoD | 980 | 3.6% |
+| Memset | 527 | 1.9% |
+| 其他（cudnn/cub/unknown 等） | ~1,264 | 4.7% |
+
+- 折算：14 个 chunk（53,568/4096）⇒ 约 **1,936 launch/chunk**；`_chunk`+`_image_terms` 前向约 250 个张量算子/chunk，
+  反向再乘 ~2 ⇒ 量级吻合。**成本结构是"稠密小算子"，不是 FLOPs，也不是显存带宽。**
+- **对四刀的定量预期**（按上面数出来的 launch 数）：① 深度均值/熵两次采样合成一次双通道 ≈ −7 launch/chunk ≈ −100/iter；
+  ② `stats_h` 等重复布局转换移出 chunk ≈ −4/chunk ≈ −56/iter；③ pointwise offset 整帧一次 ≈ −4/chunk ≈ −56/iter；
+  ④ 缩小 ckpt 重算范围（把 ③ 的卷积移出被重算区）= ③ 的一部分。**合计 ≈ −200~250 launch/iter ≈ 全程 0.8–1%。**
+- **预算算术**：门是 arm ≤ 1.20 × B0(off)。均值口径 B0=1.465 s/iter ⇒ 预算 **1.758**，当前 arm=**2.221**
+  ⇒ 需砍 **0.463 s/iter**；而 GP-MSF 相对 B0 的**增量**本身只有 0.756 s/iter
+  ⇒ 等价优化必须砍掉**增量的 61%**。1% 级的算子裁剪**在数学上不可能**达到该目标。
+- **因此（与用户预判一致）：等价四刀做完也必须重审"密集取证结构"。** 可选结构方向（均需先获批，且都不许缩 N4/砍尺度/删 fallback）：
+  - **S1 候选压缩（潜力最大）**：`i_h`/`keyed_i`/`s_img`/`compat`/depth descriptor 在**无效候选**上算完即被
+    mask/softmax 丢弃（`mask_img=ok_h`、`cm=masked_fill(~ok_h,-1e4)`），因此"只对有效 (view,candidate) 对取证"在
+    **数学上精确等价**，但会改变归约顺序 ⇒ **不再逐位相同**（需接受 ≤1e-6 级差异 + 新的等价契约）。
+  - **S2 逐头 Linear 合并为 strided-batched GEMM**（948→~240 launch，占 7.9%）：收益有限，且 §102 已证
+    "合头"在 (M,dk)×(dk,dk) 形状上会让 cuBLAS 退化，需单独反例验证。
+  - **S3 减少 DtoD/memset**（980+527 launch，5.5%）：去掉 `.contiguous()`/expand+reshape 的物化，收益中等。
+  - **S4 重审候选基数**（k=4 offsets × n_h=3 heights × 3 image levels 的稠密组合）：属**语义变更**，
+    必须走预登记 + 消融，不能在提速名义下偷偷改。
