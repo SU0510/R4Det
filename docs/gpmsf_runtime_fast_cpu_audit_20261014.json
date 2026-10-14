@@ -1,0 +1,392 @@
+{
+  "active_training": {
+    "frozen_sources": {
+      "changed": [],
+      "matched": 832,
+      "n": 832,
+      "phase_sha256": "a81cb9887ccfef14e416bdc01de900dd379f748da483ec43f3d87edb9c7352ee",
+      "source_path_set_identical": true
+    },
+    "latest_train": {
+      "data_time": 0.07199,
+      "epoch": 4,
+      "iter": 850,
+      "memory": 17913,
+      "time": 5.25926
+    },
+    "pgid": 3551130,
+    "ranks": [
+      3551139,
+      3551140,
+      3551141
+    ],
+    "watchdog_pid": 3552704,
+    "work_dir": "/data/lurui/work_dirs/fgfull_N4_no2d_igdr_2x4_24e_gpmsf_seed0"
+  },
+  "actual_original_entry_import_probe": {
+    "cuda_initialized": false,
+    "effective_anomaly_before_main": false,
+    "note": "Actual original entry import and original CLI parser; training main deliberately replaced by CPU assertions. Not a training/GPU smoke.",
+    "original_import_sets_anomaly_true": true,
+    "original_main_callable": true,
+    "original_parser_config": "me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py",
+    "original_parser_deterministic": true,
+    "original_parser_seed": 0,
+    "receipt": {
+      "argv_forwarded": [
+        "--config",
+        "me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py",
+        "--work-dir",
+        "/tmp/r4det_runtime_import_only_cwy0haku",
+        "--seed",
+        "0",
+        "--deterministic"
+      ],
+      "config": "/home/lurui/workspace/R4Det/me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py",
+      "config_sha256": "b6c7ee5cc54c544b878a104ba4404c2b4852dd348622803cfe2e823ca8fd2bc9",
+      "detect_anomaly_effective": false,
+      "detect_anomaly_requested": "off",
+      "entry": "/home/lurui/workspace/R4Det/tools/train_vod.py",
+      "entry_sha256": "5bd4483235401fa47966aa65167c69a69baff2188f28f6344af1f455863992d5",
+      "exit_code": 0,
+      "finished_at": "2026-10-14T02:58:22.935186+00:00",
+      "main_started_at": "2026-10-14T02:58:22.934119+00:00",
+      "pid": 3960580,
+      "rank": "0",
+      "started_at": "2026-10-14T02:58:14.727958+00:00",
+      "status": "completed",
+      "torch_version": "2.0.1+cu118",
+      "wrapper": "/home/lurui/workspace/R4Det/tools/train_vod_runtime.py",
+      "wrapper_sha256": "59487ee9be72edb0f7a8372af11efd8d94dcb835d8f98e66283d5293d8f02cd3"
+    }
+  },
+  "captured_at": "2026-10-14T03:00:24.563476+00:00",
+  "code_sha256": {
+    "tools/dist_train_runtime.sh": "6afdf54e4959e3bfeab971c35ac5b7a6ae00438049184feae07fcef7f27108cf",
+    "tools/tests/test_train_vod_runtime.py": "83d126e7b8f7fdc518b9d348780245f35bdeec4fcbe98ec6acd2dcf01861bd90",
+    "tools/train_vod_runtime.py": "59487ee9be72edb0f7a8372af11efd8d94dcb835d8f98e66283d5293d8f02cd3"
+  },
+  "cpu_equivalence": {
+    "checkpoint": true,
+    "checkpoint_active": [
+      false,
+      false,
+      true,
+      true
+    ],
+    "comparison": "torch.equal on all finite output, parameter gradient, existing input/native/depth gradient, updated parameter and BN state tensors; None gradient pattern identical",
+    "cuda_initialized": false,
+    "device": "cpu",
+    "frame_grad_enabled": [
+      false,
+      false,
+      true,
+      true
+    ],
+    "limitations": "Toy fusion module and surrogate temporal chain, not full detector/RSSM/DDP, no GPU equivalence or timing claim.",
+    "nonzero_residual": true,
+    "output_max_abs_delta": 0.0,
+    "parameter_gradient_max_abs_delta": 0.0,
+    "parameters_with_grad": 60,
+    "query_chunk": 5,
+    "updated_state_max_abs_delta": 0.0
+  },
+  "cpu_tests": {
+    "cases": [
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_mode_applied_after_import_and_args_unchanged[on]"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_mode_applied_after_import_and_args_unchanged[off]"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_exit_receipt_never_labels_failure_success[    raise RuntimeError('sentinel failure')\\n-RuntimeError-1-failed]"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_exit_receipt_never_labels_failure_success[    raise SystemExit(7)\\n-SystemExit-7-failed]"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_exit_receipt_never_labels_failure_success[    raise SystemExit('bad cli')\\n-SystemExit-1-failed]"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_exit_receipt_never_labels_failure_success[    raise SystemExit(0)\\n-SystemExit-0-completed]"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_exit_receipt_never_labels_failure_success[    raise KeyboardInterrupt()\\n-KeyboardInterrupt-130-failed]"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_import_failure_recorded"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_mode_must_be_explicit"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_receipt_cannot_overwrite_previous_invocation"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_launcher_rejects_invalid_gpu_selection[0,1,2-3]"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_launcher_rejects_invalid_gpu_selection[5,5,6-3]"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_launcher_rejects_invalid_gpu_selection[5,6-3]"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_launcher_rejects_invalid_gpu_selection[5,6,7-4]"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_launcher_preserves_environment_and_argument_boundaries"
+      },
+      {
+        "file_group": "tools.tests.test_train_vod_runtime",
+        "name": "test_gpmsf_anomaly_modes_equivalent_for_n4_burn_in_and_bptt"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_wiring",
+        "name": "test_only_gpmsf_advertises_geometry_sources"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_wiring",
+        "name": "test_require_geo_fails_loudly_when_unwired"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_wiring",
+        "name": "test_arm_config_is_single_variable_and_frozen"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_wiring",
+        "name": "test_smoke_config_keeps_the_frozen_gates"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_wiring",
+        "name": "test_detector_geometry_matches_module_contract"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_wiring",
+        "name": "test_detector_geometry_rejects_inconsistent_shapes"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_wiring",
+        "name": "test_frozen_config_is_step0_identical_to_baseline"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_wiring",
+        "name": "test_chunked_residual_messages_are_not_scrambled"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_wiring",
+        "name": "test_stats_do_not_disable_training_checkpoint"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_wiring",
+        "name": "test_trained_projection_bias_cannot_break_missing_evidence_fallback"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_wiring",
+        "name": "test_new_parameter_initialization_does_not_reseed_cuda"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_nonfinite_early_or_disappearing_keys_fail[inf]"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_nonfinite_early_or_disappearing_keys_fail[-inf]"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_nonfinite_early_or_disappearing_keys_fail[nan]"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_live_only_tolerates_unfinished_last_line"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_incomplete_window_is_never_a_pass"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_full_peak_does_not_depend_on_saved_weights"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_b0_reads_union_of_resumed_logs_not_only_newest"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_phase_requires_actual_success_and_same_source"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_missing_or_nonfinite_projection_never_vacuously_passes[state0]"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_missing_or_nonfinite_projection_never_vacuously_passes[state1]"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_missing_or_nonfinite_projection_never_vacuously_passes[state2]"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_resource_reference_requires_measured_time_and_memory"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_baseline_smoke_is_recipe_matched"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_no_real_evidence_prevents_formal_launch"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_stats_rank_zero_only_atomic_and_required"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_queue_no_c1_gate_or_early_done"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_real_batch_fingerprint_handles_training_bitmap_masks"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_ep6_operational_stop_uses_complete_paired_mean[-2.0-0]"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_ep6_operational_stop_uses_complete_paired_mean[-2.001-2]"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_ep6_operational_stop_uses_complete_paired_mean[0.0-0]"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_owned_launcher_checks_exit_and_kills_failed_child_group"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_projection_roundtrip_keeps_stereo_column_and_bev_affine"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_smoke_checkpoint_uses_installed_mmcv_zero_based_meta"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_matched_resource_budget_is_a_hard_gate[1.19-1.19-True]"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_matched_resource_budget_is_a_hard_gate[1.2-1.2-True]"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_matched_resource_budget_is_a_hard_gate[1.201-1.0-False]"
+      },
+      {
+        "file_group": "me_rssm.sanity.test_gpmsf_queue_checks",
+        "name": "test_matched_resource_budget_is_a_hard_gate[1.0-1.201-False]"
+      }
+    ],
+    "command": "CUDA_VISIBLE_DEVICES=5 NATTEN_LOG_LEVEL=critical OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 /home/lurui/envs/miniforge3/envs/r4det/bin/python -m pytest -p no:hydra_pytest -q --disable-warnings --junitxml=/tmp/r4det_runtime_fast_cpu_tests.xml tools/tests/test_train_vod_runtime.py me_rssm/sanity/test_gpmsf_wiring.py me_rssm/sanity/test_gpmsf_queue_checks.py",
+    "duration_s": 20.234,
+    "errors": 0,
+    "failures": 0,
+    "passed": 54,
+    "skipped": 0
+  },
+  "git_head_before_commit": "619687e57fcbe7935fd9e747c6be90b5061086e7",
+  "metrics": {
+    "all_val_peak": {
+      "Car": 45.9897,
+      "Cyclist": 50.554,
+      "Overall": 36.4467,
+      "Pedestrian": 21.859,
+      "Truck": 27.3842,
+      "epoch": 3
+    },
+    "best_saved": {
+      "epoch": 2,
+      "value": 31.1923
+    },
+    "full_available_epoch_curve": [
+      {
+        "Car": 27.1852,
+        "Cyclist": 23.7064,
+        "Overall": 16.7038,
+        "Pedestrian": 12.631,
+        "Truck": 3.2925,
+        "epoch": 1
+      },
+      {
+        "Car": 44.2634,
+        "Cyclist": 38.2659,
+        "Overall": 31.1923,
+        "Pedestrian": 22.2176,
+        "Truck": 20.0222,
+        "epoch": 2
+      },
+      {
+        "Car": 45.9897,
+        "Cyclist": 50.554,
+        "Overall": 36.4467,
+        "Pedestrian": 21.859,
+        "Truck": 27.3842,
+        "epoch": 3
+      }
+    ],
+    "interim_window": {
+      "mean": {
+        "Car": 39.1461,
+        "Cyclist": 37.508766666666666,
+        "Overall": 28.114266666666666,
+        "Pedestrian": 18.902533333333334,
+        "Truck": 16.899633333333334
+      },
+      "n": 3,
+      "span": [
+        1,
+        3
+      ]
+    },
+    "note": "No additional validation/new training. Existing log remains authoritative; mature window incomplete.",
+    "primary_fixed_window": {
+      "mean": null,
+      "n": 0,
+      "span": [
+        12,
+        16
+      ]
+    }
+  },
+  "scope": "New runtime tools and documentation only. No training stop/restart, no real GPU workload.",
+  "status": "CPU_PASS_GPU_SPEED_UNMEASURED_NOT_SWITCHED",
+  "unresolved": [
+    "Real N4/DDP anomaly on/off paired timing and finite-gradient checks",
+    "Safe checkpoint continuation with optimizer/epoch/iter validation and RNG boundary disclosure",
+    "Original 450-iter paired S0 and <=1.20x budget; not waived",
+    "Further equivalent implementation optimizations if needed"
+  ]
+}

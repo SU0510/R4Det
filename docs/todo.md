@@ -68,6 +68,13 @@
     arm config `me_rssm/configs/TJ4D-R4Det_fgfull_N4_2x4_24e_pretrained_v2_head_no2d_igdr_gpmsf.py`（差异键恰为 `['RCFusion']`），
     `R4Det.py` 已在融合调用点按 `accepts_geometry_sources` 传 `geo`（原生雷达三层在 SECONDFPN 前缓存），
     单测 `me_rssm/sanity/test_gpmsf_wiring.py` 7/7（§98 增至 10，§100 增至 **11 passed**；连 queue 27 项合跑 **38 passed**）；预登记 `docs/gpmsf_prereg_20261013.md` 已冻结。
+  - [x] **慢速诊断勘误 + 独立快训入口/CPU证明（2026-10-14，§103.8–103.9）**：
+    新增 `tools/train_vod_runtime.py` / `tools/dist_train_runtime.sh`，必填显式anomaly模式，保留原模型/配置/CLI及GPU5/6/7；
+    非零残差、2帧burn-in+2帧有梯度、chunk+checkpoint下，on/off的输出、60参数/输入梯度、AdamW更新及BN状态逐位一致；
+    入口测试16项PASS，完整审计见 `docs/gpmsf_runtime_fast_cpu_audit_20261014.json`。现役832源冻结未动，未停训/未切换。
+  - [ ] **快训实测/安全续训与资源闭环（§103.9）**：完整checkpoint落盘后受控切换；
+    真实N4/DDP两臂anomaly on/off诊断，后续off配对450iter S0、整步提速/显存/恢复证明；
+    原1.20×资源门未豁免；必要时depth双通道采样合并、chunk外复用等价优化。不得把工具就绪写成已提速。
   - **已尝试且失败的相关项**：恢复预训练 `Cross_Modal_Fusion`（§40，至 ep16，成熟门 FAIL，Car/Ped 回退）。
     源码 `mmdet3d/models/necks/BEVCross_modal_attention.py:13–50` 实际是两路 avg/max 空间掩码互乘后 concat+conv，
     **不是**几何约束、多尺度可变形跨模态采样；不能只恢复它再称新方案，也不能据此否定完整候选。

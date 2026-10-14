@@ -19098,24 +19098,85 @@ forward差约1e-7、共享conv梯度最大差1.1026859e-6，原1e-6绝对门FAIL
 并明确本轮是否接受资源例外；继续时按ep6止损、ep12–16成熟窗口与全轮逐类评估。
 方向1仍未完成；正式修复/重排/停训需要后续执行指令，本轮未擅自实施。
 
-### 103.7 为什么慢：主机侧算子调度，不是 GPU 算力（2026-10-14 01:50 UTC 只读测量）
+### 103.8 慢速诊断勘误：主机派发是强假说，不能把单块微基准乘4作整步分解（2026-10-14）
 
-- **绑定位置已定**：三个 rank 进程各**恒占 ~1 个 CPU 核（100% CPU）**，而 GPU 利用率在 **5% ↔ 35%** 之间震荡；
-  `data_time` 仅 **0.08 s / 5.28 s** 迭代（1.5%）⇒ **既不是 GPU 算力瓶颈，也不是数据加载瓶颈**，
-  而是**主机侧算子派发/autograd 记账**（GPU 在等下一个 kernel 下发）。
-- **每步的融合调用次数**：`seq_len=4`，`extract_feat` 逐帧执行（`R4Det.py:1340/1357`，`_gpmsf_geometry` 在 961 行）
-  ⇒ GP-MSF **每步被调用 4 次**（各带一次反向），不是 1 次。
-- **两个已量化的乘数（§101/§102 单卡微基准）**：
-  ① 单次调用的 kernel 数 **27,105**（B0 的 ConcatConv 仅 **16**）⇒ 4 帧 ≈ **108k kernel/step**；
-  ② `tools/train_vod.py:12` 的 `torch.autograd.set_detect_anomaly(True)` **全局开启**，把该块从 **277 → 1322 ms（4.8×）**，
-     而 B0 几乎不动（11.30 → 11.48 ms）——异常检测按**算子数**收费，正好命中 GP-MSF 的弱点。
-- **算账**：5.28 − 1.55 = **3.73 s/iter**；×45,648 iter = **额外 ≈47.3 h**（B0 全程 19.7 h vs 本臂 67.0 h）。
-  按 §102 的 anomaly-off 单帧 277 ms 外推，融合块本体 ≈ **1.11 s/step**（4 帧），
-  ⇒ 余下 **≈2.62 s/step（≈70%、≈33 h）** 属**异常检测附加检查**（上界估计，非实测拆分）。
-- **未测边界（不得当成已证）**：3.73 s 的**精确**分相拆分仍未实测（§102「下一步 ①」的 in-situ 分相计时未做）；
-  上述 70% 是用微基准外推的**上界量级**，不是测量值。
-- **可选动作（均需用户决定，本轮未动）**：
-  A. 关 `set_detect_anomaly`：纯调试开关、**不改变梯度数值**（AP 对照仍有效），但会破坏 `phase.json` 源冻结，
-     且与 B0 的**时序**口径需两臂同时重测 ⇒ 要么现在停训重启，要么本臂跑完后单独补测；
-  B. 继续减 elementwise/拷贝算子（§102 下一步 ②），不删 fallback、不用 GT 路由；
-  C. 不动，跑完（保住与 B0 同为 anomaly-on 的时序可比性），代价是继续付 ≈47 h。
+本节取代原重复编号的“103.7 为什么慢”。保留其原始观测，撤回不成立的乘数与归因；
+不是撤回 §102 的单块实测，也不是把尚未优化的现役训练写成快训已生效。
+
+- **现场观测**：2026-10-14 01:50 UTC 三个 rank 约各占1个 CPU 核；GPU 利用率5%–35%震荡；
+  `data_time≈0.08 s`、整步≈5.28 s、logger memory≈17,913 MiB。支持主机派发/autograd 开销显著，
+  不支持仅靠利用率就排除 GPU 内核、内存访问、DDP等待或同步开销；精确分相仍未测。
+- **训练帧数勘误**：`R4Det.py:1340/1357` 属于 `simple_test`，不是训练反向证据。
+  实际 `forward_train:1550–1583`，当前默认 `rssm_bptt_steps=1`、`seq_len=4`：
+  有效历史齐全时 **2帧 no_grad burn-in + 1帧有梯度历史 + 1帧有梯度当前帧**；无效历史还可能跳过。
+  原“4帧各带一次反向”错误，撤回。
+- **微基准口径勘误**：§102 的27,105 kernels与277.36/1322.07 ms均为**单块一次forward+backward**
+  （含其checkpoint重算），不是单次forward、也不是一个真实N4 detector/DDP/optimizer step。
+  B0同口径16 kernels、11.30/11.48 ms；anomaly显著放大新模块成本这一方向有实测支持。
+  原“27,105×4=108k kernels/真实step”“277ms×4=1.11s”“剩余70%/33h为anomaly开销”
+  **均不能由该微基准推得，全部撤回**；不是可认证上界。
+- **结构性原因**：当前每帧248×216=53,568个query，chunk4096使其分14块；
+  `_chunk`/`_image_terms` 在每块内仍有多层采样、逐head Linear、小型几何/掩码/softmax算子；
+  `forward:803–805` 有梯度时又checkpoint重算。null在采样后才选，稀疏雷达/高null率不会自动节省dense取证成本。
+  已做head几何向量化，不得重复列成“尚未实施”的优化。
+- **开关根因确定**：`tools/train_vod.py:12` 全局打开 `torch.autograd.set_detect_anomaly(True)`。
+  本机PyTorch2.0.1的 `torch/autograd/anomaly_mode.py` 也明确其仅用于调试且会增加运行时间。
+  应让正式训练显式关闭、故障短探针显式开启；不用为了保留旧时延口径继续付三天代价。
+- **粗时长仅供预算**：5.28−1.55≈3.73 s/iter，×45,648iter≈额外47.3h；
+  这是用固定iter时间外推的训练循环差值，未含完整val/保存/停顿，不等于实际完成时长或可保证节省值。
+- **结论**：优先采用独立anomaly-off入口，保留checkpoint续训；用同真实N4/DDP配对实测确认收益。
+  后续等价实现优化，再决定是否需要研究机制重设计。无需先等本臂24e结束；安全准备见 §103.9。
+
+### 103.9 独立快训入口与CPU等价证明（2026-10-14，工具就绪，未切换现役训练）
+
+**目的与范围**：用户要求解决GP-MSF训练速度。只新增未纳入现役832文件冻结的tools运行工具/测试、
+更新文档；未改 `tools/train_vod.py`、原launcher、模型、RSSM、config、batch、N4、精度、checkpoint策略；
+未停止/重启现役训练，未新增GPU进程。完整证据 `docs/gpmsf_runtime_fast_cpu_audit_20261014.json`。
+方向1的性能及资源门仍未完成，不把工具PASS写成训练提速PASS。
+
+**入口及协议**：
+- `tools/train_vod_runtime.py`：加载原入口但不执行其main；在原入口import-time anomaly=True之后，
+  按必填 `--detect-anomaly on|off` 设置真实模式，再调用同一个main。其他原CLI参数原样转发。
+- `tools/dist_train_runtime.sh`：保留原单机DDP3环境（OMP/MKL=1、NCCL设置等）；GPU默认5/6/7，
+  拒绝越界/重复/数量不匹配；无需改冻结的旧launcher。只支持本任务的单节点，不冒充通用多机launcher。
+- 每rank唯一receipt记录入口/配置/resume权重hash、实际debug模式、原CLI、真实main完成/失败状态与退出码。
+  失败不写成功；SIGKILL/TERM未完成时receipt不会是成功。**receipt不是source freeze、不是AP/完整epoch门**，
+  后续新阶段仍须独立冻结源码，并把新增launcher/wrapper哈希纳入运行协议。
+- 必须新work-dir，不覆盖现役phase/log；续训用 `--resume-from`，不是只载权重的`load_from`。
+  本机MMCV `EpochBasedRunner.resume` 恢复model、optimizer、epoch/iter；没有完整Python/NumPy/Torch/
+  CUDA/worker RNG状态恢复，故**不保证bitwise续接原训练轨迹**，必须记录分段边界和resume事实。
+  关闭anomaly不改变本次CPU有限数值计算；这不等于承诺任意GPU完整训练逐位相同或AP必涨。
+
+**CPU证明**：`tools/tests/test_train_vod_runtime.py`，显式在CPU计算；CUDA未初始化。
+- 原入口import时重新打开anomaly后，wrapper仍能在main前按请求关闭/打开；CLI参数边界及resume hash正确。
+- RuntimeError、非零SystemExit、字符串SystemExit、KeyboardInterrupt、import失败都不标成功；
+  显式SystemExit(0)如实记录0；缺模式拒绝启动；既有同pid receipt不覆盖；launcher GPU限制与环境转发有测试。
+- 非零残差toy GP-MSF，3原生image/radar尺度、4head、4offset、3height、chunk5+checkpoint：
+  模拟2帧no_grad + 2帧可反向链，checkpoint_active依次False/False/True/True。
+  anomaly on/off的**4帧输出、全部60参数梯度、输入/原生源/深度梯度、AdamW一次更新后参数与BN状态均逐位一致**
+  （存在的梯度均finite，None对应保持）；这是数学路径回归，**不是整模型/GPU吞吐测试**。
+- 新入口16项测试通过；与原wiring11+queue27合跑 **54 passed / 0 failed（20.23s）**；bash语法PASS。
+  实际原 `train_vod.py` import及原CLI parser另做CPU集成探针：确认import会开anomaly，wrapper在调用点已关，
+  CUDA未初始化；探针刻意用断言替换main，没有执行训练。832项源hash与路径集合仍完全匹配现役phase。
+
+**安全切换步骤（本轮未执行，不自动排程）**：
+1. 等下一个完整epoch checkpoint及对应val落盘，再校验meta epoch/iter、optimizer、全部tensor finite、权重hash；
+   当前checkpoint每2epoch，02:41 UTC只有epoch2可续，不能粗暴停在ep4中间丢掉ep3/ep4进度。
+2. 明确停止旧watchdog/自有训练进程组、确认无残留rank；其他训练不动。新阶段新work-dir与source/runtime冻结，
+   保存旧段全部val，后续合并不遗漏epoch、逐类别或峰值。不能只kill一个rank，也不能把停止写成正常24e完成。
+3. 先50–100真实iter做有限预算诊断：相同N4、batch2/rank、DDP3、精度、数据、warm-up、logger协议；
+   B0与GP-MSF分别anomaly on/off；测整步walltime及显存，分开两帧no_grad、两帧有梯度、backward/optimizer。
+   时间记录用共同预热窗口、分布式等待与同步口径，不能拿§102孤立模块ms代替。
+4. 若off确有收益且数值/恢复/梯度有效性通过，从完整checkpoint续训，不从epoch0重跑。
+   **50–100iter仅诊断，不替代原450iter配对S0**；原1.20×资源门未获豁免，正式合规结论仍需同入口off的两臂S0。
+   不能为“相同调试开关”把历史anomaly-on B0时延直接拿来判新的anomaly-off资源比。
+5. 若仍明显超预算，先做等价优化：两通道depth采样合成一次grid_sample、depth head-batch布局移出chunk，
+   pointwise offset_conv尝试整帧算一次后分块使用，减少重复小kernel与checkpoint内重复工作；
+   每项先验证直接消息、全部参数/输入梯度、非零残差、空证据identity，再做真实GPU全步成本比较。
+   不盲目用慢einsum替代已选GEMM；不盲目整帧采样/关checkpoint（§102显存代价已测），不缩N4/batch、
+   不减scale/offset/height，不删camera-only fallback、不用GT路由。若最后需变机制，另立预登记与消融。
+
+**本节性能摘要（没有新增训练）**：主ep12–16窗口n=0，N/A；现役实际可见ep1–3等权均值
+**28.1143（n=3，非成熟窗口）**，全轮已val峰值**36.4467 @ ep3**，best saved **31.1923 @ ep2**。
+完整逐epoch/逐类别表及窗口逐项均值保留在 §103.7.4；本节不重新筛选、不删除旧点，后续归档按完整曲线更新。
+提速值与新阶段AP **未测**；未把原“70%/33h”伪造为已经兑现的收益。
